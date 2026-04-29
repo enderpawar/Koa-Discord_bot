@@ -7,6 +7,7 @@
 - **하향식 의존**: 하위 Phase는 상위 Phase가 노출하는 인터페이스만 사용
 - **Skill 매핑**: 각 Phase는 `docs/skills/`의 1개 이상 Skill을 구현
 - **Rule 준수**: 모든 Phase에서 `docs/rules/`의 규칙을 적용
+- **자동 검증**: 각 Phase는 [`testing.md`](testing.md)에 정의된 hook + 테스트 파이프라인으로 검증 가능
 
 ---
 
