@@ -1,0 +1,24 @@
+# Secrets / runtime state
+.env
+config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# TTS / audio temp
+*.mp3
+*.tmp
+.ttsCache/
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
