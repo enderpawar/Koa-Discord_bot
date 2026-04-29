@@ -5,16 +5,8 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:alternative.me)",
-      "Bash(python .claude/scripts/check_phase_status.py)",
-      "Bash(python .claude/scripts/test_for_file.py)",
-      "Bash(echo \"exit=$?\")",
-      "Bash(python .claude/scripts/run_all_unit_tests.py)",
-      "Bash(gh repo *)",
-      "Bash(gh api *)",
-      "WebFetch(domain:api.github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(python -c \"import sys; print\\(sys.version\\)\")",
-      "Bash(python -m pip install -r requirements-dev.txt)"
+      "Bash(python -m pytest tests/unit/test_config_store.py -v)",
+      "Bash(python .claude/scripts/check_phase_status.py)"
     ]
   }
 }
