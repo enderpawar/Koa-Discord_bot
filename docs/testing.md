@@ -3,6 +3,8 @@
 본 문서는 **각 Phase가 완료되었음을 자동/수동으로 검증하는 파이프라인**을 정의합니다.
 [`pipeline.md`](pipeline.md)의 8개 Phase와 1:1 대응합니다.
 
+> 🎤 **Discord 라이브 환경에서의 수동 테스트 절차**는 [`discord-environment-testing.md`](discord-environment-testing.md)에 별도 정의되어 있습니다. 본 문서는 자동(단위) 파이프라인 + hook 동작에 집중.
+
 ---
 
 ## 1. 파이프라인 개요
