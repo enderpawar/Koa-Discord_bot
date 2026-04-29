@@ -6,7 +6,8 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:alternative.me)",
       "Bash(python -m pytest tests/unit/test_config_store.py -v)",
-      "Bash(python .claude/scripts/check_phase_status.py)"
+      "Bash(python .claude/scripts/check_phase_status.py)",
+      "Bash(python -m pytest tests/unit/test_preprocess.py -v)"
     ]
   }
 }
