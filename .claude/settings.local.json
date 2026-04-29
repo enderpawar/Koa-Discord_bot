@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir C:\\\\Users\\\\user\\\\Desktop\\\\discord bot *)"
+    ]
+  }
+}
