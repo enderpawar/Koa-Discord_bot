@@ -1,0 +1,25 @@
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.vscode/
+.idea/
+.env
+.env.*
+!.env.example
+config.json
+*.mp3
+*.tmp
+.ttsCache/
+
+# 빌드 시 불필요한 docs/test 자료 (런타임 무관)
+tests/
+docs/
+.claude/
+README.md
+CLAUDE.md

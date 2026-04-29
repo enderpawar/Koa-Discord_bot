@@ -28,8 +28,10 @@ log = logging.getLogger("bot")
 ROOT = Path(__file__).resolve().parent
 COGS_DIR = ROOT / "cogs"
 
-# Phase별로 추가될 cog. 파일이 존재할 때만 로드한다 (선제 구현 금지 / 점진적 부트).
-KNOWN_EXTENSIONS = ("cogs.config_store", "cogs.tts_cog")
+# 로드 대상 cog (discord.py extension). 파일이 존재할 때만 로드 → 점진적 부트 안전.
+# config_store / preprocess / tts_engine / audio_queue 는 tts_cog 가 import 하는 utility 모듈이므로
+# extension 으로 등록하지 않는다.
+KNOWN_EXTENSIONS = ("cogs.tts_cog",)
 
 
 def _check_ffmpeg() -> None:

@@ -152,6 +152,18 @@ LOG_LEVEL=INFO
 
 ---
 
+## 24시간 운영 (배포)
+
+본 봇은 단일 Python 프로세스이므로 별도 백엔드 서버 없이 **어디든 켜져 있는 컴퓨터** 에서만 동작합니다.
+
+| 옵션 | 비용 | 가이드 |
+|------|------|--------|
+| Railway | 무료 크레딧 $5/월 (실측 ~$2–3 사용) | [`docs/deploy-railway.md`](docs/deploy-railway.md) |
+| Oracle Cloud Always Free VM | 평생 무료 | systemd unit + git pull |
+| 본인 PC | 전기료 | `python bot.py` (PC 끄면 봇 꺼짐) |
+
+---
+
 ## 개발자 가이드
 
 본 프로젝트는 **8개 Phase** 로 점진적 구축되었습니다. 코드 구조·테스트 파이프라인·구현 워크플로는 다음 문서를 참고하세요.
