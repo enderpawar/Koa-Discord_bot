@@ -39,7 +39,7 @@ async def test_enqueue_processes_in_order():
         vc.play = MagicMock()
         return vc
 
-    async def fake_play_streaming(self, vc, text, voice):
+    async def fake_play_streaming(self, vc, text, voice, **_kwargs):
         play_order.append(f"synth:{text}")
         play_order.append(f"play:{text}")
 
@@ -61,7 +61,7 @@ async def test_failed_request_does_not_block_next():
 
     calls = []
 
-    async def flaky_play(self, vc, text, voice):
+    async def flaky_play(self, vc, text, voice, **_kwargs):
         calls.append(text)
         if text == "boom":
             raise RuntimeError("synthesize failed")

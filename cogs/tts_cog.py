@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 import discord
 from discord import app_commands
@@ -33,15 +34,48 @@ VOICE_CHOICES = [
     app_commands.Choice(name="남성-친근 (GookMin)", value="ko-KR-GookMinNeural"),
 ]
 
+PANEL_COOLDOWN_SEC = 300
+
+
+class TTSControlView(discord.ui.View):
+    def __init__(self, cog: "TTSCog") -> None:
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    @discord.ui.button(
+        label="TTS 켜기",
+        emoji="🔊",
+        style=discord.ButtonStyle.secondary,
+        custom_id="nothing_tts:enable",
+    )
+    async def enable_tts(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await self.cog.enable_from_panel(interaction)
+
+    @discord.ui.button(
+        label="TTS 끄기",
+        emoji="🔇",
+        style=discord.ButtonStyle.secondary,
+        custom_id="nothing_tts:disable",
+    )
+    async def disable_tts(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await self.cog.disable_from_panel(interaction)
+
 
 class TTSCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.store = ConfigStore()
         self.queue = AudioQueue()
+        self._panel_view = TTSControlView(self)
+        self._panel_last_sent: dict[int, float] = {}
         self._warmup_task = asyncio.create_task(
             self._warm_start(), name="tts-warm-start"
         )
+        self.bot.add_view(self._panel_view)
 
     async def cog_unload(self) -> None:
         self._warmup_task.cancel()
@@ -63,6 +97,74 @@ class TTSCog(commands.Cog):
             log.debug("tts warm-up failed", exc_info=True)
 
     # ---------- Phase 6: Slash Commands ----------
+
+    async def enable_from_panel(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        voice_state = getattr(interaction.user, "voice", None)
+        channel = voice_state.channel if voice_state else None
+        if channel is None or not isinstance(channel, discord.VoiceChannel):
+            await interaction.response.send_message(
+                "먼저 이 음성 채널에 입장한 뒤 눌러주세요.", ephemeral=True
+            )
+            return
+
+        # 패널이 눌린 채널과 실제 음성 채널이 다르면 오작동을 줄인다.
+        if interaction.channel and interaction.channel.id != channel.id:
+            await interaction.response.send_message(
+                f"{channel.mention} 채널 채팅에서 다시 눌러주세요.", ephemeral=True
+            )
+            return
+
+        await self.store.set(
+            interaction.guild.id,
+            tts_channel_id=channel.id,
+            voice_channel_id=channel.id,
+        )
+        try:
+            vc = interaction.guild.voice_client
+            if vc is not None and vc.is_connected():
+                if vc.channel.id != channel.id:
+                    await vc.move_to(channel)
+            else:
+                await channel.connect(reconnect=True, self_deaf=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "음성 채널 접속 권한이 없습니다.", ephemeral=True
+            )
+            return
+        except Exception:
+            log.exception("panel join failed: guild_id=%s", interaction.guild.id)
+            await interaction.response.send_message(
+                "TTS 입장 중 오류가 발생했습니다.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"{channel.mention} 채널 채팅을 TTS 입력으로 사용합니다.", ephemeral=True
+        )
+
+    async def disable_from_panel(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        cfg = await self.store.get(interaction.guild.id)
+        channel_id = interaction.channel.id if interaction.channel else None
+        updates: dict[str, int | None] = {}
+        if cfg.get("tts_channel_id") == channel_id:
+            updates["tts_channel_id"] = 0
+        if cfg.get("voice_channel_id") == channel_id:
+            updates["voice_channel_id"] = 0
+        if updates:
+            await self.store.set(interaction.guild.id, **updates)
+
+        vc = interaction.guild.voice_client
+        if vc is not None and vc.is_connected() and vc.channel.id == channel_id:
+            await vc.disconnect()
+        await interaction.response.send_message("이 채널의 TTS를 껐습니다.", ephemeral=True)
 
     @app_commands.command(name="settts", description="TTS 로 읽을 텍스트 채널 설정")
     @app_commands.checks.has_permissions(manage_channels=True)
@@ -234,6 +336,25 @@ class TTSCog(commands.Cog):
             ),
         )
 
+    async def _send_voice_panel(self, channel: discord.VoiceChannel) -> None:
+        now = time.monotonic()
+        last = self._panel_last_sent.get(channel.id, 0.0)
+        if now - last < PANEL_COOLDOWN_SEC:
+            return
+        self._panel_last_sent[channel.id] = now
+
+        try:
+            await channel.send(
+                "**TTS 채널**\n"
+                "이 음성 채널 채팅에 입력한 메시지를 읽습니다.",
+                view=self._panel_view,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden:
+            log.debug("voice panel send forbidden: channel_id=%s", channel.id)
+        except discord.HTTPException:
+            log.exception("voice panel send failed: channel_id=%s", channel.id)
+
     @commands.Cog.listener()
     async def on_voice_state_update(
         self,
@@ -264,7 +385,12 @@ class TTSCog(commands.Cog):
         cfg = await self.store.get(member.guild.id)
         watched_id = cfg.get("voice_channel_id")
         if not watched_id:
+            if after.channel and isinstance(after.channel, discord.VoiceChannel):
+                await self._send_voice_panel(after.channel)
             return
+
+        if after.channel and isinstance(after.channel, discord.VoiceChannel):
+            await self._send_voice_panel(after.channel)
 
         announcements: list[str] = []
         if after.channel and after.channel.id == watched_id and (
