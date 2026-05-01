@@ -28,7 +28,12 @@ def _web_enabled() -> bool:
 
 
 def _web_host() -> str:
-    return os.getenv("ADMIN_WEB_HOST", "127.0.0.1")
+    host = os.getenv("ADMIN_WEB_HOST")
+    if host:
+        return host
+    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PUBLIC_DOMAIN"):
+        return "0.0.0.0"
+    return "127.0.0.1"
 
 
 def _web_port() -> int:
