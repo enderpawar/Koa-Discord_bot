@@ -83,6 +83,11 @@ AZURE_SPEECH_REGION=koreacentral
 
 # 선택 — 개발 시 슬래시 명령을 특정 길드로 즉시 sync (전역 sync 는 캐시 1시간)
 # TEST_GUILD_ID=123456789012345678
+
+# 선택 — 웹 관리자 대시보드
+# ADMIN_WEB_TOKEN=긴_랜덤_관리자_토큰
+# ADMIN_WEB_HOST=127.0.0.1
+# ADMIN_WEB_PORT=8080
 ```
 
 `.env` 는 절대 커밋하지 마세요. `.gitignore` 에 이미 등록되어 있습니다.
@@ -122,6 +127,24 @@ AZURE_SPEECH_REGION=koreacentral
 ```
 
 설정은 `config.json` 에 guild 별로 저장되며 봇 재시작 후에도 유지됩니다.
+
+### 웹 관리자 대시보드
+
+`ADMIN_WEB_TOKEN` 을 설정하고 봇을 재시작하면 웹 대시보드가 함께 실행됩니다.
+
+```ini
+ADMIN_WEB_TOKEN=긴_랜덤_관리자_토큰
+ADMIN_WEB_HOST=127.0.0.1
+ADMIN_WEB_PORT=8080
+```
+
+로컬 실행 기본 접속 주소:
+
+```text
+http://127.0.0.1:8080
+```
+
+대시보드에서 서버 선택, TTS 채널, 음성 채널, 일일 리더보드 채널, 발송 시각, 자동 발송 여부를 편집할 수 있고 리더보드 즉시 발송도 가능합니다. 공개 서버에 노출할 때는 반드시 강한 `ADMIN_WEB_TOKEN` 을 사용하세요.
 
 ---
 

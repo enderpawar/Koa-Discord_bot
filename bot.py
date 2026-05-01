@@ -31,7 +31,12 @@ COGS_DIR = ROOT / "cogs"
 # 로드 대상 cog (discord.py extension). 파일이 존재할 때만 로드 → 점진적 부트 안전.
 # config_store / preprocess / tts_engine / audio_queue 는 tts_cog 가 import 하는 utility 모듈이므로
 # extension 으로 등록하지 않는다.
-KNOWN_EXTENSIONS = ("cogs.tts_cog", "cogs.rank_cog", "cogs.admin_cog")
+KNOWN_EXTENSIONS = (
+    "cogs.tts_cog",
+    "cogs.rank_cog",
+    "cogs.admin_cog",
+    "cogs.web_admin_cog",
+)
 
 
 def _check_ffmpeg() -> None:
