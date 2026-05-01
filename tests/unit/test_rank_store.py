@@ -46,15 +46,16 @@ async def test_chat_activity_uses_message_windows(rank_path: Path):
     assert stats["chat_seconds"] == 150
 
 
-async def test_leaderboard_orders_by_total_activity(rank_path: Path):
+async def test_leaderboard_orders_by_weighted_activity_score(rank_path: Path):
     store = _store(rank_path)
-    await store.start_voice(1, 10, 100, now_ts=1000)
+    await store.start_voice(1, 10, 100, now_ts=1000)  # 100 voice sec => 7000 score
     await store.stop_voice(1, 10, now_ts=1100)
-    await store.record_message(1, 20, now_ts=1000)
+    await store.record_message(1, 20, now_ts=1000)  # 260 chat sec => 7800 score
     await store.record_message(1, 20, now_ts=1200)
 
     rows = await store.leaderboard(1)
     assert [row["user_id"] for row in rows] == [20, 10]
+    assert [row["score"] for row in rows] == [7800, 7000]
 
 
 async def test_weekly_reset_anchor_is_friday_kst():

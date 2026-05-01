@@ -22,6 +22,21 @@ def _format_duration(seconds: int) -> str:
     return f"{secs}초"
 
 
+def _format_score(score: int) -> str:
+    weighted_seconds = max(0, int(score)) / 100
+    hours, rem = divmod(int(weighted_seconds), 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}시간 {minutes}분"
+    if minutes:
+        return f"{minutes}분 {secs}초"
+    return f"{secs}초"
+
+
+def _rank_icon(rank: int) -> str:
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"`{rank}`")
+
+
 class RankCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -87,7 +102,7 @@ class RankCog(commands.Cog):
         except Exception:
             log.exception("rank voice tracking failed: guild_id=%s", member.guild.id)
 
-    @app_commands.command(name="leaderboard", description="이번 주 활동 시간 순위 확인")
+    @app_commands.command(name="leaderboard", description="이번 주 서버 활동 순위 확인")
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or interaction.guild_id is None:
             await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
@@ -99,17 +114,26 @@ class RankCog(commands.Cog):
             await interaction.response.send_message("아직 집계된 활동 내역이 없습니다.", ephemeral=True)
             return
 
-        lines = ["**이번 주 활동 리더보드**"]
+        embed = discord.Embed(
+            title="이번 주 활동 리더보드",
+            description="서버 활동 점수 기준 TOP 10\n`음성 70% + 채팅 30%`",
+            color=discord.Color.gold(),
+        )
         for index, row in enumerate(rows, start=1):
             member = interaction.guild.get_member(row["user_id"])
             name = member.display_name if member else f"<@{row['user_id']}>"
-            lines.append(
-                f"{index}. {name} - {_format_duration(row['total_seconds'])} "
-                f"(음성 {_format_duration(row['voice_seconds'])}, "
-                f"채팅 {_format_duration(row['chat_seconds'])}, "
-                f"메시지 {row['message_count']}개)"
+            embed.add_field(
+                name=f"{_rank_icon(index)} {name}",
+                value=(
+                    f"점수 **{_format_score(row['score'])}**\n"
+                    f"음성 `{_format_duration(row['voice_seconds'])}` · "
+                    f"채팅 `{_format_duration(row['chat_seconds'])}` · "
+                    f"메시지 `{row['message_count']}개`"
+                ),
+                inline=False,
             )
-        await interaction.response.send_message("\n".join(lines))
+        embed.set_footer(text="매주 금요일 00:00(KST) 초기화")
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="rank", description="멤버별 활동 내역 확인")
     async def rank(
@@ -126,6 +150,7 @@ class RankCog(commands.Cog):
         stats = await self.store.user_stats(interaction.guild_id, target.id)
         message = (
             f"**{target.display_name} 활동 내역**\n"
+            f"활동 점수: {_format_score(stats['score'])} (음성 70% + 채팅 30%)\n"
             f"누적 활동: {_format_duration(stats['total_seconds'])}\n"
             f"음성 시간: {_format_duration(stats['voice_seconds'])}\n"
             f"채팅 시간: {_format_duration(stats['chat_seconds'])}\n"
