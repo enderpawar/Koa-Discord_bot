@@ -23,6 +23,13 @@ KST = ZoneInfo("Asia/Seoul")
 RESET_WEEKDAY = 4  # Friday
 CHAT_ACTIVE_GRACE_SEC = 60
 CHAT_ACTIVE_WINDOW_SEC = 300
+VOICE_WEIGHT = 70
+CHAT_WEIGHT = 30
+
+
+def activity_score(voice_seconds: int, chat_seconds: int) -> int:
+    """Return weighted activity score in centiseconds-equivalent units."""
+    return (voice_seconds * VOICE_WEIGHT) + (chat_seconds * CHAT_WEIGHT)
 
 
 def _default_rank_path() -> Path:
@@ -155,9 +162,10 @@ class RankStore:
                         "chat_seconds": chat_seconds,
                         "message_count": int(user.get("message_count", 0)),
                         "total_seconds": voice_seconds + chat_seconds,
+                        "score": activity_score(voice_seconds, chat_seconds),
                     }
                 )
-            rows.sort(key=lambda item: item["total_seconds"], reverse=True)
+            rows.sort(key=lambda item: item["score"], reverse=True)
             return rows[:limit]
 
     async def user_stats(
@@ -174,6 +182,7 @@ class RankStore:
                 "chat_seconds": chat_seconds,
                 "message_count": int(user.get("message_count", 0)),
                 "total_seconds": voice_seconds + chat_seconds,
+                "score": activity_score(voice_seconds, chat_seconds),
             }
 
     def _guild_unlocked(self, guild_id: int) -> dict[str, Any]:
