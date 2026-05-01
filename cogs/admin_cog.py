@@ -22,6 +22,12 @@ def _web_dashboard_url() -> str | None:
     public_url = os.getenv("ADMIN_WEB_PUBLIC_URL", "").strip()
     if public_url:
         return public_url.rstrip("/")
+    railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway_domain:
+        return f"https://{railway_domain}".rstrip("/")
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip()
+    if render_url:
+        return render_url.rstrip("/")
     if not os.getenv("ADMIN_WEB_TOKEN"):
         return None
     host = os.getenv("ADMIN_WEB_HOST", "127.0.0.1")
@@ -66,8 +72,14 @@ def _settings_embed(cfg: dict) -> discord.Embed:
 
     embed = discord.Embed(
         title="관리자 설정",
-        description="서버 운영 설정을 확인하고 아래 컨트롤로 바로 변경합니다.",
+        description="웹 대시보드 또는 아래 Discord 컨트롤로 서버 운영 설정을 변경합니다.",
         color=BRAND_COLOR if daily_enabled else INFO_COLOR,
+    )
+    web_url = _web_dashboard_url()
+    embed.add_field(
+        name="웹 대시보드",
+        value=web_url or "`ADMIN_WEB_PUBLIC_URL` 설정 필요",
+        inline=False,
     )
     embed.add_field(
         name="TTS",
@@ -90,6 +102,7 @@ def _settings_embed(cfg: dict) -> discord.Embed:
     embed.add_field(
         name="작업",
         value=(
+            "`웹 대시보드 열기` 버튼으로 전체 관리자 페이지를 엽니다.\n"
             "채널 선택 메뉴로 발송 채널을 지정합니다.\n"
             "`자동 발송 토글`로 매일 발송을 켜거나 끕니다.\n"
             "`발송 시각 변경`에서 `23:59` 형식으로 시간을 입력합니다."
@@ -155,7 +168,7 @@ class LeaderboardChannelSelect(discord.ui.ChannelSelect):
             channel_types=[discord.ChannelType.text],
             min_values=1,
             max_values=1,
-            row=0,
+            row=1,
         )
         self.cog = cog
         self.view_ref = view_ref
@@ -176,7 +189,6 @@ class AdminPanelView(discord.ui.View):
     def __init__(self, cog: "AdminCog") -> None:
         super().__init__(timeout=300)
         self.cog = cog
-        self.add_item(LeaderboardChannelSelect(cog, self))
         web_url = _web_dashboard_url()
         if web_url:
             self.add_item(
@@ -184,9 +196,10 @@ class AdminPanelView(discord.ui.View):
                     label="웹 대시보드 열기",
                     style=discord.ButtonStyle.link,
                     url=web_url,
-                    row=2,
+                    row=0,
                 )
             )
+        self.add_item(LeaderboardChannelSelect(cog, self))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id is None:
@@ -209,7 +222,7 @@ class AdminPanelView(discord.ui.View):
             content=None, embed=_settings_embed(cfg), view=self
         )
 
-    @discord.ui.button(label="자동 발송 토글", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="자동 발송 토글", style=discord.ButtonStyle.secondary, row=2)
     async def toggle_daily(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -228,13 +241,13 @@ class AdminPanelView(discord.ui.View):
         await self.cog.store.set(interaction.guild_id, leaderboard_daily_enabled=next_enabled)
         await self.refresh_panel(interaction)
 
-    @discord.ui.button(label="발송 시각 변경", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="발송 시각 변경", style=discord.ButtonStyle.secondary, row=2)
     async def set_time(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
         await interaction.response.send_modal(LeaderboardTimeModal(self.cog))
 
-    @discord.ui.button(label="리더보드 발송", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="리더보드 발송", style=discord.ButtonStyle.primary, row=2)
     async def post_now(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
@@ -245,7 +258,7 @@ class AdminPanelView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="상태 새로고침", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="상태 새로고침", style=discord.ButtonStyle.secondary, row=2)
     async def refresh(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:

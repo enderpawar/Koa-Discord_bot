@@ -50,10 +50,10 @@ def test_settings_embed_groups_admin_state() -> None:
     )
 
     assert embed.title == "관리자 설정"
-    assert [field.name for field in embed.fields] == ["TTS", "일일 리더보드", "작업"]
-    assert "입력 채널: <#11>" in embed.fields[0].value
-    assert "자동 발송: `켜짐`" in embed.fields[1].value
-    assert "발송 채널: <#123>" in embed.fields[1].value
+    assert [field.name for field in embed.fields] == ["웹 대시보드", "TTS", "일일 리더보드", "작업"]
+    assert "입력 채널: <#11>" in embed.fields[1].value
+    assert "자동 발송: `켜짐`" in embed.fields[2].value
+    assert "발송 채널: <#123>" in embed.fields[2].value
 
 
 def test_web_dashboard_url_prefers_public_url(monkeypatch) -> None:
@@ -61,6 +61,14 @@ def test_web_dashboard_url_prefers_public_url(monkeypatch) -> None:
     monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "https://admin.example.com/")
 
     assert _web_dashboard_url() == "https://admin.example.com"
+
+
+def test_web_dashboard_url_uses_railway_public_domain(monkeypatch) -> None:
+    monkeypatch.delenv("ADMIN_WEB_PUBLIC_URL", raising=False)
+    monkeypatch.setenv("ADMIN_WEB_TOKEN", "token")
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "nothing-bot.up.railway.app")
+
+    assert _web_dashboard_url() == "https://nothing-bot.up.railway.app"
 
 
 def test_web_dashboard_url_uses_localhost_when_available(monkeypatch) -> None:
