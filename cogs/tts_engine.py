@@ -38,7 +38,8 @@ _WS_RECEIVE_TIMEOUT_SEC = 15.0
 _TOKEN_TTL_SEC = 600
 _TOKEN_REFRESH_MARGIN_SEC = 60
 _BACKEND = os.getenv("TTS_BACKEND", "ws").lower()
-_KEEPALIVE_INTERVAL_SEC = int(os.getenv("TTS_KEEPALIVE_INTERVAL_SEC", "50"))
+_KEEPALIVE_INTERVAL_SEC = int(os.getenv("TTS_KEEPALIVE_INTERVAL_SEC", "30"))
+_KEEPALIVE_CHECK_INTERVAL_SEC = 5
 _KEEPALIVE_TEXT = os.getenv("TTS_KEEPALIVE_TEXT", ".")
 
 _RETRYABLE: tuple[type[BaseException], ...] = (
@@ -56,6 +57,7 @@ _token: str | None = None
 _token_expires_at = 0.0
 _keepalive_task: asyncio.Task | None = None
 _last_user_synthesis_at = 0.0
+_last_keepalive_at = 0.0
 
 
 async def _get_session() -> aiohttp.ClientSession:
@@ -494,8 +496,10 @@ async def warm_up(voice: str = DEFAULT_VOICE) -> None:
 
 async def _warm_up_keepalive(voice: str = DEFAULT_VOICE) -> None:
     """Warm the Azure path without competing with user-triggered synthesis."""
+    global _last_keepalive_at
     if _ws_lock.locked():
         return
+    _last_keepalive_at = time.monotonic()
     path = _make_temp_audio()
     try:
         await _request_once(_KEEPALIVE_TEXT, voice, path)
@@ -517,9 +521,10 @@ def start_keepalive(voice: str = DEFAULT_VOICE) -> None:
 
 async def _keepalive_loop(voice: str) -> None:
     while True:
-        await asyncio.sleep(_KEEPALIVE_INTERVAL_SEC)
+        await asyncio.sleep(_KEEPALIVE_CHECK_INTERVAL_SEC)
         try:
-            if time.monotonic() - _last_user_synthesis_at < _KEEPALIVE_INTERVAL_SEC:
+            last_activity_at = max(_last_user_synthesis_at, _last_keepalive_at)
+            if time.monotonic() - last_activity_at < _KEEPALIVE_INTERVAL_SEC:
                 continue
             await _warm_up_keepalive(voice)
         except asyncio.CancelledError:
