@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import queue
+import time
+from collections import OrderedDict
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BufferedReader
 from pathlib import Path
 from typing import Final
 
 import discord
+from discord import opus
 
 from cogs.tts_engine import stream_synthesize
 
@@ -24,7 +28,13 @@ log = logging.getLogger(__name__)
 IDLE_TIMEOUT_SEC = 300
 MONO_PCM_FRAME_BYTES = 1920  # 20ms * 48kHz * 16-bit * mono
 STEREO_PCM_FRAME_BYTES = 3840  # 20ms * 48kHz * 16-bit * stereo
+PRE_ROLL_MS = int(os.getenv("TTS_PRE_ROLL_MS", "120"))
+CACHE_MAX_ENTRIES = int(os.getenv("TTS_CACHE_MAX_ENTRIES", "256"))
+CACHE_MAX_BYTES = int(os.getenv("TTS_CACHE_MAX_BYTES", str(32 * 1024 * 1024)))
+CACHE_MAX_ITEM_BYTES = int(os.getenv("TTS_CACHE_MAX_ITEM_BYTES", str(512 * 1024)))
+OPUS_CACHE_MAX_BYTES = int(os.getenv("TTS_OPUS_CACHE_MAX_BYTES", str(16 * 1024 * 1024)))
 _STREAM_END: Final = object()
+_SILENCE_STEREO_FRAME: Final = b"\x00" * STEREO_PCM_FRAME_BYTES
 
 
 @dataclass
@@ -32,6 +42,7 @@ class AudioRequest:
     text: str
     voice: str
     voice_channel_id: int
+    enqueued_at: float = field(default_factory=time.perf_counter)
 
 
 class MonoPCMToStereo(discord.AudioSource):
@@ -88,13 +99,81 @@ def _mono_frame_to_stereo(mono: bytes) -> bytes:
     return bytes(stereo)
 
 
+class PCMCache:
+    """Small LRU cache for completed syntheses."""
+
+    def __init__(self, *, max_entries: int, max_bytes: int, max_item_bytes: int) -> None:
+        self.max_entries = max_entries
+        self.max_bytes = max_bytes
+        self.max_item_bytes = max_item_bytes
+        self._items: OrderedDict[tuple[str, str], bytes] = OrderedDict()
+        self._total_bytes = 0
+
+    def get(self, text: str, voice: str) -> bytes | None:
+        key = (voice, text)
+        item = self._items.get(key)
+        if item is None:
+            return None
+        self._items.move_to_end(key)
+        return item
+
+    def put(self, text: str, voice: str, audio: bytes) -> None:
+        if self.max_entries <= 0 or self.max_bytes <= 0 or not audio:
+            return
+        if len(audio) > self.max_item_bytes:
+            return
+
+        key = (voice, text)
+        old = self._items.pop(key, None)
+        if old is not None:
+            self._total_bytes -= len(old)
+
+        self._items[key] = audio
+        self._total_bytes += len(audio)
+        while len(self._items) > self.max_entries or self._total_bytes > self.max_bytes:
+            _, evicted = self._items.popitem(last=False)
+            self._total_bytes -= len(evicted)
+
+
+def _mono_pcm_to_stereo_frames(audio: bytes) -> list[bytes]:
+    frames: list[bytes] = []
+    offset = 0
+    while offset < len(audio):
+        mono = audio[offset : offset + MONO_PCM_FRAME_BYTES]
+        offset += MONO_PCM_FRAME_BYTES
+        if len(mono) % 2:
+            mono += b"\x00"
+        if len(mono) < MONO_PCM_FRAME_BYTES:
+            mono += b"\x00" * (MONO_PCM_FRAME_BYTES - len(mono))
+        frames.append(_mono_frame_to_stereo(mono))
+    return frames
+
+
+def _mono_pcm_to_opus_stream(audio: bytes) -> bytes | None:
+    if not opus.is_loaded():
+        return None
+
+    encoder = opus.Encoder()
+    encoded_frames = bytearray()
+    for pcm_frame in _mono_pcm_to_stereo_frames(audio):
+        encoded = encoder.encode(pcm_frame, opus.Encoder.SAMPLES_PER_FRAME)
+        if len(encoded) > 65535:
+            return None
+        encoded_frames.extend(len(encoded).to_bytes(2, "big"))
+        encoded_frames.extend(encoded)
+    return bytes(encoded_frames)
+
+
 class StreamingMonoPCMToStereo(discord.AudioSource):
     """Thread-safe streaming source for Azure mono PCM chunks."""
 
-    def __init__(self, *, read_timeout_sec: float = 15.0) -> None:
+    def __init__(
+        self, *, read_timeout_sec: float = 15.0, pre_roll_ms: int = PRE_ROLL_MS
+    ) -> None:
         self._frames: queue.Queue[bytes | object] = queue.Queue()
         self._mono_buffer = bytearray()
         self._read_timeout_sec = read_timeout_sec
+        self._pre_roll_frames = max(0, pre_roll_ms // 20)
         self._closed = False
 
     def feed_mono(self, chunk: bytes) -> None:
@@ -124,6 +203,16 @@ class StreamingMonoPCMToStereo(discord.AudioSource):
         self._frames.put(_STREAM_END)
 
     def read(self) -> bytes:
+        if self._pre_roll_frames > 0:
+            try:
+                frame = self._frames.get_nowait()
+            except queue.Empty:
+                self._pre_roll_frames -= 1
+                return _SILENCE_STEREO_FRAME
+            if frame is _STREAM_END:
+                return b""
+            return frame
+
         try:
             frame = self._frames.get(timeout=self._read_timeout_sec)
         except queue.Empty:
@@ -140,10 +229,46 @@ class StreamingMonoPCMToStereo(discord.AudioSource):
         self._mono_buffer.clear()
 
 
+class CachedOpusSource(discord.AudioSource):
+    """Replay cached Discord-ready Opus frames."""
+
+    def __init__(self, encoded_stream: bytes) -> None:
+        self._stream = memoryview(encoded_stream)
+        self._offset = 0
+
+    def read(self) -> bytes:
+        if self._offset >= len(self._stream):
+            return b""
+        if self._offset + 2 > len(self._stream):
+            self._offset = len(self._stream)
+            return b""
+        frame_len = int.from_bytes(self._stream[self._offset : self._offset + 2], "big")
+        self._offset += 2
+        frame = self._stream[self._offset : self._offset + frame_len]
+        self._offset += frame_len
+        return frame.tobytes()
+
+    def is_opus(self) -> bool:
+        return True
+
+    def cleanup(self) -> None:
+        self._offset = len(self._stream)
+
+
 class AudioQueue:
     def __init__(self) -> None:
         self._queues: dict[int, asyncio.Queue[AudioRequest]] = {}
         self._workers: dict[int, asyncio.Task] = {}
+        self._cache = PCMCache(
+            max_entries=CACHE_MAX_ENTRIES,
+            max_bytes=CACHE_MAX_BYTES,
+            max_item_bytes=CACHE_MAX_ITEM_BYTES,
+        )
+        self._opus_cache = PCMCache(
+            max_entries=CACHE_MAX_ENTRIES,
+            max_bytes=OPUS_CACHE_MAX_BYTES,
+            max_item_bytes=OPUS_CACHE_MAX_BYTES,
+        )
 
     async def enqueue(self, guild: discord.Guild, req: AudioRequest) -> None:
         queue = self._queues.setdefault(guild.id, asyncio.Queue())
@@ -180,8 +305,19 @@ class AudioQueue:
                 continue
 
             try:
+                trace_start = time.perf_counter()
+                queued_ms = (trace_start - req.enqueued_at) * 1000
                 vc = await self._ensure_voice(guild, req.voice_channel_id)
-                await self._play_streaming(vc, req.text, req.voice)
+                ensure_ms = (time.perf_counter() - trace_start) * 1000
+                await self._play_streaming(
+                    vc,
+                    req.text,
+                    req.voice,
+                    guild_id=guild.id,
+                    queued_ms=queued_ms,
+                    ensure_ms=ensure_ms,
+                    trace_start=trace_start,
+                )
             except Exception:
                 log.exception("audio worker failed: guild_id=%s", guild.id)
             finally:
@@ -219,16 +355,87 @@ class AudioQueue:
             raise
         await done.wait()
 
-    async def _play_streaming(self, vc: discord.VoiceClient, text: str, voice: str) -> None:
+    async def _play_source(self, vc: discord.VoiceClient, source: discord.AudioSource) -> None:
+        loop = asyncio.get_running_loop()
+        done = asyncio.Event()
+
+        def _after(err: BaseException | None) -> None:
+            if err is not None:
+                log.warning("playback callback error: %s", err)
+            source.cleanup()
+            loop.call_soon_threadsafe(done.set)
+
+        try:
+            vc.play(source, after=_after)
+        except Exception:
+            source.cleanup()
+            raise
+        await done.wait()
+
+    async def _play_streaming(
+        self,
+        vc: discord.VoiceClient,
+        text: str,
+        voice: str,
+        *,
+        guild_id: int | None = None,
+        queued_ms: float = 0.0,
+        ensure_ms: float = 0.0,
+        trace_start: float | None = None,
+    ) -> None:
+        trace_start = trace_start if trace_start is not None else time.perf_counter()
+        opus_audio = self._opus_cache.get(text, voice)
+        if opus_audio is not None:
+            play_start = time.perf_counter()
+            await self._play_source(vc, CachedOpusSource(opus_audio))
+            log.info(
+                "tts latency: guild_id=%s cache=opus queued=%.1fms ensure=%.1fms "
+                "play_start=%.1fms first_chunk=0.0ms bytes=%d",
+                guild_id,
+                queued_ms,
+                ensure_ms,
+                (play_start - trace_start) * 1000,
+                len(opus_audio),
+            )
+            return
+
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
         source = StreamingMonoPCMToStereo()
+        cached_audio = self._cache.get(text, voice)
+        cache_kind = "pcm" if cached_audio is not None else "miss"
+        play_called_at = 0.0
+        first_chunk_at: float | None = None
+        cached_bytes = len(cached_audio) if cached_audio is not None else 0
 
         async def _produce() -> None:
+            nonlocal first_chunk_at, cached_bytes
+            if cached_audio is not None:
+                first_chunk_at = time.perf_counter()
+                source.feed_mono(cached_audio)
+                source.finish()
+                return
+
+            collected = bytearray()
+            should_cache = True
             try:
                 async for chunk in stream_synthesize(text, voice):
+                    if first_chunk_at is None:
+                        first_chunk_at = time.perf_counter()
                     source.feed_mono(chunk)
+                    if should_cache and len(collected) + len(chunk) <= CACHE_MAX_ITEM_BYTES:
+                        collected.extend(chunk)
+                    else:
+                        should_cache = False
+                        collected.clear()
                 source.finish()
+                if should_cache and len(collected) <= CACHE_MAX_ITEM_BYTES:
+                    pcm_audio = bytes(collected)
+                    cached_bytes = len(pcm_audio)
+                    self._cache.put(text, voice, pcm_audio)
+                    opus_stream = _mono_pcm_to_opus_stream(pcm_audio)
+                    if opus_stream is not None:
+                        self._opus_cache.put(text, voice, opus_stream)
             except Exception:
                 source.abort()
                 raise
@@ -242,6 +449,7 @@ class AudioQueue:
             loop.call_soon_threadsafe(done.set)
 
         try:
+            play_called_at = time.perf_counter()
             vc.play(source, after=_after)
         except Exception:
             producer.cancel()
@@ -262,6 +470,17 @@ class AudioQueue:
         except Exception:
             log.exception("tts stream producer failed")
             raise
+        log.info(
+            "tts latency: guild_id=%s cache=%s queued=%.1fms ensure=%.1fms "
+            "play_start=%.1fms first_chunk=%.1fms bytes=%d",
+            guild_id,
+            cache_kind,
+            queued_ms,
+            ensure_ms,
+            (play_called_at - trace_start) * 1000,
+            ((first_chunk_at - trace_start) * 1000) if first_chunk_at is not None else -1.0,
+            cached_bytes,
+        )
 
     async def _disconnect(self, guild: discord.Guild) -> None:
         vc = guild.voice_client

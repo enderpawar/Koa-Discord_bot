@@ -6,6 +6,7 @@ guild별 직렬 재생, 모킹된 VoiceClient 기반.
 from __future__ import annotations
 import asyncio
 import importlib.util
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -80,6 +81,70 @@ async def test_failed_request_does_not_block_next():
     assert "boom" in calls and "ok" in calls
 
 
+async def test_play_streaming_uses_pcm_cache():
+    from cogs.audio_queue import AudioQueue
+
+    q = AudioQueue()
+    q._cache.put("cached", "voice", b"\x01\x02")
+    frames: list[bytes] = []
+    vc = MagicMock()
+
+    def fake_play(source, after):
+        def _drain():
+            while True:
+                frame = source.read()
+                if not frame:
+                    break
+                frames.append(frame)
+            after(None)
+
+        threading.Thread(target=_drain, daemon=True).start()
+
+    async def fail_stream(*_a, **_kw):
+        raise AssertionError("cache hit should not call Azure")
+        yield b""
+
+    vc.play = MagicMock(side_effect=fake_play)
+    with patch("cogs.audio_queue.stream_synthesize", fail_stream):
+        await q._play_streaming(vc, "cached", "voice")
+
+    assert any(frame[:4] == b"\x01\x02\x01\x02" for frame in frames)
+
+
+async def test_play_streaming_uses_opus_cache():
+    from cogs.audio_queue import AudioQueue
+
+    q = AudioQueue()
+    q._opus_cache.put("cached", "voice", b"\x00\x03abc")
+    frames: list[bytes] = []
+    vc = MagicMock()
+
+    def fake_play(source, after):
+        assert source.is_opus() is True
+        frames.append(source.read())
+        after(None)
+
+    async def fail_stream(*_a, **_kw):
+        raise AssertionError("opus cache hit should not call Azure")
+        yield b""
+
+    vc.play = MagicMock(side_effect=fake_play)
+    with patch("cogs.audio_queue.stream_synthesize", fail_stream):
+        await q._play_streaming(vc, "cached", "voice")
+
+    assert frames == [b"abc"]
+
+
+def test_cached_opus_source_reads_length_prefixed_frames():
+    from cogs.audio_queue import CachedOpusSource
+
+    source = CachedOpusSource(b"\x00\x03abc\x00\x02de")
+    assert source.is_opus() is True
+    assert source.read() == b"abc"
+    assert source.read() == b"de"
+    assert source.read() == b""
+
+
 def test_mono_pcm_to_stereo_source(tmp_path: Path):
     from cogs.audio_queue import MonoPCMToStereo
 
@@ -102,7 +167,7 @@ def test_mono_pcm_to_stereo_source(tmp_path: Path):
 def test_streaming_mono_pcm_to_stereo_source():
     from cogs.audio_queue import StreamingMonoPCMToStereo
 
-    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1)
+    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1, pre_roll_ms=0)
     try:
         source.feed_mono(b"\x01\x02\x03\x04")
         source.finish()
@@ -113,3 +178,51 @@ def test_streaming_mono_pcm_to_stereo_source():
         assert source.read() == b""
     finally:
         source.cleanup()
+
+
+def test_streaming_source_returns_silence_during_pre_roll():
+    from cogs.audio_queue import STEREO_PCM_FRAME_BYTES, StreamingMonoPCMToStereo
+
+    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1, pre_roll_ms=40)
+    try:
+        assert source.read() == b"\x00" * STEREO_PCM_FRAME_BYTES
+        assert source.read() == b"\x00" * STEREO_PCM_FRAME_BYTES
+        source.feed_mono(b"\x01\x02")
+        source.finish()
+
+        frame = source.read()
+        assert frame[:4] == b"\x01\x02\x01\x02"
+        assert len(frame) == STEREO_PCM_FRAME_BYTES
+    finally:
+        source.cleanup()
+
+
+def test_streaming_source_does_not_delay_ready_audio():
+    from cogs.audio_queue import StreamingMonoPCMToStereo
+
+    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1, pre_roll_ms=120)
+    try:
+        source.feed_mono(b"\x01\x02")
+        source.finish()
+
+        frame = source.read()
+        assert frame[:4] == b"\x01\x02\x01\x02"
+    finally:
+        source.cleanup()
+
+
+def test_pcm_cache_lru_and_item_limit():
+    from cogs.audio_queue import PCMCache
+
+    cache = PCMCache(max_entries=2, max_bytes=10, max_item_bytes=6)
+    cache.put("a", "v", b"1111")
+    cache.put("b", "v", b"2222")
+    assert cache.get("a", "v") == b"1111"
+
+    cache.put("c", "v", b"3333")
+    assert cache.get("b", "v") is None
+    assert cache.get("a", "v") == b"1111"
+    assert cache.get("c", "v") == b"3333"
+
+    cache.put("too-big", "v", b"1234567")
+    assert cache.get("too-big", "v") is None
