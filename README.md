@@ -101,6 +101,8 @@ AZURE_SPEECH_REGION=koreacentral
 | `/join` | 일반 | 설정된 음성 채널로 즉시 입장 |
 | `/leave` | 일반 | 음성 채널에서 퇴장 |
 | `/status` | 일반 | 현재 설정 확인 |
+| `/rank [member]` | 일반 | 이번 주 멤버별 활동 내역 확인 |
+| `/leaderboard` | 일반 | 이번 주 누적 활동 시간 리더보드 확인 |
 
 **보이스 선택지**: `ko-KR-SunHiNeural` (여성, 차분 — 기본) / `ko-KR-InJoonNeural` (남성, 자연) / `ko-KR-BongJinNeural` (남성, 무게감) / `ko-KR-GookMinNeural` (남성, 친근).
 
@@ -130,6 +132,13 @@ AZURE_SPEECH_REGION=koreacentral
 - `/setvc` 로 지정한 음성 채널에 누군가 들어오거나 나갈 때만 알림
 - mute/deafen/카메라 변경 등은 무시
 - 봇 자기 자신의 입·퇴장은 무시 (루프 방지)
+
+### 활동 랭킹
+- 음성 시간은 사용자가 음성 채널에 들어온 시점부터 나간 시점까지 누적
+- 채팅 시간은 Discord 에 실제 채팅 체류 시간이 없으므로 메시지 간격 기반 활성 시간으로 추정
+- 리더보드는 `음성 시간 + 채팅 시간` 기준으로 정렬
+- 통계는 `rank_stats.json` 에 guild 별로 저장되며 `RANK_PATH` 환경변수로 경로 변경 가능
+- 매주 금요일 00:00(KST)에 자동 초기화
 
 ### 5분 idle 정책
 - 큐에 메시지가 5분간 없으면 봇이 음성 채널에서 자동 퇴장

@@ -1,6 +1,7 @@
 # Secrets / runtime state
 .env
 config.json
+rank_stats.json
 
 # Python
 __pycache__/
@@ -18,6 +19,7 @@ venv/
 # Test / tooling caches
 .pytest_cache/
 .ruff_cache/
+rank_test_tmp/
 
 # IDE
 .vscode/
