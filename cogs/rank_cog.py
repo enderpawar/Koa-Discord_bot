@@ -11,6 +11,7 @@ from discord.ext import commands, tasks
 
 from cogs.config_store import ConfigStore
 from cogs.rank_store import RankStore
+from cogs.ui import BRAND_COLOR, notice_embed
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +35,30 @@ def _format_score(score: int) -> str:
 
 def _rank_icon(rank: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"`{rank}`")
+
+
+def _rank_stats_embed(display_name: str, stats: dict[str, int]) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"{display_name} 활동 내역",
+        description="이번 주 서버 활동 기준 개인 통계입니다.",
+        color=BRAND_COLOR,
+    )
+    embed.add_field(name="활동 점수", value=f"**{_format_score(stats['score'])}**", inline=False)
+    embed.add_field(
+        name="활동 지표",
+        value=(
+            f"음성 시간: `{_format_duration(stats['voice_seconds'])}`\n"
+            f"메시지: `{stats['message_count']}개`"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="점수 기준",
+        value="서버 내 최고 음성 시간과 최고 메시지 수를 각각 100%로 환산해 `음성 70% + 메시지 30%`로 계산합니다.",
+        inline=False,
+    )
+    embed.set_footer(text="매주 금요일 00:00(KST) 초기화")
+    return embed
 
 
 class RankCog(commands.Cog):
@@ -157,13 +182,23 @@ class RankCog(commands.Cog):
     @app_commands.command(name="leaderboard", description="이번 주 서버 활동 순위 확인")
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or interaction.guild_id is None:
-            await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message(
+                embed=notice_embed("사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"),
+                ephemeral=True,
+            )
             return
 
         await self.store.ensure_week()
         embed = await self._leaderboard_embed(interaction.guild, limit=10)
         if embed is None:
-            await interaction.response.send_message("아직 집계된 활동 내역이 없습니다.", ephemeral=True)
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "활동 내역 없음",
+                    "아직 집계된 활동 내역이 없습니다.",
+                    tone="info",
+                ),
+                ephemeral=True,
+            )
             return
         await interaction.response.send_message(embed=embed)
 
@@ -175,7 +210,7 @@ class RankCog(commands.Cog):
             return None
         embed = discord.Embed(
             title="이번 주 활동 리더보드",
-            description="서버 활동 점수 기준 TOP 10\n`음성 시간 70% + 메시지 수 30%`",
+            description="서버 활동 점수 기준 TOP 10",
             color=discord.Color.gold(),
         )
         for index, row in enumerate(rows, start=1):
@@ -184,12 +219,17 @@ class RankCog(commands.Cog):
             embed.add_field(
                 name=f"{_rank_icon(index)} {name}",
                 value=(
-                    f"점수 **{_format_score(row['score'])}**\n"
-                    f"음성 `{_format_duration(row['voice_seconds'])}` · "
-                    f"메시지 `{row['message_count']}개`"
+                    f"점수: **{_format_score(row['score'])}**\n"
+                    f"음성: `{_format_duration(row['voice_seconds'])}`\n"
+                    f"메시지: `{row['message_count']}개`"
                 ),
                 inline=False,
             )
+        embed.add_field(
+            name="점수 기준",
+            value="서버 내 최고 음성 시간과 최고 메시지 수를 각각 100%로 환산해 `음성 70% + 메시지 30%`로 계산합니다.",
+            inline=False,
+        )
         embed.set_footer(text="매주 금요일 00:00(KST) 초기화")
         return embed
 
@@ -200,20 +240,19 @@ class RankCog(commands.Cog):
         member: discord.Member | None = None,
     ) -> None:
         if interaction.guild_id is None:
-            await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message(
+                embed=notice_embed("사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"),
+                ephemeral=True,
+            )
             return
 
         target = member or interaction.user
         await self.store.ensure_week()
         stats = await self.store.user_stats(interaction.guild_id, target.id)
-        message = (
-            f"**{target.display_name} 활동 내역**\n"
-            f"활동 점수: {_format_score(stats['score'])} (음성 시간 70% + 메시지 수 30%)\n"
-            f"음성 시간: {_format_duration(stats['voice_seconds'])}\n"
-            f"메시지: {stats['message_count']}개\n"
-            "매주 금요일 00:00(KST)에 초기화됩니다."
+        await interaction.response.send_message(
+            embed=_rank_stats_embed(target.display_name, stats),
+            ephemeral=True,
         )
-        await interaction.response.send_message(message, ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -24,6 +24,7 @@ from cogs.audio_queue import AudioQueue, AudioRequest
 from cogs.config_store import ConfigStore
 from cogs.preprocess import clean_message
 from cogs.tts_engine import DEFAULT_VOICE, close_session, start_keepalive, warm_up
+from cogs.ui import BRAND_COLOR, channel_ref, notice_embed
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,49 @@ VOICE_CHOICES = [
 ]
 
 PANEL_COOLDOWN_SEC = 300
+
+
+def _voice_label(voice: str) -> str:
+    for choice in VOICE_CHOICES:
+        if choice.value == voice:
+            return choice.name
+    return voice
+
+
+def _tts_status_embed(cfg: dict) -> discord.Embed:
+    tts_ch = cfg.get("tts_channel_id")
+    vc_ch = cfg.get("voice_channel_id")
+    voice = cfg.get("voice", DEFAULT_VOICE)
+    ready = bool(tts_ch and vc_ch)
+
+    embed = discord.Embed(
+        title="TTS 상태",
+        description="메시지를 읽을 채널과 음성을 출력할 채널 설정입니다.",
+        color=BRAND_COLOR if ready else discord.Color.dark_grey(),
+    )
+    embed.add_field(name="입력 채널", value=channel_ref(tts_ch), inline=True)
+    embed.add_field(name="음성 채널", value=channel_ref(vc_ch), inline=True)
+    embed.add_field(name="보이스", value=f"`{_voice_label(voice)}`", inline=False)
+    embed.add_field(
+        name="상태",
+        value="재생 준비됨" if ready else "채널 설정 필요",
+        inline=False,
+    )
+    return embed
+
+
+def _voice_panel_embed(channel: discord.VoiceChannel) -> discord.Embed:
+    embed = discord.Embed(
+        title="TTS 빠른 설정",
+        description=f"{channel.mention} 채널 채팅을 TTS 입력으로 사용할 수 있습니다.",
+        color=BRAND_COLOR,
+    )
+    embed.add_field(
+        name="동작",
+        value="버튼을 눌러 이 음성 채널의 채팅 읽기를 켜거나 끕니다.",
+        inline=False,
+    )
+    return embed
 
 
 class TTSControlView(discord.ui.View):
@@ -100,21 +144,34 @@ class TTSCog(commands.Cog):
 
     async def enable_from_panel(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
-            await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message(
+                embed=notice_embed("사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"),
+                ephemeral=True,
+            )
             return
 
         voice_state = getattr(interaction.user, "voice", None)
         channel = voice_state.channel if voice_state else None
         if channel is None or not isinstance(channel, discord.VoiceChannel):
             await interaction.response.send_message(
-                "먼저 이 음성 채널에 입장한 뒤 눌러주세요.", ephemeral=True
+                embed=notice_embed(
+                    "음성 채널 필요",
+                    "먼저 이 음성 채널에 입장한 뒤 눌러주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
             )
             return
 
         # 패널이 눌린 채널과 실제 음성 채널이 다르면 오작동을 줄인다.
         if interaction.channel and interaction.channel.id != channel.id:
             await interaction.response.send_message(
-                f"{channel.mention} 채널 채팅에서 다시 눌러주세요.", ephemeral=True
+                embed=notice_embed(
+                    "채널 확인 필요",
+                    f"{channel.mention} 채널 채팅에서 다시 눌러주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
             )
             return
 
@@ -132,23 +189,33 @@ class TTSCog(commands.Cog):
                 await channel.connect(reconnect=True, self_deaf=True)
         except discord.Forbidden:
             await interaction.response.send_message(
-                "음성 채널 접속 권한이 없습니다.", ephemeral=True
+                embed=notice_embed("권한 부족", "음성 채널 접속 권한이 없습니다.", tone="error"),
+                ephemeral=True,
             )
             return
         except Exception:
             log.exception("panel join failed: guild_id=%s", interaction.guild.id)
             await interaction.response.send_message(
-                "TTS 입장 중 오류가 발생했습니다.", ephemeral=True
+                embed=notice_embed("입장 실패", "TTS 입장 중 오류가 발생했습니다.", tone="error"),
+                ephemeral=True,
             )
             return
 
         await interaction.response.send_message(
-            f"{channel.mention} 채널 채팅을 TTS 입력으로 사용합니다.", ephemeral=True
+            embed=notice_embed(
+                "TTS 활성화",
+                f"{channel.mention} 채널 채팅을 TTS 입력으로 사용합니다.",
+                tone="ok",
+            ),
+            ephemeral=True,
         )
 
     async def disable_from_panel(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
-            await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
+            await interaction.response.send_message(
+                embed=notice_embed("사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"),
+                ephemeral=True,
+            )
             return
 
         cfg = await self.store.get(interaction.guild.id)
@@ -164,7 +231,10 @@ class TTSCog(commands.Cog):
         vc = interaction.guild.voice_client
         if vc is not None and vc.is_connected() and vc.channel.id == channel_id:
             await vc.disconnect()
-        await interaction.response.send_message("이 채널의 TTS를 껐습니다.", ephemeral=True)
+        await interaction.response.send_message(
+            embed=notice_embed("TTS 비활성화", "이 채널의 TTS를 껐습니다.", tone="ok"),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="settts", description="TTS 로 읽을 텍스트 채널 설정")
     @app_commands.checks.has_permissions(manage_channels=True)
@@ -177,7 +247,12 @@ class TTSCog(commands.Cog):
             interaction.guild_id, channel.id, interaction.user.id,
         )
         await interaction.response.send_message(
-            f"TTS 채널을 {channel.mention} 으로 설정했습니다.", ephemeral=True
+            embed=notice_embed(
+                "TTS 입력 채널 설정",
+                f"이제 {channel.mention} 메시지를 읽습니다.",
+                tone="ok",
+            ),
+            ephemeral=True,
         )
 
     @app_commands.command(name="setvc", description="봇이 음성을 출력할 채널 설정")
@@ -191,7 +266,12 @@ class TTSCog(commands.Cog):
             interaction.guild_id, channel.id, interaction.user.id,
         )
         await interaction.response.send_message(
-            f"음성 채널을 {channel.mention} 으로 설정했습니다.", ephemeral=True
+            embed=notice_embed(
+                "음성 출력 채널 설정",
+                f"봇 음성을 {channel.mention}에서 재생합니다.",
+                tone="ok",
+            ),
+            ephemeral=True,
         )
 
     @app_commands.command(name="setvoice", description="TTS 보이스 변경")
@@ -206,7 +286,12 @@ class TTSCog(commands.Cog):
             interaction.guild_id, voice.value, interaction.user.id,
         )
         await interaction.response.send_message(
-            f"보이스를 **{voice.name}** 으로 설정했습니다.", ephemeral=True
+            embed=notice_embed(
+                "보이스 변경",
+                f"보이스를 `{voice.name}` 으로 설정했습니다.",
+                tone="ok",
+            ),
+            ephemeral=True,
         )
 
     @app_commands.command(name="join", description="설정된 음성 채널로 입장")
@@ -216,7 +301,12 @@ class TTSCog(commands.Cog):
         channel = interaction.guild.get_channel(ch_id) if ch_id else None
         if channel is None or not isinstance(channel, discord.VoiceChannel):
             await interaction.response.send_message(
-                "먼저 `/setvc` 로 음성 채널을 지정하세요.", ephemeral=True
+                embed=notice_embed(
+                    "음성 채널 미설정",
+                    "먼저 `/setvc` 로 음성 채널을 지정하세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
             )
             return
         try:
@@ -228,17 +318,20 @@ class TTSCog(commands.Cog):
                 await channel.connect(reconnect=True, self_deaf=True)
         except discord.Forbidden:
             await interaction.response.send_message(
-                "음성 채널 접속 권한이 없습니다.", ephemeral=True
+                embed=notice_embed("권한 부족", "음성 채널 접속 권한이 없습니다.", tone="error"),
+                ephemeral=True,
             )
             return
         except Exception:
             log.exception("join failed: guild_id=%s", interaction.guild_id)
             await interaction.response.send_message(
-                "입장 중 오류가 발생했습니다.", ephemeral=True
+                embed=notice_embed("입장 실패", "입장 중 오류가 발생했습니다.", tone="error"),
+                ephemeral=True,
             )
             return
         await interaction.response.send_message(
-            f"{channel.mention} 에 입장했습니다.", ephemeral=True
+            embed=notice_embed("음성 채널 입장", f"{channel.mention} 에 입장했습니다.", tone="ok"),
+            ephemeral=True,
         )
 
     @app_commands.command(name="leave", description="음성 채널에서 퇴장")
@@ -246,27 +339,23 @@ class TTSCog(commands.Cog):
         vc = interaction.guild.voice_client
         if vc is None or not vc.is_connected():
             await interaction.response.send_message(
-                "음성 채널에 없습니다.", ephemeral=True
+                embed=notice_embed("퇴장 불가", "현재 음성 채널에 없습니다.", tone="warn"),
+                ephemeral=True,
             )
             return
         try:
             await vc.disconnect()
         except Exception:
             log.exception("leave failed: guild_id=%s", interaction.guild_id)
-        await interaction.response.send_message("퇴장했습니다.", ephemeral=True)
+        await interaction.response.send_message(
+            embed=notice_embed("음성 채널 퇴장", "퇴장했습니다.", tone="ok"),
+            ephemeral=True,
+        )
 
     @app_commands.command(name="status", description="현재 설정 확인")
     async def status(self, interaction: discord.Interaction) -> None:
         cfg = await self.store.get(interaction.guild_id)
-        tts_ch = cfg.get("tts_channel_id")
-        vc_ch = cfg.get("voice_channel_id")
-        voice = cfg.get("voice", DEFAULT_VOICE)
-        msg = (
-            f"📝 TTS 채널: {f'<#{tts_ch}>' if tts_ch else '미설정'}\n"
-            f"🔊 음성 채널: {f'<#{vc_ch}>' if vc_ch else '미설정'}\n"
-            f"🎙 보이스: `{voice}`"
-        )
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message(embed=_tts_status_embed(cfg), ephemeral=True)
 
     # ---------- 권한/오류 안내 ----------
 
@@ -275,7 +364,11 @@ class TTSCog(commands.Cog):
     ) -> None:
         if isinstance(error, app_commands.MissingPermissions):
             await self._safe_send(
-                interaction, "이 명령은 `채널 관리` 권한이 필요합니다.", ephemeral=True
+                interaction,
+                "권한 필요",
+                "이 명령은 `채널 관리` 권한이 필요합니다.",
+                ephemeral=True,
+                tone="error",
             )
             return
         log.exception(
@@ -285,18 +378,28 @@ class TTSCog(commands.Cog):
             exc_info=error,
         )
         await self._safe_send(
-            interaction, "명령 처리 중 오류가 발생했습니다.", ephemeral=True
+            interaction,
+            "처리 실패",
+            "명령 처리 중 오류가 발생했습니다.",
+            ephemeral=True,
+            tone="error",
         )
 
     @staticmethod
     async def _safe_send(
-        interaction: discord.Interaction, content: str, *, ephemeral: bool = True
+        interaction: discord.Interaction,
+        title: str,
+        description: str,
+        *,
+        ephemeral: bool = True,
+        tone: str = "info",
     ) -> None:
+        embed = notice_embed(title, description, tone=tone)
         try:
             if interaction.response.is_done():
-                await interaction.followup.send(content, ephemeral=ephemeral)
+                await interaction.followup.send(embed=embed, ephemeral=ephemeral)
             else:
-                await interaction.response.send_message(content, ephemeral=ephemeral)
+                await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
         except discord.HTTPException:
             log.exception("failed to send interaction response")
 
@@ -345,8 +448,7 @@ class TTSCog(commands.Cog):
 
         try:
             await channel.send(
-                "**TTS 채널**\n"
-                "이 음성 채널 채팅에 입력한 메시지를 읽습니다.",
+                embed=_voice_panel_embed(channel),
                 view=self._panel_view,
                 allowed_mentions=discord.AllowedMentions.none(),
             )

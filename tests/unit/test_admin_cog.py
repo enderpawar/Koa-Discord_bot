@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cogs.admin_cog import _TIME_RE, _configured, _settings_message
+from cogs.admin_cog import _TIME_RE, _configured, _settings_embed, _settings_message
 
 
 def test_leaderboard_post_time_validation() -> None:
@@ -29,3 +29,22 @@ def test_settings_message_includes_panel_state() -> None:
     assert "일일 리더보드: `켜짐`" in message
     assert "리더보드 채널: <#123>" in message
     assert "리더보드 발송 시각: `23:59` KST" in message
+
+
+def test_settings_embed_groups_admin_state() -> None:
+    embed = _settings_embed(
+        {
+            "tts_channel_id": 11,
+            "voice_channel_id": 22,
+            "leaderboard_daily_enabled": True,
+            "leaderboard_channel_id": 123,
+            "leaderboard_post_time": "23:59",
+            "leaderboard_last_post_date": "2026-05-01",
+        }
+    )
+
+    assert embed.title == "관리자 설정"
+    assert [field.name for field in embed.fields] == ["TTS", "일일 리더보드", "작업"]
+    assert "입력 채널: <#11>" in embed.fields[0].value
+    assert "자동 발송: `켜짐`" in embed.fields[1].value
+    assert "발송 채널: <#123>" in embed.fields[1].value
