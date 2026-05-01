@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from cogs.admin_cog import _TIME_RE, _configured, _settings_embed, _settings_message
+from cogs.admin_cog import (
+    _TIME_RE,
+    _configured,
+    _settings_embed,
+    _settings_message,
+    _web_dashboard_url,
+)
 
 
 def test_leaderboard_post_time_validation() -> None:
@@ -48,3 +54,27 @@ def test_settings_embed_groups_admin_state() -> None:
     assert "입력 채널: <#11>" in embed.fields[0].value
     assert "자동 발송: `켜짐`" in embed.fields[1].value
     assert "발송 채널: <#123>" in embed.fields[1].value
+
+
+def test_web_dashboard_url_prefers_public_url(monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_WEB_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "https://admin.example.com/")
+
+    assert _web_dashboard_url() == "https://admin.example.com"
+
+
+def test_web_dashboard_url_uses_localhost_when_available(monkeypatch) -> None:
+    monkeypatch.delenv("ADMIN_WEB_PUBLIC_URL", raising=False)
+    monkeypatch.setenv("ADMIN_WEB_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_WEB_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADMIN_WEB_PORT", "9090")
+
+    assert _web_dashboard_url() == "http://127.0.0.1:9090"
+
+
+def test_web_dashboard_url_hides_unspecified_public_host(monkeypatch) -> None:
+    monkeypatch.delenv("ADMIN_WEB_PUBLIC_URL", raising=False)
+    monkeypatch.setenv("ADMIN_WEB_TOKEN", "token")
+    monkeypatch.setenv("ADMIN_WEB_HOST", "0.0.0.0")
+
+    assert _web_dashboard_url() is None

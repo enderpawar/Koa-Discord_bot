@@ -88,6 +88,7 @@ AZURE_SPEECH_REGION=koreacentral
 # ADMIN_WEB_TOKEN=긴_랜덤_관리자_토큰
 # ADMIN_WEB_HOST=127.0.0.1
 # ADMIN_WEB_PORT=8080
+# ADMIN_WEB_PUBLIC_URL=https://your-admin.example.com
 ```
 
 `.env` 는 절대 커밋하지 마세요. `.gitignore` 에 이미 등록되어 있습니다.
@@ -136,6 +137,8 @@ AZURE_SPEECH_REGION=koreacentral
 ADMIN_WEB_TOKEN=긴_랜덤_관리자_토큰
 ADMIN_WEB_HOST=127.0.0.1
 ADMIN_WEB_PORT=8080
+# 배포 환경에서 /admin panel 의 "웹 대시보드 열기" 버튼에 사용할 URL
+# ADMIN_WEB_PUBLIC_URL=https://your-admin.example.com
 ```
 
 로컬 실행 기본 접속 주소:
@@ -145,6 +148,8 @@ http://127.0.0.1:8080
 ```
 
 대시보드에서 서버 선택, TTS 채널, 음성 채널, 일일 리더보드 채널, 발송 시각, 자동 발송 여부를 편집할 수 있고 리더보드 즉시 발송도 가능합니다. 공개 서버에 노출할 때는 반드시 강한 `ADMIN_WEB_TOKEN` 을 사용하세요.
+
+`/admin panel` 명령은 Discord 안의 간단한 설정 패널을 보여주며, 웹 대시보드가 활성화되어 있으면 `웹 대시보드 열기` 링크 버튼도 함께 표시합니다. 배포환경에서는 `ADMIN_WEB_PUBLIC_URL` 을 실제 접속 가능한 HTTPS 주소로 설정하세요.
 
 ---
 

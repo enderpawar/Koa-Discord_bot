@@ -18,6 +18,19 @@ log = logging.getLogger(__name__)
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 
 
+def _web_dashboard_url() -> str | None:
+    public_url = os.getenv("ADMIN_WEB_PUBLIC_URL", "").strip()
+    if public_url:
+        return public_url.rstrip("/")
+    if not os.getenv("ADMIN_WEB_TOKEN"):
+        return None
+    host = os.getenv("ADMIN_WEB_HOST", "127.0.0.1")
+    port = os.getenv("ADMIN_WEB_PORT") or os.getenv("PORT") or "8080"
+    if host == "0.0.0.0":
+        return None
+    return f"http://{host}:{port}"
+
+
 def _configured(value: str | None, *, secret: bool = False) -> str:
     if not value:
         return "미설정"
@@ -164,6 +177,16 @@ class AdminPanelView(discord.ui.View):
         super().__init__(timeout=300)
         self.cog = cog
         self.add_item(LeaderboardChannelSelect(cog, self))
+        web_url = _web_dashboard_url()
+        if web_url:
+            self.add_item(
+                discord.ui.Button(
+                    label="웹 대시보드 열기",
+                    style=discord.ButtonStyle.link,
+                    url=web_url,
+                    row=2,
+                )
+            )
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.guild_id is None:
