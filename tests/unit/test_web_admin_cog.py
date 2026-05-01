@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from cogs.web_admin_cog import _bool_value, _clean_time, _web_host, _web_port
+from cogs.web_admin_cog import (
+    _allowed_guild_ids,
+    _bool_value,
+    _clean_time,
+    _web_host,
+    _web_port,
+)
 
 
 def test_clean_time_accepts_hh_mm() -> None:
@@ -42,3 +48,21 @@ def test_web_host_defaults_to_public_bind_on_railway(
     monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
 
     assert _web_host() == "0.0.0.0"
+
+
+def test_allowed_guild_ids_uses_admin_web_guild_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMIN_WEB_GUILD_IDS", "123, 456")
+    monkeypatch.setenv("TEST_GUILD_ID", "789")
+
+    assert _allowed_guild_ids() == {123, 456}
+
+
+def test_allowed_guild_ids_falls_back_to_test_guild_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
+    monkeypatch.setenv("TEST_GUILD_ID", "789")
+
+    assert _allowed_guild_ids() == {789}

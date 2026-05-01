@@ -63,6 +63,16 @@ def _channel_payload(channel: discord.abc.GuildChannel) -> dict[str, int | str]:
     return {"id": channel.id, "name": channel.name}
 
 
+def _allowed_guild_ids() -> set[int]:
+    raw = os.getenv("ADMIN_WEB_GUILD_IDS") or os.getenv("TEST_GUILD_ID") or ""
+    ids: set[int] = set()
+    for part in raw.replace(";", ",").split(","):
+        value = part.strip()
+        if value.isdigit():
+            ids.add(int(value))
+    return ids
+
+
 class WebAdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -151,15 +161,20 @@ class WebAdminCog(commands.Cog):
 
     async def _api_state(self, request: web.Request) -> web.Response:
         guild_id = request.query.get("guild_id")
-        guild = self._guild(guild_id) if guild_id else (self.bot.guilds[0] if self.bot.guilds else None)
-        guilds = [{"id": item.id, "name": item.name} for item in self.bot.guilds]
+        guilds = self._visible_guilds()
+        guild = self._guild(guild_id) if guild_id else (guilds[0] if guilds else None)
         if guild is None:
-            return web.json_response({"guilds": guilds, "selected": None})
+            return web.json_response(
+                {
+                    "guilds": [{"id": item.id, "name": item.name} for item in guilds],
+                    "selected": None,
+                }
+            )
 
         cfg = await self.store.get(guild.id)
         return web.json_response(
             {
-                "guilds": guilds,
+                "guilds": [{"id": item.id, "name": item.name} for item in guilds],
                 "selected": {
                     "id": guild.id,
                     "name": guild.name,
@@ -225,7 +240,16 @@ class WebAdminCog(commands.Cog):
             target_id = int(guild_id)
         except (TypeError, ValueError):
             return None
+        allowed_ids = _allowed_guild_ids()
+        if allowed_ids and target_id not in allowed_ids:
+            return None
         return self.bot.get_guild(target_id)
+
+    def _visible_guilds(self) -> list[discord.Guild]:
+        allowed_ids = _allowed_guild_ids()
+        if not allowed_ids:
+            return list(self.bot.guilds)
+        return [guild for guild in self.bot.guilds if guild.id in allowed_ids]
 
     @staticmethod
     def _text_channel_id(guild: discord.Guild, value: Any) -> int:
