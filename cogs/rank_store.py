@@ -207,6 +207,29 @@ class RankStore:
                 ),
             }
 
+    async def clear_guild(
+        self, guild_id: int, *, now_ts: float | None = None
+    ) -> dict[str, int]:
+        now_value = now_ts if now_ts is not None else datetime.now(KST).timestamp()
+        async with self._lock:
+            guild = self._guild_unlocked(guild_id)
+            users = guild.get("users", {})
+            cleared_users = len(users)
+            active_users = {}
+            for user_id, user in users.items():
+                if "voice_joined_at" not in user or "voice_channel_id" not in user:
+                    continue
+                active_users[user_id] = {
+                    "voice_seconds": 0,
+                    "message_count": 0,
+                    "voice_joined_at": now_value,
+                    "voice_channel_id": user["voice_channel_id"],
+                }
+            guild["week_anchor"] = weekly_reset_anchor()
+            guild["users"] = active_users
+            await self._save_unlocked()
+            return {"cleared_users": cleared_users, "active_users": len(active_users)}
+
     def _guild_unlocked(self, guild_id: int) -> dict[str, Any]:
         guild = self._data.setdefault(
             str(guild_id),

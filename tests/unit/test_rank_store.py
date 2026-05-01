@@ -101,3 +101,32 @@ async def test_weekly_reset_preserves_active_voice_session(rank_path: Path):
     stats = await store.user_stats(1, 10)
 
     assert stats["voice_seconds"] == 600
+
+
+async def test_clear_guild_removes_existing_rank_stats(rank_path: Path):
+    store = _store(rank_path)
+    await store.start_voice(1, 10, 100, now_ts=1000)
+    await store.stop_voice(1, 10, now_ts=1300)
+    await store.record_message(1, 10, now_ts=1400)
+
+    result = await store.clear_guild(1, now_ts=1500)
+    stats = await store.user_stats(1, 10, now_ts=1600)
+
+    assert result == {"cleared_users": 1, "active_users": 0}
+    assert stats["voice_seconds"] == 0
+    assert stats["message_count"] == 0
+    assert stats["score"] == 0
+
+
+async def test_clear_guild_preserves_active_voice_from_clear_time(rank_path: Path):
+    store = _store(rank_path)
+    await store.start_voice(1, 10, 100, now_ts=1000)
+    await store.record_message(1, 10, now_ts=1050)
+
+    result = await store.clear_guild(1, now_ts=1100)
+    await store.stop_voice(1, 10, now_ts=1160)
+    stats = await store.user_stats(1, 10, now_ts=1200)
+
+    assert result == {"cleared_users": 1, "active_users": 1}
+    assert stats["voice_seconds"] == 60
+    assert stats["message_count"] == 0

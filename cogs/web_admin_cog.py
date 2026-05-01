@@ -103,6 +103,7 @@ class WebAdminCog(commands.Cog):
                 web.get("/api/state", self._api_state),
                 web.post("/api/config", self._api_config),
                 web.post("/api/post-leaderboard", self._api_post_leaderboard),
+                web.post("/api/clear-leaderboard", self._api_clear_leaderboard),
             ]
         )
         self._runner = web.AppRunner(app)
@@ -239,6 +240,19 @@ class WebAdminCog(commands.Cog):
         await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         return web.json_response({"ok": True})
 
+    async def _api_clear_leaderboard(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        guild = self._guild(payload.get("guild_id"))
+        if guild is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+        if payload.get("confirm") != "CLEAR":
+            return web.json_response({"error": "confirmation required"}, status=400)
+        rank_cog = self.bot.get_cog("RankCog")
+        if rank_cog is None or not hasattr(rank_cog, "store"):
+            return web.json_response({"error": "rank cog unavailable"}, status=500)
+        result = await rank_cog.store.clear_guild(guild.id)
+        return web.json_response({"ok": True, **result})
+
     def _guild(self, guild_id: Any) -> discord.Guild | None:
         try:
             target_id = int(guild_id)
@@ -306,11 +320,11 @@ aside{border-right:1px solid var(--line);background:#fff;padding:20px}.content{p
 select,input{width:100%;height:42px;border:1px solid var(--line-strong);border-radius:7px;background:#fff;padding:0 11px;font-size:14px;color:var(--text)}select:focus,input:focus{outline:2px solid rgba(88,101,242,.18);border-color:var(--brand)}
 .toggle{display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid var(--line);border-radius:8px;padding:13px 14px;margin-top:14px;background:#fbfcfe}
 .status{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:7px 10px;font-weight:800;font-size:13px;background:var(--warn-soft);color:var(--warn)}.status.on{background:var(--ok-soft);color:var(--ok)}.dot{width:8px;height:8px;border-radius:50%;background:currentColor}
-button{height:40px;border:0;border-radius:7px;background:var(--brand);color:#fff;font-weight:800;padding:0 15px;cursor:pointer}button.secondary{background:#eef1f6;color:#1f2937}button:disabled{opacity:.55;cursor:not-allowed}
+button{height:40px;border:0;border-radius:7px;background:var(--brand);color:#fff;font-weight:800;padding:0 15px;cursor:pointer}button.secondary{background:#eef1f6;color:#1f2937}button.danger{background:#fff1f0;color:var(--danger);border:1px solid #f3b7b2}button:disabled{opacity:.55;cursor:not-allowed}
 .actions{display:flex;gap:10px;flex-wrap:wrap}.muted{color:var(--muted);line-height:1.55}.list{display:grid;gap:8px}.guild{width:100%;text-align:left;background:#f1f4f8;color:var(--text);border:1px solid transparent;border-radius:7px;padding:10px 12px}.guild.active{background:var(--brand-soft);border-color:var(--brand);color:#2730a8;font-weight:800}
 #message.ok{color:var(--ok);font-weight:800}#message.error{color:var(--danger);font-weight:800}
 @media(max-width:900px){.shell{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr}.content{padding:16px}}
-</style></head><body><header><h1>Nothing Bot Admin</h1><button class="secondary" id="logout">로그아웃</button></header><div class="shell"><aside><div class="section"><h2>서버</h2><div id="guilds" class="list"></div></div><p class="muted">웹 대시보드는 ADMIN_WEB_TOKEN으로 보호됩니다. 토큰은 서버 환경변수에서 관리하세요.</p></aside><main class="content"><div class="section"><h2>운영 상태</h2><div id="status" class="muted">불러오는 중</div></div><div class="section"><h2>TTS 설정</h2><div class="grid"><div class="field"><label>TTS 입력 채널</label><select id="tts_channel"></select></div><div class="field"><label>음성 출력 채널</label><select id="voice_channel"></select></div></div></div><div class="section"><h2>일일 리더보드</h2><div class="grid"><div class="field"><label>발송 채널</label><select id="leaderboard_channel"></select></div><div class="field"><label>발송 시각 KST</label><input id="post_time" placeholder="23:59" maxlength="5"></div></div><div style="height:14px"></div><label class="toggle"><input id="daily_enabled" type="checkbox" style="width:auto;height:auto"> 매일 자동 발송 사용</label></div><div class="section"><h2>작업</h2><div class="actions"><button id="save">설정 저장</button><button class="secondary" id="post">리더보드 즉시 발송</button><button class="secondary" id="refresh">새로고침</button></div><p id="message" class="muted"></p></div></main></div><script>
+</style></head><body><header><h1>Nothing Bot Admin</h1><button class="secondary" id="logout">로그아웃</button></header><div class="shell"><aside><div class="section"><h2>서버</h2><div id="guilds" class="list"></div></div><p class="muted">웹 대시보드는 ADMIN_WEB_TOKEN으로 보호됩니다. 토큰은 서버 환경변수에서 관리하세요.</p></aside><main class="content"><div class="section"><h2>운영 상태</h2><div id="status" class="muted">불러오는 중</div></div><div class="section"><h2>TTS 설정</h2><div class="grid"><div class="field"><label>TTS 입력 채널</label><select id="tts_channel"></select></div><div class="field"><label>음성 출력 채널</label><select id="voice_channel"></select></div></div></div><div class="section"><h2>일일 리더보드</h2><div class="grid"><div class="field"><label>발송 채널</label><select id="leaderboard_channel"></select></div><div class="field"><label>발송 시각 KST</label><input id="post_time" placeholder="23:59" maxlength="5"></div></div><div style="height:14px"></div><label class="toggle"><input id="daily_enabled" type="checkbox" style="width:auto;height:auto"> 매일 자동 발송 사용</label></div><div class="section"><h2>작업</h2><div class="actions"><button id="save">설정 저장</button><button class="secondary" id="post">리더보드 즉시 발송</button><button class="secondary" id="refresh">새로고침</button><button class="danger" id="clear">리더보드 데이터 초기화</button></div><p id="message" class="muted"></p></div></main></div><script>
 let state=null;let guildId=null;
 const $=id=>document.getElementById(id);
 function option(value,name){const o=document.createElement('option');o.value=value;o.textContent=name;return o}
@@ -321,7 +335,8 @@ function channelName(items,id){const found=items.find(x=>String(x.id)===String(i
 async function load(id){const q=id?`?guild_id=${id}`:'';const r=await fetch('/api/state'+q);if(r.status===401){location.href='/login';return}state=await r.json();render()}
 async function save(){const body={guild_id:guildId,tts_channel_id:$('tts_channel').value,voice_channel_id:$('voice_channel').value,leaderboard_channel_id:$('leaderboard_channel').value,leaderboard_post_time:$('post_time').value,leaderboard_daily_enabled:$('daily_enabled').checked};const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();setMessage(r.ok?'설정을 저장했습니다.':(data.error||'저장 실패'),r.ok?'ok':'error');await load(guildId)}
 async function post(){const r=await fetch('/api/post-leaderboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guild_id:guildId})});const data=await r.json();setMessage(r.ok?'리더보드를 발송했습니다.':(data.error||'발송 실패'),r.ok?'ok':'error')}
-$('save').onclick=save;$('post').onclick=post;$('refresh').onclick=()=>load(guildId);$('logout').onclick=async()=>{await fetch('/logout',{method:'POST'});location.href='/login'};load();
+async function clearLeaderboard(){const answer=prompt('선택한 서버의 리더보드 데이터를 초기화하려면 CLEAR를 입력하세요.');if(answer!=='CLEAR'){setMessage('초기화를 취소했습니다.');return}const r=await fetch('/api/clear-leaderboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guild_id:guildId,confirm:'CLEAR'})});const data=await r.json();setMessage(r.ok?`리더보드 데이터를 초기화했습니다. (${data.cleared_users||0}명)`:(data.error||'초기화 실패'),r.ok?'ok':'error')}
+$('save').onclick=save;$('post').onclick=post;$('refresh').onclick=()=>load(guildId);$('clear').onclick=clearLeaderboard;$('logout').onclick=async()=>{await fetch('/logout',{method:'POST'});location.href='/login'};load();
 </script></body></html>"""
 
 
