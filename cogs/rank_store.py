@@ -22,6 +22,8 @@ KST = ZoneInfo("Asia/Seoul")
 RESET_WEEKDAY = 4  # Friday
 VOICE_WEIGHT = 70
 CHAT_WEIGHT = 30
+HISTORY_TOP_N = 10
+MAX_HISTORY_WEEKS = 12
 
 
 def activity_score(
@@ -86,6 +88,19 @@ class RankStore:
             changed = False
             for guild in self._data.values():
                 if guild.get("week_anchor") != anchor:
+                    prev_anchor = guild.get("week_anchor")
+                    snapshot = self._snapshot_top_unlocked(guild, anchor_ts)
+                    if prev_anchor and snapshot:
+                        history = guild.setdefault("history", [])
+                        history.append(
+                            {
+                                "anchor": prev_anchor,
+                                "archived_at": anchor_ts,
+                                "top": snapshot,
+                            }
+                        )
+                        if len(history) > MAX_HISTORY_WEEKS:
+                            del history[: len(history) - MAX_HISTORY_WEEKS]
                     active_users = {}
                     for user_id, user in guild.get("users", {}).items():
                         if "voice_joined_at" not in user or "voice_channel_id" not in user:
@@ -103,6 +118,54 @@ class RankStore:
                 await self._save_unlocked()
                 log.info("weekly rank stats reset: anchor=%s", anchor)
             return changed
+
+    async def list_history(
+        self, guild_id: int, *, limit: int = MAX_HISTORY_WEEKS
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            guild = self._guild_unlocked(guild_id)
+            history = list(guild.get("history", []))
+            history.reverse()
+            if limit > 0:
+                history = history[:limit]
+            return [
+                {
+                    "anchor": entry.get("anchor"),
+                    "archived_at": entry.get("archived_at"),
+                    "top": [dict(row) for row in entry.get("top", [])],
+                }
+                for entry in history
+            ]
+
+    def _snapshot_top_unlocked(
+        self, guild: dict[str, Any], now_ts: float
+    ) -> list[dict[str, int]]:
+        rows: list[dict[str, int]] = []
+        for raw_user_id, user in guild.get("users", {}).items():
+            voice_seconds = self._voice_seconds_with_active_unlocked(user, now_ts)
+            message_count = int(user.get("message_count", 0))
+            if voice_seconds == 0 and message_count == 0:
+                continue
+            rows.append(
+                {
+                    "user_id": int(raw_user_id),
+                    "voice_seconds": voice_seconds,
+                    "message_count": message_count,
+                }
+            )
+        if not rows:
+            return []
+        max_voice_seconds = max(row["voice_seconds"] for row in rows)
+        max_message_count = max(row["message_count"] for row in rows)
+        for row in rows:
+            row["score"] = activity_score(
+                row["voice_seconds"],
+                row["message_count"],
+                max_voice_seconds=max_voice_seconds,
+                max_message_count=max_message_count,
+            )
+        rows.sort(key=lambda item: item["score"], reverse=True)
+        return rows[:HISTORY_TOP_N]
 
     async def record_message(
         self, guild_id: int, user_id: int, *, now_ts: float | None = None

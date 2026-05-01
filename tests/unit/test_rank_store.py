@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -130,3 +130,66 @@ async def test_clear_guild_preserves_active_voice_from_clear_time(rank_path: Pat
     assert result == {"cleared_users": 1, "active_users": 1}
     assert stats["voice_seconds"] == 60
     assert stats["message_count"] == 0
+
+
+async def test_weekly_reset_archives_previous_week_top(rank_path: Path):
+    kst = ZoneInfo("Asia/Seoul")
+    store = _store(rank_path)
+    store._data["1"] = {
+        "week_anchor": "2026-04-24T00:00:00+09:00",
+        "users": {
+            "10": {"voice_seconds": 600, "message_count": 0},
+            "20": {"voice_seconds": 0, "message_count": 2},
+        },
+    }
+
+    await store.ensure_week(now=datetime(2026, 5, 1, 0, 0, tzinfo=kst))
+    history = await store.list_history(1)
+
+    assert len(history) == 1
+    entry = history[0]
+    assert entry["anchor"] == "2026-04-24T00:00:00+09:00"
+    user_ids = [row["user_id"] for row in entry["top"]]
+    assert user_ids[0] == 10  # voice weight 70% beats message-only user
+    assert 20 in user_ids
+
+
+async def test_list_history_returns_most_recent_first(rank_path: Path):
+    kst = ZoneInfo("Asia/Seoul")
+    store = _store(rank_path)
+    store._data["1"] = {
+        "week_anchor": "2026-04-17T00:00:00+09:00",
+        "users": {"10": {"voice_seconds": 0, "message_count": 1}},
+    }
+    await store.ensure_week(now=datetime(2026, 4, 24, 12, 0, tzinfo=kst))
+    store._data["1"]["users"] = {"20": {"voice_seconds": 0, "message_count": 1}}
+    await store.ensure_week(now=datetime(2026, 5, 1, 12, 0, tzinfo=kst))
+
+    history = await store.list_history(1)
+    anchors = [entry["anchor"] for entry in history]
+
+    assert anchors == [
+        "2026-04-24T00:00:00+09:00",
+        "2026-04-17T00:00:00+09:00",
+    ]
+
+
+async def test_history_is_capped_at_max_weeks(rank_path: Path):
+    from cogs.rank_store import MAX_HISTORY_WEEKS, weekly_reset_anchor
+
+    kst = ZoneInfo("Asia/Seoul")
+    store = _store(rank_path)
+    base = datetime(2026, 1, 2, 12, 0, tzinfo=kst)  # Friday
+
+    for week_idx in range(MAX_HISTORY_WEEKS + 3):
+        prev_anchor = weekly_reset_anchor(base + timedelta(days=7 * week_idx))
+        existing = store._data.get("1", {}).get("history", [])
+        store._data["1"] = {
+            "week_anchor": prev_anchor,
+            "users": {"10": {"voice_seconds": 0, "message_count": 1}},
+            "history": existing,
+        }
+        await store.ensure_week(now=base + timedelta(days=7 * (week_idx + 1)))
+
+    history = await store.list_history(1)
+    assert len(history) == MAX_HISTORY_WEEKS
