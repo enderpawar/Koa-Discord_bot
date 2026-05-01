@@ -89,7 +89,7 @@ tests/
 
 ### 자동 단위 테스트 — 정책
 - 모듈이 아직 없으면 `pytest.mark.skipif`로 **자동 스킵** (False positive 방지)
-- 외부 의존(edge-tts HTTP, Discord) 은 **mocked**
+- 외부 의존(Azure Speech HTTP, Discord) 은 **mocked**
 - 실제 라이브 호출은 `@pytest.mark.live` + `RUN_LIVE=1` 환경변수로 분리
 
 ### 매핑 규칙 (PostToolUse hook)

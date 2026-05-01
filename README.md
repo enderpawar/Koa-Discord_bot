@@ -2,7 +2,7 @@
 
 텍스트 채널의 메시지와 음성 채널의 입·퇴장을 한국어 음성으로 읽어주는 Discord 봇입니다.
 
-- **TTS**: 지정된 텍스트 채널에 입력된 메시지를 [edge-tts](https://github.com/rany2/edge-tts) 한국어 보이스로 합성하여 음성 채널에 재생
+- **TTS**: 지정된 텍스트 채널에 입력된 메시지를 [Azure Speech (Neural TTS)](https://learn.microsoft.com/azure/ai-services/speech-service/text-to-speech) 한국어 보이스로 합성하여 음성 채널에 재생
 - **입·퇴장 알림**: 지정된 음성 채널에 사용자가 들어오거나 나갈 때 `{닉네임}님 입장/퇴장` 안내
 - **자동 절전**: 5분간 메시지가 없으면 자동으로 음성 채널에서 퇴장, 다음 메시지에 자동 재입장
 
@@ -39,7 +39,8 @@ python bot.py
 | Python | 3.10 이상 |
 | FFmpeg | 시스템 PATH 등록 (음성 인코딩) |
 | Discord 봇 토큰 | Developer Portal 에서 발급 |
-| 인터넷 연결 | edge-tts 엔드포인트 호출용 |
+| Azure Speech 키 + 리전 | [Azure Portal](https://portal.azure.com) 에서 Speech Service 리소스 생성 (F0 무료 티어 가능) |
+| 인터넷 연결 | Azure Speech 엔드포인트 호출용 |
 
 ### FFmpeg 설치
 
@@ -76,6 +77,9 @@ python bot.py
 ```ini
 DISCORD_TOKEN=<발급받은 봇 토큰>
 LOG_LEVEL=INFO
+
+AZURE_SPEECH_KEY=<Azure Speech 리소스의 Key 1 또는 Key 2>
+AZURE_SPEECH_REGION=koreacentral
 
 # 선택 — 개발 시 슬래시 명령을 특정 길드로 즉시 sync (전역 sync 는 캐시 1시간)
 # TEST_GUILD_ID=123456789012345678
@@ -179,7 +183,7 @@ LOG_LEVEL=INFO
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests/unit -q                       # 단위 회귀
-RUN_LIVE=1 python -m pytest tests/unit -m live -q    # 라이브 (edge-tts 도달)
+RUN_LIVE=1 python -m pytest tests/unit -m live -q    # 라이브 (Azure Speech 도달)
 python .claude/scripts/check_phase_status.py         # Phase 상태표
 ```
 

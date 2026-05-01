@@ -11,7 +11,7 @@
 
 | 시점 | 이유 |
 |------|------|
-| Phase 4 live smoke (`RUN_LIVE=1`) | edge-tts 실제 합성 검증 |
+| Phase 4 live smoke (`RUN_LIVE=1`) | Azure Speech 실제 합성 검증 |
 | Phase 5 audio queue 통합 | 실제 음성 채널에서의 직렬 재생 |
 | Phase 6 slash commands | Discord에서만 검증 가능 |
 | Phase 7 event handlers | `on_message` / `on_voice_state_update` 게이트웨이 |
@@ -104,7 +104,7 @@ async def setup_hook(self) -> None:
 
 | Phase | 자동(단위) | 라이브 시나리오 | 체크리스트 위치 |
 |-------|-----------|-----------------|----------------|
-| 4 | mocked 합성 | 실제 edge-tts 도달, 음질 청취 | §4.1 |
+| 4 | mocked 합성 | 실제 Azure Speech 도달, 음질 청취 | §4.1 |
 | 5 | mocked vc | 실제 VC 입장 → 재생 → 직렬화 | §4.2 |
 | 6 | (옵션) | 6개 슬래시 명령 동작 | [`tests/integration/test_phase6_commands.md`](../tests/integration/test_phase6_commands.md) |
 | 7 | – | on_message / on_voice_state_update | [`tests/integration/test_phase7_events.md`](../tests/integration/test_phase7_events.md) |
@@ -128,8 +128,10 @@ RUN_LIVE=1 python -m pytest tests/unit/test_tts_engine.py -m live -v
 실패 케이스:
 | 증상 | 원인 후보 | 조치 |
 |------|----------|------|
-| `NoAudioReceived` | edge-tts 일시 장애 | 1~5분 후 재시도 |
-| `aiohttp.ClientConnectorError` | 인터넷 / 방화벽 | 네트워크 점검 |
+| `aiohttp.ClientResponseError 401` | `AZURE_SPEECH_KEY` 가 잘못됨/만료됨 | Azure Portal 에서 키 재확인·재발급 |
+| `aiohttp.ClientResponseError 429` | F0 무료 티어 월 500K char 한도 초과 | S0 로 업그레이드 또는 다음 달까지 대기 |
+| `aiohttp.ClientConnectorError` | 인터넷 / 방화벽 / 잘못된 region | 네트워크 점검, `AZURE_SPEECH_REGION` 확인 |
+| `asyncio.TimeoutError` | Azure Speech 일시 지연 | 1회 자동 retry 됨, 지속되면 region 변경 검토 |
 | 파일은 생성되나 재생 시 무음 | voice 인자가 잘못됨 (영문 voice + 한글 텍스트) | `ko-KR-*` 인지 확인 |
 
 ### 4.2 Audio Queue — 실시간 재생 (Phase 5)
@@ -271,7 +273,7 @@ logging.getLogger("discord").setLevel(logging.DEBUG)   # 임시 진단 시
 # 1. 단위 회귀
 python -m pytest tests/unit -q
 
-# 2. 라이브 단위 (edge-tts 도달)
+# 2. 라이브 단위 (Azure Speech 도달)
 RUN_LIVE=1 python -m pytest tests/unit -m live -q
 
 # 3. 봇 실행

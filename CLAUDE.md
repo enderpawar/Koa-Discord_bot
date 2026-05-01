@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 프로젝트 개요
 
-한국어 Discord TTS 봇. 런타임은 Python 3.10+, discord.py, edge-tts, FFmpeg(PATH 등록 필수). 소스 코드는 Phase 단위로 점진적으로 구축되며, 작성 시점 기준 저장소에는 docs·tests·툴링만 존재합니다. `bot.py` 와 `cogs/*.py` 는 각 Phase 구현 시 생성됩니다.
+한국어 Discord TTS 봇. 런타임은 Python 3.10+, discord.py, aiohttp(Azure Speech REST), FFmpeg(PATH 등록 필수). 소스 코드는 Phase 단위로 점진적으로 구축되며, 작성 시점 기준 저장소에는 docs·tests·툴링만 존재합니다. `bot.py` 와 `cogs/*.py` 는 각 Phase 구현 시 생성됩니다.
 
 ## 자주 쓰는 명령
 
@@ -21,7 +21,7 @@ copy .env.example .env                # 이후 DISCORD_TOKEN 입력
 python -m pytest tests/unit -q                          # 전체 단위 회귀
 python -m pytest tests/unit/test_<phase>.py -v          # 특정 Phase
 python -m pytest tests/unit/test_x.py::test_name -v     # 단일 테스트
-RUN_LIVE=1 python -m pytest tests/unit -m live -q       # 옵트인 라이브 (edge-tts/Discord)
+RUN_LIVE=1 python -m pytest tests/unit -m live -q       # 옵트인 라이브 (Azure Speech/Discord)
 ```
 
 파이프라인 상태 및 hook 스크립트 (hook 비활성 상태에서도 수동 실행 가능):
@@ -53,7 +53,7 @@ python bot.py
 Cog (각각 = Phase 산출물 1개):
 - `cogs/config_store.py` — guild→설정 JSON. `asyncio.Lock` + `os.replace` 로 원자적 쓰기.
 - `cogs/preprocess.py` — 순수 함수 `clean_message(message) -> str`. 멘션/URL/마크다운 제거, 200자 truncate.
-- `cogs/tts_engine.py` — `synthesize(text, voice) -> Path`. `edge_tts.Communicate.stream()` 사용.
+- `cogs/tts_engine.py` — `synthesize(text, voice) -> Path`. Azure Speech REST (`{region}.tts.speech.microsoft.com/cognitiveservices/v1`) + module-level `aiohttp.ClientSession` 재사용.
 - `cogs/audio_queue.py` — guild별 `asyncio.Queue` + worker task. `voice_client.play()` 콜백을 `asyncio.Event` 로 직렬화. 5분 idle 시 자동 disconnect.
 - `cogs/tts_cog.py` — 슬래시 명령 (`/settts /setvc /setvoice /join /leave /status`) + 이벤트 핸들러 (`on_message`, `on_voice_state_update`).
 
@@ -79,7 +79,7 @@ cogs/audio_queue.py   → tests/unit/test_audio_queue.py
 cogs/tts_cog.py       → tests/unit/test_tts_cog.py
 ```
 
-테스트는 `pytest-asyncio` 의 `auto` 모드를 사용합니다. 외부 의존(edge-tts HTTP, Discord 게이트웨이/voice)은 단위 테스트에서 반드시 **mock** 처리하고, 실제 네트워크 호출은 `@pytest.mark.live` 로 분리되어 `RUN_LIVE=1` 일 때만 실행됩니다. `tests/conftest.py` 가 repo root 를 `sys.path` 에 추가하고, 기본적으로 live 테스트를 자동 skip 처리합니다.
+테스트는 `pytest-asyncio` 의 `auto` 모드를 사용합니다. 외부 의존(Azure Speech HTTP, Discord 게이트웨이/voice)은 단위 테스트에서 반드시 **mock** 처리하고, 실제 네트워크 호출은 `@pytest.mark.live` 로 분리되어 `RUN_LIVE=1` 일 때만 실행됩니다. `tests/conftest.py` 가 repo root 를 `sys.path` 에 추가하고, 기본적으로 live 테스트를 자동 skip 처리합니다.
 
 Phase 6/7/8 은 단위 테스트로 완전 검증이 불가능합니다. 수동 체크리스트는 `tests/integration/test_phase{6,7}_*.md` 와 `tests/manual/phase8_release_checklist.md` 에 있습니다. Discord 라이브 환경 절차는 `docs/discord-environment-testing.md` 참조.
 

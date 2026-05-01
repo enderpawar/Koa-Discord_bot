@@ -53,7 +53,7 @@ except Exception:
 ### 4. 외부 라이브러리 로그 조절
 ```python
 logging.getLogger("discord").setLevel(logging.WARNING)   # 너무 verbose
-logging.getLogger("edge_tts").setLevel(logging.WARNING)
+logging.getLogger("aiohttp.client").setLevel(logging.WARNING)
 ```
 
 ## Counter-examples

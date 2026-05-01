@@ -15,6 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# live 테스트가 .env 의 AZURE_SPEECH_* 등을 읽을 수 있도록 로드.
+# 단위 테스트는 monkeypatch.setenv 가 우선하므로 영향 없음.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+
+    _load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
 
 def pytest_collection_modifyitems(config, items):
     """live 마커는 RUN_LIVE=1 일 때만 실행."""

@@ -11,7 +11,7 @@
 
 | 레이어 | catch 범위 | 행동 |
 |--------|-----------|------|
-| **TTS 합성** (`tts_engine.synthesize`) | `aiohttp.ClientError`, `edge_tts.exceptions.*` | 1회 retry → 그래도 실패면 raise |
+| **TTS 합성** (`tts_engine.synthesize`) | `aiohttp.ClientError`, `asyncio.TimeoutError` (Azure Speech REST) | 1회 retry → 그래도 실패면 raise |
 | **Audio worker loop** | `Exception` | `log.exception` + `continue` (다음 큐 항목) |
 | **Event handler** (`on_message` 등) | `Exception` | `log.exception` + return (사용자에게 무응답) |
 | **Slash command handler** | `Exception` | `interaction.followup`으로 한국어 안내 + log |

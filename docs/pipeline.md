@@ -45,7 +45,7 @@
 | 적용 Skill | [`04-tts-engine`](skills/04-tts-engine.md) |
 | 적용 Rule | [`03-error-resilience`](rules/03-error-resilience.md), [`05-async-correctness`](rules/05-async-correctness.md) |
 | 산출물 | `cogs/tts_engine.py` |
-| 핵심 작업 | `synthesize(text, voice) -> Path` (mp3 임시파일). edge-tts `Communicate.stream()` 사용 |
+| 핵심 작업 | `synthesize(text, voice) -> Path` (mp3 임시파일). Azure Speech REST + 재사용 `aiohttp.ClientSession` |
 | 검증 | 단독 스크립트로 "안녕하세요" 합성 → 외부 플레이어로 재생 확인 |
 
 ## Phase 5 — Audio Queue
@@ -113,7 +113,7 @@ Phase 1 (foundation)
 | 위험 | 영향 | 대응 |
 |------|------|------|
 | FFmpeg 미설치 | 음성 재생 전 크래시 | Phase 1에서 시작 시 `shutil.which("ffmpeg")` 체크 후 명확한 에러 |
-| edge-tts 일시 장애 | 합성 실패 | Phase 4에서 1회 retry + 실패 로그, 큐는 다음 항목으로 진행 |
+| Azure Speech 일시 장애 / rate limit | 합성 실패 | Phase 4에서 1회 retry + 실패 로그, 큐는 다음 항목으로 진행 |
 | Discord API rate limit | 슬래시 명령 sync 실패 | Phase 1의 `setup_hook`에서 1회만 sync |
 | 봇 토큰 노출 | 보안 사고 | Phase 1에서 `.gitignore`에 `.env` 등록, `.env.example`만 배포 |
 | voice client 끊김 | TTS 재생 중단 | Phase 5에서 재연결 로직 + 큐 보존 |

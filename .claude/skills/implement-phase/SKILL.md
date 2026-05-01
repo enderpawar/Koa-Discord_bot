@@ -88,7 +88,7 @@ python .claude/scripts/check_phase_status.py
 1. **단일 Phase**. 한 번에 하나만. 다음 Phase는 사용자 재호출 후 진행.
 2. **테스트는 Contract**. 테스트가 코드를 따르는 게 아니라 코드가 테스트를 따른다. 테스트 수정은 사용자 동의 필수.
 3. **Docs 우선**. Skill/Rule 문서와 코드가 충돌하면 사용자에게 즉시 보고하고 결정 받음. 임의로 doc/code 한쪽 편집 금지.
-4. **외부 의존 격리**. 단위 테스트에서 Discord/edge-tts 라이브 호출 금지. `live` 마커로만 허용.
+4. **외부 의존 격리**. 단위 테스트에서 Discord/Azure Speech 라이브 호출 금지. `live` 마커로만 허용.
 5. **선제 구현 금지**. 다음 Phase의 함수·클래스를 미리 만들지 않음.
 6. **자기 의심**. 테스트가 통과해도 Rule 체크리스트를 다시 훑어 확인.
 
@@ -98,7 +98,7 @@ python .claude/scripts/check_phase_status.py
 |-------|--------|
 | Phase 5 구현 중 Phase 6의 슬래시 명령을 미리 정의 | Phase 5는 큐만, 슬래시는 Phase 6 호출 시 |
 | 테스트가 실패하니 테스트의 assertion을 완화 | 테스트가 정확한지 사용자에게 확인 후 진행 |
-| 단위 테스트에서 `edge_tts.Communicate`를 실제 호출 | `unittest.mock.patch`로 mocking |
+| 단위 테스트에서 Azure Speech REST 를 실제 호출 | `unittest.mock.patch`로 `_get_session` mocking |
 | `print(...)`로 디버깅 흔적 남김 | `logging.getLogger(__name__).info(...)` |
 | `time.sleep()` 사용 | `await asyncio.sleep()` |
 | `member.bot` 가드 누락 | 모든 메시지/voice 핸들러 첫 줄에 가드 |
