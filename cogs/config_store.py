@@ -32,6 +32,10 @@ class ConfigStore:
         self._load_from_disk()
 
     def _load_from_disk(self) -> None:
+        self._data = {}
+        self._reload_from_disk()
+
+    def _reload_from_disk(self) -> None:
         if not self._path.exists():
             return
         try:
@@ -48,10 +52,12 @@ class ConfigStore:
 
     async def get(self, guild_id: int) -> dict[str, Any]:
         async with self._lock:
+            self._reload_from_disk()
             return dict(self._data.get(str(guild_id), {}))
 
     async def set(self, guild_id: int, **fields: Any) -> None:
         async with self._lock:
+            self._reload_from_disk()
             cur = self._data.setdefault(str(guild_id), {})
             cur.update({k: v for k, v in fields.items() if v is not None})
             await self._save_unlocked()
@@ -59,6 +65,7 @@ class ConfigStore:
 
     async def remove_guild(self, guild_id: int) -> None:
         async with self._lock:
+            self._reload_from_disk()
             if self._data.pop(str(guild_id), None) is not None:
                 await self._save_unlocked()
                 log.info("config removed: guild_id=%s", guild_id)

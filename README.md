@@ -103,6 +103,11 @@ AZURE_SPEECH_REGION=koreacentral
 | `/status` | 일반 | 현재 설정 확인 |
 | `/rank [member]` | 일반 | 이번 주 멤버별 활동 내역 확인 |
 | `/leaderboard` | 일반 | 이번 주 서버 활동 점수 TOP 10 리더보드 확인 |
+| `/admin status` | 관리자 | 서버별 봇 설정 확인 |
+| `/admin panel` | 관리자 | 버튼/선택 메뉴 기반 설정 패널 열기 |
+| `/admin leaderboard <enabled> [channel] [post_time]` | 관리자 | 일일 리더보드 자동 발송 설정 |
+| `/admin post_leaderboard` | 관리자 | 설정된 채널로 리더보드 즉시 발송 |
+| `/admin env` | 관리자 | 런타임 환경변수 설정 여부 확인 |
 
 **보이스 선택지**: `ko-KR-SunHiNeural` (여성, 차분 — 기본) / `ko-KR-InJoonNeural` (남성, 자연) / `ko-KR-BongJinNeural` (남성, 무게감) / `ko-KR-GookMinNeural` (남성, 친근).
 
@@ -138,6 +143,8 @@ AZURE_SPEECH_REGION=koreacentral
 - 채팅 활동은 시간 추정 없이 메시지 개수만 누적
 - 리더보드는 서버 내부 전용이며 `음성 시간 70% + 메시지 수 30%` 점수 기준으로 TOP 10만 표시
 - 점수는 주간 서버 내 최대 음성 시간과 최대 메시지 수를 각각 100%로 환산한 뒤 가중합으로 계산
+- `/admin leaderboard true #채널 23:59` 로 매일 23:59(KST)에 지정 채널로 리더보드를 자동 발송 가능
+- `/admin panel` 에서 채널 선택, 자동 발송 토글, 발송 시각 변경, 즉시 발송을 Discord UI로 처리 가능
 - 통계는 `rank_stats.json` 에 guild 별로 저장되며 `RANK_PATH` 환경변수로 경로 변경 가능
 - 매주 금요일 00:00(KST)에 자동 초기화
 

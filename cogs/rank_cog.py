@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from cogs.config_store import ConfigStore
 from cogs.rank_store import RankStore
 
 log = logging.getLogger(__name__)
+
+KST = ZoneInfo("Asia/Seoul")
+DEFAULT_LEADERBOARD_POST_TIME = "23:59"
 
 
 def _format_duration(seconds: int) -> str:
@@ -34,11 +40,14 @@ class RankCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.store = RankStore()
+        self.config = ConfigStore()
         self._startup_synced = False
         self._reset_task.start()
+        self._leaderboard_task.start()
 
     async def cog_unload(self) -> None:
         self._reset_task.cancel()
+        self._leaderboard_task.cancel()
 
     @tasks.loop(minutes=1)
     async def _reset_task(self) -> None:
@@ -46,6 +55,56 @@ class RankCog(commands.Cog):
 
     @_reset_task.before_loop
     async def _before_reset_task(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=1)
+    async def _leaderboard_task(self) -> None:
+        now = datetime.now(KST)
+        post_time = now.strftime("%H:%M")
+        today = now.date().isoformat()
+        for guild in self.bot.guilds:
+            cfg = await self.config.get(guild.id)
+            if not cfg.get("leaderboard_daily_enabled", False):
+                continue
+            if cfg.get("leaderboard_post_time", DEFAULT_LEADERBOARD_POST_TIME) != post_time:
+                continue
+            if cfg.get("leaderboard_last_post_date") == today:
+                continue
+
+            channel_id = cfg.get("leaderboard_channel_id")
+            channel = guild.get_channel(channel_id) if channel_id else None
+            if not isinstance(channel, discord.TextChannel):
+                log.warning(
+                    "leaderboard channel missing: guild_id=%s channel_id=%s",
+                    guild.id,
+                    channel_id,
+                )
+                continue
+
+            await self.store.ensure_week()
+            embed = await self._leaderboard_embed(guild, limit=10)
+            if embed is None:
+                continue
+            try:
+                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+            except discord.Forbidden:
+                log.warning(
+                    "leaderboard channel forbidden: guild_id=%s channel_id=%s",
+                    guild.id,
+                    channel.id,
+                )
+                continue
+            except discord.HTTPException:
+                log.exception(
+                    "leaderboard scheduled post failed: guild_id=%s channel_id=%s",
+                    guild.id,
+                    channel.id,
+                )
+                continue
+            await self.config.set(guild.id, leaderboard_last_post_date=today)
+
+    @_leaderboard_task.before_loop
+    async def _before_leaderboard_task(self) -> None:
         await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
@@ -102,18 +161,25 @@ class RankCog(commands.Cog):
             return
 
         await self.store.ensure_week()
-        rows = await self.store.leaderboard(interaction.guild_id, limit=10)
-        if not rows:
+        embed = await self._leaderboard_embed(interaction.guild, limit=10)
+        if embed is None:
             await interaction.response.send_message("아직 집계된 활동 내역이 없습니다.", ephemeral=True)
             return
+        await interaction.response.send_message(embed=embed)
 
+    async def _leaderboard_embed(
+        self, guild: discord.Guild, *, limit: int = 10
+    ) -> discord.Embed | None:
+        rows = await self.store.leaderboard(guild.id, limit=limit)
+        if not rows:
+            return None
         embed = discord.Embed(
             title="이번 주 활동 리더보드",
             description="서버 활동 점수 기준 TOP 10\n`음성 시간 70% + 메시지 수 30%`",
             color=discord.Color.gold(),
         )
         for index, row in enumerate(rows, start=1):
-            member = interaction.guild.get_member(row["user_id"])
+            member = guild.get_member(row["user_id"])
             name = member.display_name if member else f"<@{row['user_id']}>"
             embed.add_field(
                 name=f"{_rank_icon(index)} {name}",
@@ -125,7 +191,7 @@ class RankCog(commands.Cog):
                 inline=False,
             )
         embed.set_footer(text="매주 금요일 00:00(KST) 초기화")
-        await interaction.response.send_message(embed=embed)
+        return embed
 
     @app_commands.command(name="rank", description="멤버별 활동 내역 확인")
     async def rank(

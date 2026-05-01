@@ -56,3 +56,16 @@ async def test_get_missing_returns_empty(tmp_config_path):
     s = _store(tmp_config_path)
     cfg = await s.get(99999)
     assert cfg == {} or cfg is None
+
+
+async def test_multiple_store_instances_see_latest_config(tmp_config_path):
+    first = _store(tmp_config_path)
+    second = _store(tmp_config_path)
+
+    await first.set(123, leaderboard_daily_enabled=True)
+    assert (await second.get(123))["leaderboard_daily_enabled"] is True
+
+    await second.set(123, leaderboard_post_time="23:59")
+    cfg = await first.get(123)
+    assert cfg["leaderboard_daily_enabled"] is True
+    assert cfg["leaderboard_post_time"] == "23:59"
