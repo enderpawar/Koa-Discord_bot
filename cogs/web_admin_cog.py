@@ -59,8 +59,12 @@ def _bool_value(value: Any) -> bool:
     return bool(value)
 
 
-def _channel_payload(channel: discord.abc.GuildChannel) -> dict[str, int | str]:
-    return {"id": channel.id, "name": channel.name}
+def _id(value: int) -> str:
+    return str(value)
+
+
+def _channel_payload(channel: discord.abc.GuildChannel) -> dict[str, str]:
+    return {"id": _id(channel.id), "name": channel.name}
 
 
 def _allowed_guild_ids() -> set[int]:
@@ -166,7 +170,7 @@ class WebAdminCog(commands.Cog):
         if guild is None:
             return web.json_response(
                 {
-                    "guilds": [{"id": item.id, "name": item.name} for item in guilds],
+                    "guilds": [{"id": _id(item.id), "name": item.name} for item in guilds],
                     "selected": None,
                 }
             )
@@ -174,9 +178,9 @@ class WebAdminCog(commands.Cog):
         cfg = await self.store.get(guild.id)
         return web.json_response(
             {
-                "guilds": [{"id": item.id, "name": item.name} for item in guilds],
+                "guilds": [{"id": _id(item.id), "name": item.name} for item in guilds],
                 "selected": {
-                    "id": guild.id,
+                    "id": _id(guild.id),
                     "name": guild.name,
                     "config": cfg,
                     "text_channels": [_channel_payload(ch) for ch in guild.text_channels],

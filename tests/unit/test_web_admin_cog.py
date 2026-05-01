@@ -5,7 +5,9 @@ import pytest
 from cogs.web_admin_cog import (
     _allowed_guild_ids,
     _bool_value,
+    _channel_payload,
     _clean_time,
+    _id,
     _web_host,
     _web_port,
 )
@@ -66,3 +68,18 @@ def test_allowed_guild_ids_falls_back_to_test_guild_id(
     monkeypatch.setenv("TEST_GUILD_ID", "789")
 
     assert _allowed_guild_ids() == {789}
+
+
+def test_id_is_serialized_as_string_to_preserve_discord_snowflakes() -> None:
+    assert _id(123456789012345678) == "123456789012345678"
+
+
+def test_channel_payload_serializes_id_as_string() -> None:
+    class FakeChannel:
+        id = 123456789012345678
+        name = "일반"
+
+    assert _channel_payload(FakeChannel()) == {
+        "id": "123456789012345678",
+        "name": "일반",
+    }
