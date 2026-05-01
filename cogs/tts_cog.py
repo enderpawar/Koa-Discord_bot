@@ -11,8 +11,9 @@ Rule 04 (시크릿/권한): 민감 명령(settts/setvc/setvoice) 에 manage_chan
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Optional
+import os
 
 import discord
 from discord import app_commands
@@ -21,7 +22,7 @@ from discord.ext import commands
 from cogs.audio_queue import AudioQueue, AudioRequest
 from cogs.config_store import ConfigStore
 from cogs.preprocess import clean_message
-from cogs.tts_engine import DEFAULT_VOICE
+from cogs.tts_engine import DEFAULT_VOICE, close_session, start_keepalive, warm_up
 
 log = logging.getLogger(__name__)
 
@@ -38,9 +39,28 @@ class TTSCog(commands.Cog):
         self.bot = bot
         self.store = ConfigStore()
         self.queue = AudioQueue()
+        self._warmup_task = asyncio.create_task(
+            self._warm_start(), name="tts-warm-start"
+        )
 
     async def cog_unload(self) -> None:
+        self._warmup_task.cancel()
+        try:
+            await self._warmup_task
+        except asyncio.CancelledError:
+            pass
         await self.queue.shutdown()
+        await close_session()
+
+    async def _warm_start(self) -> None:
+        if not os.getenv("AZURE_SPEECH_KEY") or not os.getenv("AZURE_SPEECH_REGION"):
+            return
+        try:
+            await warm_up()
+            start_keepalive()
+            log.info("tts azure connection warmed")
+        except Exception:
+            log.debug("tts warm-up failed", exc_info=True)
 
     # ---------- Phase 6: Slash Commands ----------
 

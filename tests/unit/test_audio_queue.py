@@ -6,7 +6,8 @@ guild별 직렬 재생, 모킹된 VoiceClient 기반.
 from __future__ import annotations
 import asyncio
 import importlib.util
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -28,34 +29,26 @@ async def test_enqueue_processes_in_order():
 
     play_order: list[str] = []
 
-    async def fake_synth(text, voice):
+    q = AudioQueue()
+    guild = _make_guild()
+
+    async def fake_ensure(*_a, **_kw):
+        vc = MagicMock()
+        vc.is_connected.return_value = True
+        vc.play = MagicMock()
+        return vc
+
+    async def fake_play_streaming(self, vc, text, voice):
         play_order.append(f"synth:{text}")
-        from pathlib import Path
-        import tempfile
-        f = tempfile.NamedTemporaryFile(prefix="tts_", suffix=".mp3", delete=False)
-        f.close()
-        return type(Path)(f.name) if False else __import__("pathlib").Path(f.name)
+        play_order.append(f"play:{text}")
 
-    with patch("cogs.audio_queue.synthesize", side_effect=fake_synth):
-        q = AudioQueue()
-        guild = _make_guild()
-
-        async def fake_ensure(*_a, **_kw):
-            vc = MagicMock()
-            vc.is_connected.return_value = True
-            vc.play = MagicMock()
-            return vc
-
-        async def fake_play_blocking(self, vc, mp3):
-            play_order.append(f"play:{mp3.name}")
-
-        with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
-             patch.object(AudioQueue, "_play_blocking", new=fake_play_blocking):
-            for t in ("a", "b", "c"):
-                await q.enqueue(guild, AudioRequest(text=t, voice="ko-KR-SunHiNeural",
-                                                   voice_channel_id=1))
-            # worker가 처리할 시간을 줌
-            await asyncio.sleep(0.5)
+    with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
+         patch.object(AudioQueue, "_play_streaming", new=fake_play_streaming):
+        for t in ("a", "b", "c"):
+            await q.enqueue(guild, AudioRequest(text=t, voice="ko-KR-SunHiNeural",
+                                               voice_channel_id=1))
+        # worker가 처리할 시간을 줌
+        await asyncio.sleep(0.5)
 
         synth_calls = [x for x in play_order if x.startswith("synth:")]
         assert synth_calls == ["synth:a", "synth:b", "synth:c"]
@@ -67,28 +60,56 @@ async def test_failed_request_does_not_block_next():
 
     calls = []
 
-    async def flaky_synth(text, voice):
+    async def flaky_play(self, vc, text, voice):
         calls.append(text)
         if text == "boom":
             raise RuntimeError("synthesize failed")
-        from pathlib import Path
-        import tempfile
-        f = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False); f.close()
-        return Path(f.name)
 
-    with patch("cogs.audio_queue.synthesize", side_effect=flaky_synth):
-        q = AudioQueue()
-        guild = _make_guild()
+    q = AudioQueue()
+    guild = _make_guild()
 
-        async def fake_ensure(*_a, **_kw):
-            vc = MagicMock(); vc.is_connected.return_value = True; return vc
+    async def fake_ensure(*_a, **_kw):
+        vc = MagicMock(); vc.is_connected.return_value = True; return vc
 
-        async def fake_play(self, vc, mp3): pass
+    with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
+         patch.object(AudioQueue, "_play_streaming", new=flaky_play):
+        await q.enqueue(guild, AudioRequest("boom", "ko-KR-SunHiNeural", 1))
+        await q.enqueue(guild, AudioRequest("ok", "ko-KR-SunHiNeural", 1))
+        await asyncio.sleep(0.5)
 
-        with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
-             patch.object(AudioQueue, "_play_blocking", new=fake_play):
-            await q.enqueue(guild, AudioRequest("boom", "ko-KR-SunHiNeural", 1))
-            await q.enqueue(guild, AudioRequest("ok", "ko-KR-SunHiNeural", 1))
-            await asyncio.sleep(0.5)
+    assert "boom" in calls and "ok" in calls
 
-        assert "boom" in calls and "ok" in calls
+
+def test_mono_pcm_to_stereo_source(tmp_path: Path):
+    from cogs.audio_queue import MonoPCMToStereo
+
+    pcm = tmp_path / "sample.pcm"
+    pcm.write_bytes(b"\x01\x02\x03\x04")
+
+    source = MonoPCMToStereo(pcm)
+    try:
+        assert source.is_opus() is False
+        frame = source.read()
+        assert frame[:8] == b"\x01\x02\x01\x02\x03\x04\x03\x04"
+        assert len(frame) == 3840
+        assert source.read() == b""
+    finally:
+        source.cleanup()
+
+    assert not pcm.exists()
+
+
+def test_streaming_mono_pcm_to_stereo_source():
+    from cogs.audio_queue import StreamingMonoPCMToStereo
+
+    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1)
+    try:
+        source.feed_mono(b"\x01\x02\x03\x04")
+        source.finish()
+
+        frame = source.read()
+        assert frame[:8] == b"\x01\x02\x01\x02\x03\x04\x03\x04"
+        assert len(frame) == 3840
+        assert source.read() == b""
+    finally:
+        source.cleanup()

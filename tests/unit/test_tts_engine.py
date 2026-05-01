@@ -5,6 +5,7 @@ Azure Speech REST 호출은 mocked. 실제 네트워크 합성은 RUN_LIVE=1 + @
 from __future__ import annotations
 import importlib.util
 from pathlib import Path
+from contextlib import ExitStack, contextmanager
 from unittest.mock import patch
 
 import pytest
@@ -61,10 +62,15 @@ def _azure_env(monkeypatch, request):
     monkeypatch.setenv("AZURE_SPEECH_REGION", "koreacentral")
 
 
+@contextmanager
 def _patch_session(fake: _FakeSession):
     async def _get():
         return fake
-    return patch("cogs.tts_engine._get_session", _get)
+
+    with ExitStack() as stack:
+        stack.enter_context(patch("cogs.tts_engine._BACKEND", "rest"))
+        stack.enter_context(patch("cogs.tts_engine._get_session", _get))
+        yield
 
 
 async def test_synthesize_returns_path():
@@ -91,14 +97,37 @@ async def test_synthesize_uses_korean_voice():
         body = body.decode("utf-8")
     assert "ko-KR-InJoonNeural" in body
     assert fake.captured["headers"]["Ocp-Apim-Subscription-Key"] == "test-key"
+    assert (
+        fake.captured["headers"]["X-Microsoft-OutputFormat"]
+        == "raw-48khz-16bit-mono-pcm"
+    )
     assert "koreacentral" in fake.captured["url"]
     path.unlink(missing_ok=True)
+
+
+async def test_warm_up_discards_audio():
+    from cogs.tts_engine import warm_up
+
+    fake = _FakeSession()
+    with _patch_session(fake):
+        await warm_up()
 
 
 async def test_synthesize_rejects_empty():
     from cogs.tts_engine import synthesize
     with pytest.raises((ValueError, AssertionError)):
         await synthesize("")
+
+
+async def test_stream_synthesize_yields_chunks():
+    from cogs.tts_engine import stream_synthesize
+
+    fake = _FakeSession(body=b"\x00" * 4096)
+    with _patch_session(fake):
+        chunks = [chunk async for chunk in stream_synthesize("안녕하세요")]
+
+    assert chunks == [b"\x00" * 4096]
+    assert fake.captured["headers"]["X-Microsoft-OutputFormat"] == "raw-48khz-16bit-mono-pcm"
 
 
 @pytest.mark.live

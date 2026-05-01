@@ -1,12 +1,13 @@
 # Skill 04 — TTS Engine
 
 ## Purpose
-정제된 텍스트를 한국어 음성 mp3 파일로 합성한다. 합성 결과를 임시파일로 반환하여 `discord.FFmpegPCMAudio`가 바로 사용할 수 있게 한다.
+정제된 텍스트를 한국어 음성으로 합성한다. 합성 결과를 임시 raw PCM 파일로 반환하여 `discord.FFmpegPCMAudio` 가 디코드 없이 통과 재생할 수 있게 한다.
 
 ## API
 ```python
 async def synthesize(text: str, voice: str = "ko-KR-SunHiNeural") -> Path:
-    """TTS 합성 후 임시 mp3 파일 경로 반환. 호출 측에서 사용 후 삭제 책임."""
+    """TTS 합성 후 임시 raw PCM 파일 경로 반환 (48kHz / 16-bit / mono).
+    호출 측에서 사용 후 삭제 책임."""
 
 async def close_session() -> None:
     """봇 종료 시 호출. 모듈 재사용 ClientSession 정리."""
@@ -16,8 +17,9 @@ async def close_session() -> None:
 - 엔드포인트: `https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`
 - 인증: `Ocp-Apim-Subscription-Key` 헤더 (`AZURE_SPEECH_KEY`)
 - 요청 본문: SSML (`<speak><voice name="…">…</voice></speak>`)
-- 출력 포맷: `audio-24khz-48kbitrate-mono-mp3` (`X-Microsoft-OutputFormat` 헤더)
-- HTTP keep-alive 를 위해 module-level `aiohttp.ClientSession` 재사용 → 연속 합성 시 edge-tts 대비 약 2.4× TTFB 개선 (벤치마크 `bench_tts.py` 참조)
+- 출력 포맷: **`raw-48khz-16bit-mono-pcm`** (`X-Microsoft-OutputFormat` 헤더). Discord 의 native sample rate 와 일치 → `audio_queue` 에서 `FFmpegPCMAudio(..., before_options="-f s16le -ar 48000 -ac 1")` 로 mp3 디코드 단계를 건너뛴다.
+- HTTP keep-alive 를 위해 module-level `aiohttp.ClientSession` 재사용 (TLS/DNS 비용 1회만 지불).
+- 벤치마크 (`bench_azure_formats.py`, koreacentral, n=12/포맷): mp3 24kHz/48kbps 대비 **TTFB 중앙값 −25ms, TOTAL 중앙값 −23ms**. Azure 가 백엔드에서 인코딩 단계를 건너뛰고 즉시 PCM 을 송신하기 때문 (bytes 는 약 16배 크지만 동일 region 내 대역 충분).
 
 ## 보이스 선택지 (한국어)
 | voice | 특징 |
@@ -54,11 +56,11 @@ async def synthesize(text: str, voice: str = "ko-KR-SunHiNeural") -> Path:
     headers = {
         "Ocp-Apim-Subscription-Key": key,
         "Content-Type": "application/ssml+xml",
-        "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+        "X-Microsoft-OutputFormat": "raw-48khz-16bit-mono-pcm",
         "User-Agent": "nothing-tts-bot",
     }
 
-    fd = tempfile.NamedTemporaryFile(prefix="tts_", suffix=".mp3", delete=False)
+    fd = tempfile.NamedTemporaryFile(prefix="tts_", suffix=".pcm", delete=False)
     fd.close()
     path = Path(fd.name)
     try:
@@ -97,5 +99,6 @@ python -c "import asyncio; from cogs.tts_engine import synthesize, close_session
   p = asyncio.run(synthesize('안녕하세요. 테스트입니다.')); print(p); \
   print('size:', p.stat().st_size); asyncio.run(close_session())"
 ```
-- 파일 크기 > 5KB
-- 외부 플레이어로 재생 → 한국어 자연스러운 음성 확인
+- 파일 크기 > 100KB (raw PCM 은 mp3 대비 ~16× 큼 — 48kHz × 16-bit × mono = 96KB/sec)
+- 외부 플레이어 재생 시 raw PCM 헤더 옵션 필요: `ffplay -f s16le -ar 48000 -ac 1 <file>`
+- 또는 봇 안에서 voice channel 입장 후 메시지 → 한국어 자연스러운 음성 확인
