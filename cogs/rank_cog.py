@@ -23,14 +23,7 @@ def _format_duration(seconds: int) -> str:
 
 
 def _format_score(score: int) -> str:
-    weighted_seconds = max(0, int(score)) / 100
-    hours, rem = divmod(int(weighted_seconds), 3600)
-    minutes, secs = divmod(rem, 60)
-    if hours:
-        return f"{hours}시간 {minutes}분"
-    if minutes:
-        return f"{minutes}분 {secs}초"
-    return f"{secs}초"
+    return f"{max(0, int(score)) / 100:.2f}점"
 
 
 def _rank_icon(rank: int) -> str:
@@ -116,7 +109,7 @@ class RankCog(commands.Cog):
 
         embed = discord.Embed(
             title="이번 주 활동 리더보드",
-            description="서버 활동 점수 기준 TOP 10\n`음성 70% + 채팅 30%`",
+            description="서버 활동 점수 기준 TOP 10\n`음성 시간 70% + 메시지 수 30%`",
             color=discord.Color.gold(),
         )
         for index, row in enumerate(rows, start=1):
@@ -127,7 +120,6 @@ class RankCog(commands.Cog):
                 value=(
                     f"점수 **{_format_score(row['score'])}**\n"
                     f"음성 `{_format_duration(row['voice_seconds'])}` · "
-                    f"채팅 `{_format_duration(row['chat_seconds'])}` · "
                     f"메시지 `{row['message_count']}개`"
                 ),
                 inline=False,
@@ -150,10 +142,8 @@ class RankCog(commands.Cog):
         stats = await self.store.user_stats(interaction.guild_id, target.id)
         message = (
             f"**{target.display_name} 활동 내역**\n"
-            f"활동 점수: {_format_score(stats['score'])} (음성 70% + 채팅 30%)\n"
-            f"누적 활동: {_format_duration(stats['total_seconds'])}\n"
+            f"활동 점수: {_format_score(stats['score'])} (음성 시간 70% + 메시지 수 30%)\n"
             f"음성 시간: {_format_duration(stats['voice_seconds'])}\n"
-            f"채팅 시간: {_format_duration(stats['chat_seconds'])}\n"
             f"메시지: {stats['message_count']}개\n"
             "매주 금요일 00:00(KST)에 초기화됩니다."
         )

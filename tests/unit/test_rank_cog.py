@@ -10,8 +10,8 @@ def test_format_duration() -> None:
 
 
 def test_format_score() -> None:
-    assert _format_score(7000) == "1분 10초"
-    assert _format_score(360000) == "1시간 0분"
+    assert _format_score(7000) == "70.00점"
+    assert _format_score(10000) == "100.00점"
 
 
 def test_rank_icon() -> None:

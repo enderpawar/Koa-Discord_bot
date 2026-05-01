@@ -2,8 +2,7 @@
 
 Guild-separated JSON store for weekly activity ranking.
 Voice time is measured from voice state join/leave events.
-Chat time is approximated from message activity windows because Discord does not
-expose a "chat presence duration" signal.
+Chat activity is measured by message count.
 """
 from __future__ import annotations
 
@@ -21,15 +20,25 @@ log = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
 RESET_WEEKDAY = 4  # Friday
-CHAT_ACTIVE_GRACE_SEC = 60
-CHAT_ACTIVE_WINDOW_SEC = 300
 VOICE_WEIGHT = 70
 CHAT_WEIGHT = 30
 
 
-def activity_score(voice_seconds: int, chat_seconds: int) -> int:
-    """Return weighted activity score in centiseconds-equivalent units."""
-    return (voice_seconds * VOICE_WEIGHT) + (chat_seconds * CHAT_WEIGHT)
+def activity_score(
+    voice_seconds: int,
+    message_count: int,
+    *,
+    max_voice_seconds: int,
+    max_message_count: int,
+) -> int:
+    """Return a 0..10000 weighted percentage score."""
+    voice_percent = (
+        voice_seconds / max_voice_seconds if max_voice_seconds > 0 else 0
+    )
+    chat_percent = (
+        message_count / max_message_count if max_message_count > 0 else 0
+    )
+    return round((voice_percent * VOICE_WEIGHT + chat_percent * CHAT_WEIGHT) * 100)
 
 
 def _default_rank_path() -> Path:
@@ -83,7 +92,6 @@ class RankStore:
                             continue
                         active_users[user_id] = {
                             "voice_seconds": 0,
-                            "chat_seconds": 0,
                             "message_count": 0,
                             "voice_joined_at": anchor_ts,
                             "voice_channel_id": user["voice_channel_id"],
@@ -99,20 +107,10 @@ class RankStore:
     async def record_message(
         self, guild_id: int, user_id: int, *, now_ts: float | None = None
     ) -> None:
-        now_value = now_ts if now_ts is not None else datetime.now(KST).timestamp()
+        _ = now_ts
         async with self._lock:
             user = self._user_unlocked(guild_id, user_id)
-            last_chat_at = user.get("last_chat_at")
             user["message_count"] = int(user.get("message_count", 0)) + 1
-            if isinstance(last_chat_at, (int, float)):
-                gap = max(0, int(now_value - float(last_chat_at)))
-                if gap <= CHAT_ACTIVE_WINDOW_SEC:
-                    user["chat_seconds"] = int(user.get("chat_seconds", 0)) + gap
-                else:
-                    user["chat_seconds"] = int(user.get("chat_seconds", 0)) + CHAT_ACTIVE_GRACE_SEC
-            else:
-                user["chat_seconds"] = int(user.get("chat_seconds", 0)) + CHAT_ACTIVE_GRACE_SEC
-            user["last_chat_at"] = now_value
             await self._save_unlocked()
 
     async def start_voice(
@@ -154,16 +152,22 @@ class RankStore:
             rows = []
             for raw_user_id, user in guild.get("users", {}).items():
                 voice_seconds = self._voice_seconds_with_active_unlocked(user, now_value)
-                chat_seconds = int(user.get("chat_seconds", 0))
                 rows.append(
                     {
                         "user_id": int(raw_user_id),
                         "voice_seconds": voice_seconds,
-                        "chat_seconds": chat_seconds,
                         "message_count": int(user.get("message_count", 0)),
-                        "total_seconds": voice_seconds + chat_seconds,
-                        "score": activity_score(voice_seconds, chat_seconds),
+                        "total_seconds": voice_seconds,
                     }
+                )
+            max_voice_seconds = max((row["voice_seconds"] for row in rows), default=0)
+            max_message_count = max((row["message_count"] for row in rows), default=0)
+            for row in rows:
+                row["score"] = activity_score(
+                    row["voice_seconds"],
+                    row["message_count"],
+                    max_voice_seconds=max_voice_seconds,
+                    max_message_count=max_message_count,
                 )
             rows.sort(key=lambda item: item["score"], reverse=True)
             return rows[:limit]
@@ -173,16 +177,34 @@ class RankStore:
     ) -> dict[str, int]:
         now_value = now_ts if now_ts is not None else datetime.now(KST).timestamp()
         async with self._lock:
-            user = self._guild_unlocked(guild_id).get("users", {}).get(str(user_id), {})
+            guild = self._guild_unlocked(guild_id)
+            rows = []
+            for raw_user_id, row_user in guild.get("users", {}).items():
+                rows.append(
+                    {
+                        "user_id": int(raw_user_id),
+                        "voice_seconds": self._voice_seconds_with_active_unlocked(
+                            row_user, now_value
+                        ),
+                        "message_count": int(row_user.get("message_count", 0)),
+                    }
+                )
+            max_voice_seconds = max((row["voice_seconds"] for row in rows), default=0)
+            max_message_count = max((row["message_count"] for row in rows), default=0)
+            user = guild.get("users", {}).get(str(user_id), {})
             voice_seconds = self._voice_seconds_with_active_unlocked(user, now_value)
-            chat_seconds = int(user.get("chat_seconds", 0))
+            message_count = int(user.get("message_count", 0))
             return {
                 "user_id": user_id,
                 "voice_seconds": voice_seconds,
-                "chat_seconds": chat_seconds,
-                "message_count": int(user.get("message_count", 0)),
-                "total_seconds": voice_seconds + chat_seconds,
-                "score": activity_score(voice_seconds, chat_seconds),
+                "message_count": message_count,
+                "total_seconds": voice_seconds,
+                "score": activity_score(
+                    voice_seconds,
+                    message_count,
+                    max_voice_seconds=max_voice_seconds,
+                    max_message_count=max_message_count,
+                ),
             }
 
     def _guild_unlocked(self, guild_id: int) -> dict[str, Any]:
@@ -198,7 +220,7 @@ class RankStore:
         guild = self._guild_unlocked(guild_id)
         return guild["users"].setdefault(
             str(user_id),
-            {"voice_seconds": 0, "chat_seconds": 0, "message_count": 0},
+            {"voice_seconds": 0, "message_count": 0},
         )
 
     @staticmethod
