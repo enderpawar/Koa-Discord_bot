@@ -35,7 +35,7 @@ VOICE_CHOICES = [
     app_commands.Choice(name="남성-친근 (GookMin)", value="ko-KR-GookMinNeural"),
 ]
 
-PANEL_COOLDOWN_SEC = 300
+PANEL_COOLDOWN_SEC = 300  # unused — kept for reference
 
 
 def _voice_label(voice: str) -> str:
@@ -115,7 +115,7 @@ class TTSCog(commands.Cog):
         self.store = ConfigStore()
         self.queue = AudioQueue()
         self._panel_view = TTSControlView(self)
-        self._panel_last_sent: dict[int, float] = {}
+        self._panel_sent: set[int] = set()  # channel IDs that already received the panel
         self._warmup_task = asyncio.create_task(
             self._warm_start(), name="tts-warm-start"
         )
@@ -448,11 +448,9 @@ class TTSCog(commands.Cog):
         )
 
     async def _send_voice_panel(self, channel: discord.VoiceChannel) -> None:
-        now = time.monotonic()
-        last = self._panel_last_sent.get(channel.id, 0.0)
-        if now - last < PANEL_COOLDOWN_SEC:
+        if channel.id in self._panel_sent:
             return
-        self._panel_last_sent[channel.id] = now
+        self._panel_sent.add(channel.id)
 
         try:
             await channel.send(
