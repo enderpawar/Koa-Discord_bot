@@ -53,3 +53,19 @@ def test_empty_input_returns_empty():
 
 def test_consecutive_whitespace_collapsed():
     assert _clean("a    b\n\n c") == "a b c"
+
+
+def test_korean_chat_laughter_repeats_are_speakable():
+    assert _clean("ㅋㅋㅋㅋㅋ") == "크크크크크"
+
+
+def test_question_mark_is_spoken_as_um_question():
+    assert _clean("?") == "음?"
+
+
+def test_korean_chat_crying_is_speakable():
+    assert _clean("ㅠㅠ") == "유유"
+
+
+def test_mixed_korean_chat_reactions_are_speakable():
+    assert _clean("ㅋㅋㅋㅋㅋ 나 ㅎㅎ? ㅠㅠ") == "크크크크크 나 하하음? 유유"
