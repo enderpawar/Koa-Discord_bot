@@ -38,6 +38,49 @@ _STREAM_END: Final = object()
 _SILENCE_STEREO_FRAME: Final = b"\x00" * STEREO_PCM_FRAME_BYTES
 
 
+def _to_stereo_purepy(mono: bytes) -> bytes:
+    """Reference 구현 — audioop / numpy 가 없을 때만 사용. 빠르지 않다."""
+    stereo = bytearray(len(mono) * 2)
+    out = 0
+    for i in range(0, len(mono), 2):
+        sample = mono[i : i + 2]
+        stereo[out : out + 2] = sample
+        stereo[out + 2 : out + 4] = sample
+        out += 4
+    return bytes(stereo)
+
+
+def _select_to_stereo():
+    """audioop (C, stdlib) → numpy → pure-py 단계적 fallback.
+
+    audio 송출 스레드가 20ms 마다 호출하는 핫 경로다. CPython stdlib audioop
+    는 C 구현이라 순수 Python 루프 대비 자릿수 빠르다.
+    """
+    try:
+        import audioop  # CPython stdlib (3.13 에서 제거 예정 → numpy 로 fallback)
+
+        def _via_audioop(mono: bytes) -> bytes:
+            return audioop.tostereo(mono, 2, 1.0, 1.0)
+
+        return _via_audioop
+    except ImportError:
+        pass
+
+    try:
+        import numpy as np
+
+        def _via_numpy(mono: bytes) -> bytes:
+            arr = np.frombuffer(mono, dtype=np.int16)
+            return np.repeat(arr, 2).tobytes()
+
+        return _via_numpy
+    except ImportError:
+        return _to_stereo_purepy
+
+
+_to_stereo = _select_to_stereo()
+
+
 @dataclass
 class AudioRequest:
     text: str
@@ -62,16 +105,10 @@ class MonoPCMToStereo(discord.AudioSource):
         if len(mono) < MONO_PCM_FRAME_BYTES:
             mono += b"\x00" * (MONO_PCM_FRAME_BYTES - len(mono))
 
-        stereo = bytearray(len(mono) * 2)
-        out = 0
-        for i in range(0, len(mono), 2):
-            sample = mono[i : i + 2]
-            stereo[out : out + 2] = sample
-            stereo[out + 2 : out + 4] = sample
-            out += 4
+        stereo = _to_stereo(mono)
         if len(stereo) != STEREO_PCM_FRAME_BYTES:
             raise RuntimeError("invalid PCM frame size")
-        return bytes(stereo)
+        return stereo
 
     def is_opus(self) -> bool:
         return False
@@ -89,15 +126,10 @@ class MonoPCMToStereo(discord.AudioSource):
 def _mono_frame_to_stereo(mono: bytes) -> bytes:
     if len(mono) != MONO_PCM_FRAME_BYTES:
         raise RuntimeError("invalid mono PCM frame size")
-
-    stereo = bytearray(STEREO_PCM_FRAME_BYTES)
-    out = 0
-    for i in range(0, MONO_PCM_FRAME_BYTES, 2):
-        sample = mono[i : i + 2]
-        stereo[out : out + 2] = sample
-        stereo[out + 2 : out + 4] = sample
-        out += 4
-    return bytes(stereo)
+    stereo = _to_stereo(mono)
+    if len(stereo) != STEREO_PCM_FRAME_BYTES:
+        raise RuntimeError("invalid stereo PCM frame size")
+    return stereo
 
 
 class PCMCache:

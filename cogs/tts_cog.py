@@ -418,6 +418,14 @@ class TTSCog(commands.Cog):
             log.exception("on_message failed: guild_id=%s", message.guild.id)
 
     async def _handle_tts_message(self, message: discord.Message) -> None:
+        # Fast-path: 무관 채널 메시지는 await 없이 즉시 reject. ConfigStore 는
+        # path-singleton 이라 web_admin 등 다른 cog 가 set() 한 결과가 즉시
+        # 반영되므로 stale cache 문제는 in-process 에서 발생하지 않는다.
+        cached = self.store.get_cached_sync(message.guild.id)
+        tts_channel_id = cached.get("tts_channel_id")
+        if not tts_channel_id or message.channel.id != tts_channel_id:
+            return
+
         cfg = await self.store.get(message.guild.id)
         tts_channel_id = cfg.get("tts_channel_id")
         voice_channel_id = cfg.get("voice_channel_id")
@@ -484,6 +492,19 @@ class TTSCog(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
+        # Fast-path: watched 채널과 무관한 음성 이벤트는 패널만 보내고 종료.
+        # ConfigStore singleton 덕분에 cached 값이 항상 최신이다.
+        cached = self.store.get_cached_sync(member.guild.id)
+        watched_id_cached = cached.get("voice_channel_id")
+        joined_or_left_watched = (
+            (after.channel and after.channel.id == watched_id_cached)
+            or (before.channel and before.channel.id == watched_id_cached)
+        )
+        if not watched_id_cached or not joined_or_left_watched:
+            if after.channel and isinstance(after.channel, discord.VoiceChannel):
+                await self._send_voice_panel(after.channel)
+            return
+
         cfg = await self.store.get(member.guild.id)
         watched_id = cfg.get("voice_channel_id")
         if not watched_id:
@@ -491,6 +512,16 @@ class TTSCog(commands.Cog):
                 await self._send_voice_panel(after.channel)
             return
 
+        await self._announce_voice_state(member, before, after, cfg, watched_id)
+
+    async def _announce_voice_state(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+        cfg: dict,
+        watched_id: int,
+    ) -> None:
         if after.channel and isinstance(after.channel, discord.VoiceChannel):
             await self._send_voice_panel(after.channel)
 
