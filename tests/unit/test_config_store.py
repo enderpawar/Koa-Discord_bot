@@ -17,6 +17,8 @@ pytestmark = pytest.mark.skipif(_HAS is False, reason="Phase 2 not yet implement
 
 def _store(tmp: Path):
     from cogs.config_store import ConfigStore  # noqa: WPS433
+    # path-singleton 이므로 매 테스트마다 인스턴스 캐시를 비워야 격리된다.
+    ConfigStore._reset_instances_for_tests()
     return ConfigStore(tmp)
 
 
@@ -59,8 +61,13 @@ async def test_get_missing_returns_empty(tmp_config_path):
 
 
 async def test_multiple_store_instances_see_latest_config(tmp_config_path):
+    """동일 path 의 ConfigStore() 호출은 같은 인스턴스를 반환 (path-singleton)."""
+    from cogs.config_store import ConfigStore  # noqa: WPS433
+
     first = _store(tmp_config_path)
-    second = _store(tmp_config_path)
+    # 같은 path 라면 _reset_instances_for_tests 없이 그대로 호출 시 동일 인스턴스
+    second = ConfigStore(tmp_config_path)
+    assert first is second
 
     await first.set(123, leaderboard_daily_enabled=True)
     assert (await second.get(123))["leaderboard_daily_enabled"] is True
@@ -69,6 +76,17 @@ async def test_multiple_store_instances_see_latest_config(tmp_config_path):
     cfg = await first.get(123)
     assert cfg["leaderboard_daily_enabled"] is True
     assert cfg["leaderboard_post_time"] == "23:59"
+
+
+async def test_singleton_get_cached_sync_reflects_other_caller_set(tmp_config_path):
+    """동일 path 면 한 caller 의 set() 가 다른 caller 의 get_cached_sync() 에 즉시 반영."""
+    from cogs.config_store import ConfigStore  # noqa: WPS433
+
+    first = _store(tmp_config_path)
+    second = ConfigStore(tmp_config_path)
+
+    await first.set(7, tts_channel_id=42)
+    assert second.get_cached_sync(7).get("tts_channel_id") == 42
 
 
 async def test_get_skips_disk_when_unchanged(tmp_config_path, monkeypatch):
@@ -102,13 +120,16 @@ async def test_get_cached_sync_no_io(tmp_config_path):
     assert s.get_cached_sync(404) == {}
 
 
-async def test_get_reloads_after_mtime_change(tmp_config_path):
-    """외부에서 파일이 변경되면 (mtime 변동) 다음 get 이 새 값을 본다."""
-    first = _store(tmp_config_path)
-    second = _store(tmp_config_path)
-    await first.set(11, voice="A")
-    assert (await second.get(11))["voice"] == "A"
-    # second 가 모르게 first 가 다시 set → 파일 mtime 변동
+async def test_get_reloads_after_external_mtime_change(tmp_config_path):
+    """싱글톤 외부 (다른 프로세스) 가 파일을 덮어쓰면 mtime 변동 → 다음 get 이 새 값."""
+    s = _store(tmp_config_path)
+    await s.set(11, voice="A")
+    assert (await s.get(11))["voice"] == "A"
+
+    # 외부 프로세스 시뮬레이션: 직접 파일을 덮어씀 (singleton _data 우회)
     await asyncio.sleep(0.02)  # mtime resolution 보장
-    await first.set(11, voice="B")
-    assert (await second.get(11))["voice"] == "B"
+    payload = json.dumps({"11": {"voice": "B"}}, ensure_ascii=False)
+    tmp_config_path.write_text(payload, encoding="utf-8")
+
+    cfg = await s.get(11)
+    assert cfg["voice"] == "B"

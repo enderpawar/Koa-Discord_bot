@@ -6,8 +6,13 @@ JSON 파일에 `{str(guild_id): {...}}` 구조로 저장한다.
 - 원자성: 임시파일 → os.replace (POSIX/Windows 양쪽에서 atomic)
 
 `_data` 는 인메모리 권위 사본이며, get() 은 mtime 변동이 감지될 때만
-디스크에서 reload 한다 (외부 인스턴스가 같은 파일을 수정하는 경우 대응).
+디스크에서 reload 한다 (외부 프로세스가 같은 파일을 수정하는 경우 대응).
 read_text 매 호출의 동기 IO 가 이벤트 루프를 블록하던 문제를 제거한다.
+
+여러 cog 가 `ConfigStore()` 를 따로 호출해도 동일 path 면 같은 인스턴스를
+반환한다 (path-level singleton). web_admin_cog 가 `set()` 한 결과를 tts_cog
+가 `get_cached_sync()` 로 즉시 관측하기 위함 — 이게 보장 안 되면 핫 경로
+fast-path 가 stale cache 를 들고 외부 변경을 영영 못 본다.
 """
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 log = logging.getLogger(__name__)
 
@@ -29,13 +34,40 @@ def _default_config_path() -> Path:
 
 
 class ConfigStore:
+    _instances: ClassVar[dict[str, "ConfigStore"]] = {}
+
+    def __new__(cls, path: Path | str | None = None) -> "ConfigStore":
+        resolved = cls._resolve_path(path)
+        existing = cls._instances.get(resolved)
+        if existing is not None:
+            return existing
+        instance = super().__new__(cls)
+        instance._initialized = False
+        cls._instances[resolved] = instance
+        return instance
+
+    @staticmethod
+    def _resolve_path(path: Path | str | None) -> str:
+        target = Path(path) if path is not None else _default_config_path()
+        return os.path.abspath(str(target))
+
     def __init__(self, path: Path | str | None = None) -> None:
+        # __new__ 가 동일 path 에 대해 같은 인스턴스를 반환하므로, 두 번째
+        # __init__ 호출은 무시해야 _data/_lock 이 리셋되지 않는다.
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
         self._path = Path(path) if path is not None else _default_config_path()
         self._lock = asyncio.Lock()
         self._data: dict[str, dict[str, Any]] = {}
         self._last_mtime: float = 0.0
         # 부팅 시 1회만 동기 로드. 이후 호출은 mtime 변동 시에만 to_thread 로 reload.
         self._reload_from_disk()
+
+    @classmethod
+    def _reset_instances_for_tests(cls) -> None:
+        """Test-only: tmp_config_path 마다 새 인스턴스를 보장하기 위해."""
+        cls._instances.clear()
 
     def _stat_mtime(self) -> float:
         try:

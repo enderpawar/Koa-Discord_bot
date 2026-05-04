@@ -39,6 +39,7 @@ def _make_cog(cfg: dict | None = None) -> TTSCog:
     cog.bot = bot
     cog.store = MagicMock()
     cog.store.get = AsyncMock(return_value=dict(cfg))
+    # ConfigStore 가 path-singleton 이라 cached 와 async 결과는 항상 동일하다.
     cog.store.get_cached_sync = MagicMock(return_value=dict(cfg))
     cog.queue = MagicMock()
     cog.queue.enqueue = AsyncMock()
@@ -130,7 +131,7 @@ async def test_voice_state_no_announcement_when_bot_in_other_channel() -> None:
 
 @pytest.mark.asyncio
 async def test_handle_tts_message_fast_path_skips_async_get() -> None:
-    """무관 채널 메시지는 async store.get 을 호출하지 않고 즉시 반환."""
+    """무관 채널 메시지는 cached 만 보고 즉시 reject — async store.get 미호출."""
     cog = _make_cog({"tts_channel_id": 100, "voice_channel_id": 100})
 
     message = MagicMock()
