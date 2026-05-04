@@ -4,6 +4,10 @@ JSON 파일에 `{str(guild_id): {...}}` 구조로 저장한다.
 - Rule 02: 상태는 guild_id 키 dict 로 격리
 - Rule 05: 동시 쓰기는 asyncio.Lock + 디스크 IO는 asyncio.to_thread 로 루프 비차단
 - 원자성: 임시파일 → os.replace (POSIX/Windows 양쪽에서 atomic)
+
+`_data` 는 인메모리 권위 사본이며, get() 은 mtime 변동이 감지될 때만
+디스크에서 reload 한다 (외부 인스턴스가 같은 파일을 수정하는 경우 대응).
+read_text 매 호출의 동기 IO 가 이벤트 루프를 블록하던 문제를 제거한다.
 """
 from __future__ import annotations
 
@@ -29,17 +33,27 @@ class ConfigStore:
         self._path = Path(path) if path is not None else _default_config_path()
         self._lock = asyncio.Lock()
         self._data: dict[str, dict[str, Any]] = {}
-        self._load_from_disk()
-
-    def _load_from_disk(self) -> None:
-        self._data = {}
+        self._last_mtime: float = 0.0
+        # 부팅 시 1회만 동기 로드. 이후 호출은 mtime 변동 시에만 to_thread 로 reload.
         self._reload_from_disk()
+
+    def _stat_mtime(self) -> float:
+        try:
+            return self._path.stat().st_mtime
+        except FileNotFoundError:
+            return 0.0
+        except OSError:
+            # 일시적 IO 오류는 캐시된 mtime 을 그대로 사용 (다음 호출에서 재시도)
+            return self._last_mtime
 
     def _reload_from_disk(self) -> None:
         if not self._path.exists():
+            self._data = {}
+            self._last_mtime = 0.0
             return
         try:
             self._data = json.loads(self._path.read_text(encoding="utf-8"))
+            self._last_mtime = self._stat_mtime()
         except (OSError, json.JSONDecodeError):
             # 손상된 파일: 백업 후 빈 상태로 시작 (Rule 03)
             backup = self._path.with_suffix(self._path.suffix + ".corrupt")
@@ -49,15 +63,29 @@ class ConfigStore:
             except OSError:
                 log.exception("config corrupt and backup failed: %s", self._path)
             self._data = {}
+            self._last_mtime = 0.0
+
+    async def _maybe_reload(self) -> None:
+        current = await asyncio.to_thread(self._stat_mtime)
+        if current != self._last_mtime:
+            await asyncio.to_thread(self._reload_from_disk)
 
     async def get(self, guild_id: int) -> dict[str, Any]:
         async with self._lock:
-            self._reload_from_disk()
+            await self._maybe_reload()
             return dict(self._data.get(str(guild_id), {}))
+
+    def get_cached_sync(self, guild_id: int) -> dict[str, Any]:
+        """락/IO 없이 인메모리 사본을 반환. 핫 경로용 fast-path.
+
+        외부 프로세스가 파일을 수정한 경우 다음 await get() 호출에서 자연
+        동기화되므로, 채널 라우팅 같은 즉시 분기 용도에만 쓰일 것.
+        """
+        return dict(self._data.get(str(guild_id), {}))
 
     async def set(self, guild_id: int, **fields: Any) -> None:
         async with self._lock:
-            self._reload_from_disk()
+            await self._maybe_reload()
             cur = self._data.setdefault(str(guild_id), {})
             cur.update({k: v for k, v in fields.items() if v is not None})
             await self._save_unlocked()
@@ -65,7 +93,7 @@ class ConfigStore:
 
     async def remove_guild(self, guild_id: int) -> None:
         async with self._lock:
-            self._reload_from_disk()
+            await self._maybe_reload()
             if self._data.pop(str(guild_id), None) is not None:
                 await self._save_unlocked()
                 log.info("config removed: guild_id=%s", guild_id)
@@ -77,9 +105,10 @@ class ConfigStore:
     async def _save_unlocked(self) -> None:
         # 스냅샷을 lock 안에서 만들고, 디스크 IO는 별도 스레드로 위임
         snapshot = json.dumps(self._data, ensure_ascii=False, indent=2)
-        await asyncio.to_thread(self._atomic_write, snapshot)
+        new_mtime = await asyncio.to_thread(self._atomic_write, snapshot)
+        self._last_mtime = new_mtime
 
-    def _atomic_write(self, payload: str) -> None:
+    def _atomic_write(self, payload: str) -> float:
         parent = self._path.parent if str(self._path.parent) else Path(".")
         parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=".cfg_", dir=parent)
@@ -93,3 +122,7 @@ class ConfigStore:
             except FileNotFoundError:
                 pass
             raise
+        try:
+            return self._path.stat().st_mtime
+        except OSError:
+            return 0.0

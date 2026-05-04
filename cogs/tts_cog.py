@@ -418,6 +418,13 @@ class TTSCog(commands.Cog):
             log.exception("on_message failed: guild_id=%s", message.guild.id)
 
     async def _handle_tts_message(self, message: discord.Message) -> None:
+        # Fast-path: 무관 채널 메시지는 await 없이 즉시 reject. ConfigStore.get_cached_sync
+        # 는 락/IO 없이 인메모리 사본을 반환한다.
+        cached = self.store.get_cached_sync(message.guild.id)
+        tts_channel_id = cached.get("tts_channel_id")
+        if not tts_channel_id or message.channel.id != tts_channel_id:
+            return
+
         cfg = await self.store.get(message.guild.id)
         tts_channel_id = cfg.get("tts_channel_id")
         voice_channel_id = cfg.get("voice_channel_id")
@@ -484,6 +491,18 @@ class TTSCog(commands.Cog):
         before: discord.VoiceState,
         after: discord.VoiceState,
     ) -> None:
+        # 채널 매칭이 필요 없는 voice 이벤트는 fast-path 분기 — 패널만 보내고 종료.
+        cached = self.store.get_cached_sync(member.guild.id)
+        watched_id_cached = cached.get("voice_channel_id")
+        joined_or_left_watched = (
+            (after.channel and after.channel.id == watched_id_cached)
+            or (before.channel and before.channel.id == watched_id_cached)
+        )
+        if not watched_id_cached or not joined_or_left_watched:
+            if after.channel and isinstance(after.channel, discord.VoiceChannel):
+                await self._send_voice_panel(after.channel)
+            return
+
         cfg = await self.store.get(member.guild.id)
         watched_id = cfg.get("voice_channel_id")
         if not watched_id:

@@ -217,6 +217,15 @@ def test_streaming_source_does_not_delay_ready_audio():
         source.cleanup()
 
 
+def test_to_stereo_matches_reference():
+    """선택된 _to_stereo 콜러블이 reference Python 루프 결과와 byte-equal 한지 검증."""
+    from cogs.audio_queue import _to_stereo, _to_stereo_purepy
+
+    sample = bytes(range(0, 64))  # 32 16-bit 샘플
+    assert _to_stereo(sample) == _to_stereo_purepy(sample)
+    assert len(_to_stereo(sample)) == len(sample) * 2
+
+
 def test_pcm_cache_lru_and_item_limit():
     from cogs.audio_queue import PCMCache
 

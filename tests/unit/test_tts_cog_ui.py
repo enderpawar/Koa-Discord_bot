@@ -31,12 +31,15 @@ def test_tts_status_embed_groups_settings() -> None:
     assert embed.fields[3].value == "재생 준비됨"
 
 
-def _make_cog() -> TTSCog:
+def _make_cog(cfg: dict | None = None) -> TTSCog:
+    cfg = cfg or {}
     bot = MagicMock()
     bot.add_view = MagicMock()
     cog = TTSCog.__new__(TTSCog)
     cog.bot = bot
     cog.store = MagicMock()
+    cog.store.get = AsyncMock(return_value=dict(cfg))
+    cog.store.get_cached_sync = MagicMock(return_value=dict(cfg))
     cog.queue = MagicMock()
     cog.queue.enqueue = AsyncMock()
     cog._panel_view = MagicMock()
@@ -54,8 +57,7 @@ def _voice_channel(channel_id: int) -> MagicMock:
 @pytest.mark.asyncio
 async def test_voice_state_no_announcement_when_bot_disconnected() -> None:
     """봇이 watched 채널에 미접속이면 사용자 입장 시 안내 enqueue 금지 (자동 입장 방지)."""
-    cog = _make_cog()
-    cog.store.get = AsyncMock(return_value={
+    cog = _make_cog({
         "voice_channel_id": 100, "voice": "ko-KR-SunHiNeural",
     })
     member = MagicMock()
@@ -77,8 +79,7 @@ async def test_voice_state_no_announcement_when_bot_disconnected() -> None:
 @pytest.mark.asyncio
 async def test_voice_state_announces_when_bot_already_connected() -> None:
     """봇이 watched 채널에 이미 접속해 있으면 입장 안내를 enqueue 한다."""
-    cog = _make_cog()
-    cog.store.get = AsyncMock(return_value={
+    cog = _make_cog({
         "voice_channel_id": 100, "voice": "ko-KR-SunHiNeural",
     })
     vc = MagicMock()
@@ -105,8 +106,7 @@ async def test_voice_state_announces_when_bot_already_connected() -> None:
 @pytest.mark.asyncio
 async def test_voice_state_no_announcement_when_bot_in_other_channel() -> None:
     """봇이 다른 채널에 접속해 있으면 watched 채널 입장 안내를 보내지 않는다."""
-    cog = _make_cog()
-    cog.store.get = AsyncMock(return_value={
+    cog = _make_cog({
         "voice_channel_id": 100, "voice": "ko-KR-SunHiNeural",
     })
     vc = MagicMock()
@@ -126,3 +126,61 @@ async def test_voice_state_no_announcement_when_bot_in_other_channel() -> None:
     await cog._handle_voice_state(member, before, after)
 
     cog.queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_fast_path_skips_async_get() -> None:
+    """무관 채널 메시지는 async store.get 을 호출하지 않고 즉시 반환."""
+    cog = _make_cog({"tts_channel_id": 100, "voice_channel_id": 100})
+
+    message = MagicMock()
+    message.author.bot = False
+    message.webhook_id = None
+    message.guild = MagicMock(); message.guild.id = 1
+    message.channel = MagicMock(); message.channel.id = 999
+
+    await cog._handle_tts_message(message)
+
+    cog.store.get.assert_not_awaited()
+    cog.queue.enqueue.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_enqueues_when_channel_matches() -> None:
+    """매칭 채널이면 정상 enqueue."""
+    cog = _make_cog({
+        "tts_channel_id": 100, "voice_channel_id": 200, "voice": "ko-KR-SunHiNeural",
+    })
+
+    message = MagicMock()
+    message.author.bot = False
+    message.webhook_id = None
+    message.guild = MagicMock(); message.guild.id = 1
+    message.channel = MagicMock(); message.channel.id = 100
+    message.clean_content = "hello"
+
+    await cog._handle_tts_message(message)
+
+    cog.store.get.assert_awaited_once()
+    cog.queue.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_voice_state_fast_path_skips_unrelated_channel() -> None:
+    """watched 채널 외 음성 채널 입/퇴장은 async store.get 호출 없이 패널만 보낸다."""
+    cog = _make_cog({"voice_channel_id": 100})
+
+    member = MagicMock()
+    member.bot = False
+    member.display_name = "tester"
+    member.guild = MagicMock(); member.guild.id = 1
+    member.guild.voice_client = None
+
+    before = SimpleNamespace(channel=None)
+    after = SimpleNamespace(channel=_voice_channel(777))
+
+    await cog._handle_voice_state(member, before, after)
+
+    cog.store.get.assert_not_awaited()
+    cog.queue.enqueue.assert_not_called()
+    cog._send_voice_panel.assert_awaited_once()

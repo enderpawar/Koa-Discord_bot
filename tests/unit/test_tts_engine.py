@@ -3,6 +3,7 @@ Phase 4 — TTS Engine
 Azure Speech REST 호출은 mocked. 실제 네트워크 합성은 RUN_LIVE=1 + @pytest.mark.live.
 """
 from __future__ import annotations
+import asyncio
 import importlib.util
 from pathlib import Path
 from contextlib import ExitStack, contextmanager
@@ -140,3 +141,85 @@ async def test_synthesize_live_smoke():
     finally:
         p.unlink(missing_ok=True)
         await close_session()
+
+
+async def test_ws_pool_initializes_to_configured_size(monkeypatch):
+    """풀 lazy 초기화: _get_pool 호출 시 _WS_POOL_SIZE 만큼의 슬롯 생성."""
+    import cogs.tts_engine as engine
+
+    monkeypatch.setattr(engine, "_WS_POOL_SIZE", 3)
+    monkeypatch.setattr(engine, "_pool", [])
+
+    pool = await engine._get_pool()
+    assert len(pool) == 3
+    for slot in pool:
+        assert slot.ws is None
+        assert slot.speech_config_sent is False
+
+
+async def test_ws_pool_acquire_picks_free_slot(monkeypatch):
+    """비어있는 슬롯이 있으면 첫 free 슬롯을 잡는다."""
+    import cogs.tts_engine as engine
+
+    monkeypatch.setattr(engine, "_WS_POOL_SIZE", 2)
+    monkeypatch.setattr(engine, "_pool", [])
+
+    pool = await engine._get_pool()
+    # 슬롯 0 을 미리 점유
+    await pool[0].lock.acquire()
+    try:
+        async with engine._acquire_slot() as slot:
+            assert slot is pool[1]
+    finally:
+        pool[0].lock.release()
+
+
+async def test_ws_pool_acquire_waits_when_all_busy(monkeypatch):
+    """모든 슬롯 busy 면 첫 슬롯의 락을 기다림 (결과적으로 직렬화)."""
+    import cogs.tts_engine as engine
+
+    monkeypatch.setattr(engine, "_WS_POOL_SIZE", 1)
+    monkeypatch.setattr(engine, "_pool", [])
+
+    pool = await engine._get_pool()
+    await pool[0].lock.acquire()
+
+    async def acquire_and_check():
+        async with engine._acquire_slot() as slot:
+            return slot is pool[0]
+
+    task = asyncio.create_task(acquire_and_check())
+    # 잠시 대기 — 아직 lock 보유 중이므로 task 진행 안 됨
+    await asyncio.sleep(0.05)
+    assert not task.done()
+
+    pool[0].lock.release()
+    assert await task is True
+
+
+async def test_ws_pool_close_session_clears_all(monkeypatch):
+    """close_session 이 모든 슬롯의 ws 를 닫고 풀을 비운다."""
+    import cogs.tts_engine as engine
+
+    monkeypatch.setattr(engine, "_WS_POOL_SIZE", 2)
+    monkeypatch.setattr(engine, "_pool", [])
+
+    pool = await engine._get_pool()
+    # 가짜 ws 연결 시뮬레이션
+    closed_flags = [False, False]
+
+    class _FakeWS:
+        def __init__(self, idx):
+            self.idx = idx
+            self.closed = False
+
+        async def close(self):
+            closed_flags[self.idx] = True
+            self.closed = True
+
+    pool[0].ws = _FakeWS(0)
+    pool[1].ws = _FakeWS(1)
+
+    await engine.close_session()
+    assert closed_flags == [True, True]
+    assert engine._pool == []
