@@ -23,6 +23,8 @@ import tempfile
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -41,6 +43,8 @@ _BACKEND = os.getenv("TTS_BACKEND", "ws").lower()
 _KEEPALIVE_INTERVAL_SEC = int(os.getenv("TTS_KEEPALIVE_INTERVAL_SEC", "15"))
 _KEEPALIVE_CHECK_INTERVAL_SEC = 5
 _KEEPALIVE_TEXT = os.getenv("TTS_KEEPALIVE_TEXT", ".")
+_WS_POOL_SIZE = max(1, int(os.getenv("TTS_WS_POOL_SIZE", "2")))
+_WS_POOL_WARM_ALL = os.getenv("TTS_WS_POOL_WARM_ALL", "0") == "1"
 
 _RETRYABLE: tuple[type[BaseException], ...] = (
     aiohttp.ClientError,
@@ -50,14 +54,55 @@ _RETRYABLE: tuple[type[BaseException], ...] = (
 
 _session: aiohttp.ClientSession | None = None
 _session_lock = asyncio.Lock()
-_ws: aiohttp.ClientWebSocketResponse | None = None
-_ws_lock = asyncio.Lock()
-_speech_config_sent = False
 _token: str | None = None
 _token_expires_at = 0.0
 _keepalive_task: asyncio.Task | None = None
 _last_user_synthesis_at = 0.0
 _last_keepalive_at = 0.0
+
+
+@dataclass
+class _WSSlot:
+    """단일 Azure TTS WebSocket 연결 슬롯.
+
+    각 슬롯은 자체 lock 을 가지므로 풀 크기만큼의 합성이 동시에 진행될 수 있다.
+    """
+    ws: aiohttp.ClientWebSocketResponse | None = None
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    speech_config_sent: bool = False
+
+
+_pool: list[_WSSlot] = []
+_pool_init_lock = asyncio.Lock()
+
+
+async def _get_pool() -> list[_WSSlot]:
+    global _pool
+    if not _pool:
+        async with _pool_init_lock:
+            if not _pool:
+                _pool = [_WSSlot() for _ in range(_WS_POOL_SIZE)]
+    return _pool
+
+
+@asynccontextmanager
+async def _acquire_slot() -> AsyncIterator[_WSSlot]:
+    """첫 번째 비어 있는 슬롯을 즉시 잡고, 모두 busy 면 첫 슬롯의 락을 기다림."""
+    pool = await _get_pool()
+    for slot in pool:
+        if not slot.lock.locked():
+            await slot.lock.acquire()
+            try:
+                yield slot
+            finally:
+                slot.lock.release()
+            return
+    slot = pool[0]
+    await slot.lock.acquire()
+    try:
+        yield slot
+    finally:
+        slot.lock.release()
 
 
 async def _get_session() -> aiohttp.ClientSession:
@@ -70,7 +115,7 @@ async def _get_session() -> aiohttp.ClientSession:
 
 
 async def close_session() -> None:
-    global _session, _ws, _speech_config_sent, _token, _token_expires_at, _keepalive_task
+    global _session, _pool, _token, _token_expires_at, _keepalive_task
     if _keepalive_task is not None:
         _keepalive_task.cancel()
         try:
@@ -78,10 +123,12 @@ async def close_session() -> None:
         except asyncio.CancelledError:
             pass
         _keepalive_task = None
-    if _ws is not None and not _ws.closed:
-        await _ws.close()
-    _ws = None
-    _speech_config_sent = False
+    for slot in _pool:
+        if slot.ws is not None and not slot.ws.closed:
+            await slot.ws.close()
+        slot.ws = None
+        slot.speech_config_sent = False
+    _pool = []
     _token = None
     _token_expires_at = 0.0
     if _session is not None and not _session.closed:
@@ -215,19 +262,17 @@ def _synthesis_context_body() -> str:
     )
 
 
-async def _close_ws() -> None:
-    global _ws, _speech_config_sent
-    if _ws is not None and not _ws.closed:
-        await _ws.close()
-    _ws = None
-    _speech_config_sent = False
+async def _close_slot(slot: _WSSlot) -> None:
+    if slot.ws is not None and not slot.ws.closed:
+        await slot.ws.close()
+    slot.ws = None
+    slot.speech_config_sent = False
 
 
-async def _ensure_ws() -> aiohttp.ClientWebSocketResponse:
-    global _ws
+async def _ensure_slot_ws(slot: _WSSlot) -> aiohttp.ClientWebSocketResponse:
     key, region = _require_azure_env()
-    if _ws is not None and not _ws.closed:
-        return _ws
+    if slot.ws is not None and not slot.ws.closed:
+        return slot.ws
 
     token = await _get_token()
     session = await _get_session()
@@ -237,15 +282,16 @@ async def _ensure_ws() -> aiohttp.ClientWebSocketResponse:
         f"?Authorization=bearer%20{token}"
         f"&X-ConnectionId={conn_id}"
     )
-    _ws = await session.ws_connect(
+    slot.ws = await session.ws_connect(
         url,
         headers={"Ocp-Apim-Subscription-Key": key},
         heartbeat=30.0,
         autoping=True,
         max_msg_size=0,
     )
-    log.info("azure tts websocket connected")
-    return _ws
+    slot.speech_config_sent = False
+    log.info("azure tts websocket connected (slot)")
+    return slot.ws
 
 
 async def _request_rest_once(text: str, voice: str, path: Path) -> None:
@@ -285,40 +331,108 @@ async def _stream_rest_once(text: str, voice: str) -> AsyncIterator[bytes]:
 
 
 async def _request_ws_once(text: str, voice: str, path: Path) -> None:
-    global _speech_config_sent
-    async with _ws_lock:
-        ws = await _ensure_ws()
-        request_id = uuid.uuid4().hex
-        if not _speech_config_sent:
+    async with _acquire_slot() as slot:
+        try:
+            ws = await _ensure_slot_ws(slot)
+            request_id = uuid.uuid4().hex
+            if not slot.speech_config_sent:
+                await ws.send_str(
+                    _build_ws_frame(
+                        "speech.config",
+                        "application/json",
+                        _speech_config_body(),
+                        request_id,
+                    )
+                )
+                slot.speech_config_sent = True
+
             await ws.send_str(
                 _build_ws_frame(
-                    "speech.config",
+                    "synthesis.context",
                     "application/json",
-                    _speech_config_body(),
+                    _synthesis_context_body(),
                     request_id,
                 )
             )
-            _speech_config_sent = True
-
-        await ws.send_str(
-            _build_ws_frame(
-                "synthesis.context",
-                "application/json",
-                _synthesis_context_body(),
-                request_id,
+            await ws.send_str(
+                _build_ws_frame(
+                    "ssml",
+                    "application/ssml+xml",
+                    _build_ssml(text, voice),
+                    request_id,
+                )
             )
-        )
-        await ws.send_str(
-            _build_ws_frame(
-                "ssml",
-                "application/ssml+xml",
-                _build_ssml(text, voice),
-                request_id,
-            )
-        )
 
-        audio_received = False
-        with path.open("wb") as f:
+            audio_received = False
+            with path.open("wb") as f:
+                while True:
+                    msg = await ws.receive(timeout=_WS_RECEIVE_TIMEOUT_SEC)
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        headers = _parse_ws_text(msg.data)
+                        path_name = headers.get("Path", "")
+                        if path_name == "turn.end":
+                            if not audio_received:
+                                raise RuntimeError("azure tts websocket returned no audio")
+                            return
+                        if path_name in {"turn.start", "response", "audio.metadata"}:
+                            continue
+                        raise RuntimeError(f"unexpected azure tts websocket text path: {path_name}")
+
+                    if msg.type == aiohttp.WSMsgType.BINARY:
+                        headers, payload = _parse_ws_binary(msg.data)
+                        if headers.get("Path") != "audio":
+                            raise RuntimeError("unexpected azure tts websocket binary path")
+                        if payload:
+                            f.write(payload)
+                            audio_received = True
+                        continue
+
+                    if msg.type in {
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.ERROR,
+                    }:
+                        raise RuntimeError(f"azure tts websocket closed: {msg.type}")
+        except _RETRYABLE:
+            await _close_slot(slot)
+            raise
+
+
+async def _stream_ws_once(text: str, voice: str) -> AsyncIterator[bytes]:
+    async with _acquire_slot() as slot:
+        try:
+            ws = await _ensure_slot_ws(slot)
+            request_id = uuid.uuid4().hex
+            if not slot.speech_config_sent:
+                await ws.send_str(
+                    _build_ws_frame(
+                        "speech.config",
+                        "application/json",
+                        _speech_config_body(),
+                        request_id,
+                    )
+                )
+                slot.speech_config_sent = True
+
+            await ws.send_str(
+                _build_ws_frame(
+                    "synthesis.context",
+                    "application/json",
+                    _synthesis_context_body(),
+                    request_id,
+                )
+            )
+            await ws.send_str(
+                _build_ws_frame(
+                    "ssml",
+                    "application/ssml+xml",
+                    _build_ssml(text, voice),
+                    request_id,
+                )
+            )
+
+            audio_received = False
             while True:
                 msg = await ws.receive(timeout=_WS_RECEIVE_TIMEOUT_SEC)
                 if msg.type == aiohttp.WSMsgType.TEXT:
@@ -337,8 +451,8 @@ async def _request_ws_once(text: str, voice: str, path: Path) -> None:
                     if headers.get("Path") != "audio":
                         raise RuntimeError("unexpected azure tts websocket binary path")
                     if payload:
-                        f.write(payload)
                         audio_received = True
+                        yield payload
                     continue
 
                 if msg.type in {
@@ -347,74 +461,10 @@ async def _request_ws_once(text: str, voice: str, path: Path) -> None:
                     aiohttp.WSMsgType.CLOSING,
                     aiohttp.WSMsgType.ERROR,
                 }:
-                    await _close_ws()
                     raise RuntimeError(f"azure tts websocket closed: {msg.type}")
-
-
-async def _stream_ws_once(text: str, voice: str) -> AsyncIterator[bytes]:
-    global _speech_config_sent
-    async with _ws_lock:
-        ws = await _ensure_ws()
-        request_id = uuid.uuid4().hex
-        if not _speech_config_sent:
-            await ws.send_str(
-                _build_ws_frame(
-                    "speech.config",
-                    "application/json",
-                    _speech_config_body(),
-                    request_id,
-                )
-            )
-            _speech_config_sent = True
-
-        await ws.send_str(
-            _build_ws_frame(
-                "synthesis.context",
-                "application/json",
-                _synthesis_context_body(),
-                request_id,
-            )
-        )
-        await ws.send_str(
-            _build_ws_frame(
-                "ssml",
-                "application/ssml+xml",
-                _build_ssml(text, voice),
-                request_id,
-            )
-        )
-
-        audio_received = False
-        while True:
-            msg = await ws.receive(timeout=_WS_RECEIVE_TIMEOUT_SEC)
-            if msg.type == aiohttp.WSMsgType.TEXT:
-                headers = _parse_ws_text(msg.data)
-                path_name = headers.get("Path", "")
-                if path_name == "turn.end":
-                    if not audio_received:
-                        raise RuntimeError("azure tts websocket returned no audio")
-                    return
-                if path_name in {"turn.start", "response", "audio.metadata"}:
-                    continue
-                raise RuntimeError(f"unexpected azure tts websocket text path: {path_name}")
-
-            if msg.type == aiohttp.WSMsgType.BINARY:
-                headers, payload = _parse_ws_binary(msg.data)
-                if headers.get("Path") != "audio":
-                    raise RuntimeError("unexpected azure tts websocket binary path")
-                if payload:
-                    audio_received = True
-                    yield payload
-                continue
-
-            if msg.type in {
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-                aiohttp.WSMsgType.ERROR,
-            }:
-                await _close_ws()
-                raise RuntimeError(f"azure tts websocket closed: {msg.type}")
+        except _RETRYABLE:
+            await _close_slot(slot)
+            raise
 
 
 async def _request_once(text: str, voice: str, path: Path) -> None:
@@ -424,11 +474,8 @@ async def _request_once(text: str, voice: str, path: Path) -> None:
     if _BACKEND != "ws":
         raise RuntimeError(f"unsupported TTS_BACKEND: {_BACKEND}")
 
-    try:
-        await _request_ws_once(text, voice, path)
-    except _RETRYABLE:
-        await _close_ws()
-        raise
+    # _request_ws_once 가 슬롯 단위로 자체 정리한다.
+    await _request_ws_once(text, voice, path)
 
 
 async def synthesize(text: str, voice: str = DEFAULT_VOICE) -> Path:
@@ -474,14 +521,11 @@ async def stream_synthesize(
             if _BACKEND != "ws":
                 raise RuntimeError(f"unsupported TTS_BACKEND: {_BACKEND}")
 
-            try:
-                async for chunk in _stream_ws_once(text, voice):
-                    yielded_audio = True
-                    yield chunk
-                return
-            except _RETRYABLE:
-                await _close_ws()
-                raise
+            # _stream_ws_once 가 슬롯 단위로 자체 정리한다.
+            async for chunk in _stream_ws_once(text, voice):
+                yielded_audio = True
+                yield chunk
+            return
         except _RETRYABLE as e:
             if yielded_audio or attempt == 2:
                 raise
@@ -489,15 +533,33 @@ async def stream_synthesize(
 
 
 async def warm_up(voice: str = DEFAULT_VOICE) -> None:
-    """Open the Azure/TLS path once and discard the generated audio."""
+    """Open the Azure/TLS path once and discard the generated audio.
+
+    `TTS_WS_POOL_WARM_ALL=1` 이면 풀의 모든 슬롯을 동시에 워밍한다 (병렬 합성으로
+    각 슬롯이 자기 ws 를 잡음).
+    """
+    if _BACKEND == "ws" and _WS_POOL_WARM_ALL and _WS_POOL_SIZE > 1:
+        await asyncio.gather(
+            *(_warm_one(voice) for _ in range(_WS_POOL_SIZE)),
+            return_exceptions=True,
+        )
+        return
+    await _warm_one(voice)
+
+
+async def _warm_one(voice: str) -> None:
     path = await synthesize(_KEEPALIVE_TEXT, voice)
     path.unlink(missing_ok=True)
 
 
 async def _warm_up_keepalive(voice: str = DEFAULT_VOICE) -> None:
-    """Warm the Azure path without competing with user-triggered synthesis."""
+    """Warm the Azure path without competing with user-triggered synthesis.
+
+    풀의 모든 슬롯이 사용자 합성으로 busy 면 스킵 — 빈 슬롯이 하나라도 있으면 진행.
+    """
     global _last_keepalive_at
-    if _ws_lock.locked():
+    pool = await _get_pool()
+    if all(slot.lock.locked() for slot in pool):
         return
     _last_keepalive_at = time.monotonic()
     path = _make_temp_audio()
