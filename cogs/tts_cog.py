@@ -494,6 +494,13 @@ class TTSCog(commands.Cog):
         if after.channel and isinstance(after.channel, discord.VoiceChannel):
             await self._send_voice_panel(after.channel)
 
+        # 봇이 이미 watched 채널에 접속해 있을 때만 입/퇴장 안내. 안내 enqueue 가
+        # _ensure_voice → connect() 를 트리거해 사용자가 호출하지 않은 봇 자동 입장
+        # 으로 이어지는 것을 막는다.
+        vc = member.guild.voice_client
+        if vc is None or not vc.is_connected() or vc.channel.id != watched_id:
+            return
+
         announcements: list[str] = []
         if after.channel and after.channel.id == watched_id and (
             before.channel is None or before.channel.id != watched_id

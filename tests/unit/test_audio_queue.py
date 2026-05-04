@@ -24,6 +24,10 @@ def _make_guild(guild_id: int = 1):
     return g
 
 
+async def _noop_prefetch(self, req):
+    return
+
+
 async def test_enqueue_processes_in_order():
     """3개 enqueue → synthesize/play가 순서대로 호출."""
     from cogs.audio_queue import AudioQueue, AudioRequest
@@ -44,7 +48,8 @@ async def test_enqueue_processes_in_order():
         play_order.append(f"play:{text}")
 
     with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
-         patch.object(AudioQueue, "_play_streaming", new=fake_play_streaming):
+         patch.object(AudioQueue, "_play_streaming", new=fake_play_streaming), \
+         patch.object(AudioQueue, "_prefetch", new=_noop_prefetch):
         for t in ("a", "b", "c"):
             await q.enqueue(guild, AudioRequest(text=t, voice="ko-KR-SunHiNeural",
                                                voice_channel_id=1))
@@ -73,7 +78,8 @@ async def test_failed_request_does_not_block_next():
         vc = MagicMock(); vc.is_connected.return_value = True; return vc
 
     with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
-         patch.object(AudioQueue, "_play_streaming", new=flaky_play):
+         patch.object(AudioQueue, "_play_streaming", new=flaky_play), \
+         patch.object(AudioQueue, "_prefetch", new=_noop_prefetch):
         await q.enqueue(guild, AudioRequest("boom", "ko-KR-SunHiNeural", 1))
         await q.enqueue(guild, AudioRequest("ok", "ko-KR-SunHiNeural", 1))
         await asyncio.sleep(0.5)
@@ -226,3 +232,102 @@ def test_pcm_cache_lru_and_item_limit():
 
     cache.put("too-big", "v", b"1234567")
     assert cache.get("too-big", "v") is None
+
+
+async def test_prefetch_warms_cache_for_next_item():
+    """다음 항목 prefetch 가 stream_synthesize 결과를 _cache 에 채운다."""
+    from cogs.audio_queue import AudioQueue, AudioRequest
+
+    q = AudioQueue()
+    guild = _make_guild()
+
+    async def fake_ensure(*_a, **_kw):
+        vc = MagicMock(); vc.is_connected.return_value = True; return vc
+
+    play_block = asyncio.Event()
+    plays: list[str] = []
+
+    async def slow_play(self, vc, text, voice, **_kwargs):
+        plays.append(text)
+        # 첫 항목 재생 동안 prefetch 가 다음 항목을 캐시에 채우도록 일시 대기
+        if text == "first":
+            await play_block.wait()
+
+    chunks_for: dict[str, bytes] = {"second": b"\x10\x20\x30\x40"}
+
+    async def fake_stream(text, voice):
+        data = chunks_for.get(text)
+        if data is None:
+            raise RuntimeError(f"unexpected stream_synthesize for {text!r}")
+        yield data
+
+    with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
+         patch.object(AudioQueue, "_play_streaming", new=slow_play), \
+         patch("cogs.audio_queue.stream_synthesize", fake_stream):
+        await q.enqueue(guild, AudioRequest("first", "v", 1))
+        await q.enqueue(guild, AudioRequest("second", "v", 1))
+        # prefetch 가 끝날 시간을 줌
+        for _ in range(20):
+            await asyncio.sleep(0.05)
+            if q._cache.get("second", "v") is not None:
+                break
+        assert q._cache.get("second", "v") == b"\x10\x20\x30\x40"
+        # 워커가 멈추지 않게 풀어준다
+        play_block.set()
+        await asyncio.sleep(0.2)
+
+
+async def test_prefetch_skips_when_cache_already_warm():
+    """이미 캐시된 항목은 prefetch 가 stream_synthesize 를 호출하지 않는다."""
+    from cogs.audio_queue import AudioQueue, AudioRequest
+
+    q = AudioQueue()
+    q._cache.put("ready", "v", b"\x01\x02\x03\x04")
+
+    called = False
+
+    async def fail_stream(*_a, **_kw):
+        nonlocal called
+        called = True
+        raise AssertionError("stream_synthesize should not be called")
+        yield b""
+
+    with patch("cogs.audio_queue.stream_synthesize", fail_stream):
+        await q._prefetch(AudioRequest("ready", "v", 1))
+
+    assert called is False
+
+
+async def test_enqueue_drops_oldest_on_overflow():
+    """큐가 MAX_QUEUE_SIZE 를 넘으면 가장 오래된 항목을 드롭한다."""
+    from cogs.audio_queue import AudioQueue, AudioRequest, MAX_QUEUE_SIZE
+
+    q = AudioQueue()
+    guild = _make_guild()
+
+    async def fake_ensure(*_a, **_kw):
+        vc = MagicMock(); vc.is_connected.return_value = True; return vc
+
+    block = asyncio.Event()
+
+    async def hold_play(self, vc, text, voice, **_kwargs):
+        await block.wait()
+
+    with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
+         patch.object(AudioQueue, "_play_streaming", new=hold_play), \
+         patch.object(AudioQueue, "_prefetch", new=_noop_prefetch):
+        # 큐 채우기: 첫 항목은 즉시 worker 가 가져가고 hold 됨. 그 다음부터 큐에 쌓임.
+        for i in range(MAX_QUEUE_SIZE + 5):
+            await q.enqueue(guild, AudioRequest(f"msg-{i}", "v", 1))
+        # 짧게 대기해서 worker 가 첫 항목을 잡게 한다
+        await asyncio.sleep(0.05)
+
+        inner = q._queues[guild.id]
+        assert inner.qsize() <= MAX_QUEUE_SIZE
+        # 가장 오래된 잔여 항목들이 드롭되었는지: 마지막 enqueue 가 살아있어야 함
+        remaining = list(inner._queue)
+        last_text = f"msg-{MAX_QUEUE_SIZE + 4}"
+        assert any(r.text == last_text for r in remaining)
+
+        block.set()
+        await asyncio.sleep(0.05)

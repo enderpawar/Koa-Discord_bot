@@ -33,6 +33,7 @@ CACHE_MAX_ENTRIES = int(os.getenv("TTS_CACHE_MAX_ENTRIES", "256"))
 CACHE_MAX_BYTES = int(os.getenv("TTS_CACHE_MAX_BYTES", str(32 * 1024 * 1024)))
 CACHE_MAX_ITEM_BYTES = int(os.getenv("TTS_CACHE_MAX_ITEM_BYTES", str(512 * 1024)))
 OPUS_CACHE_MAX_BYTES = int(os.getenv("TTS_OPUS_CACHE_MAX_BYTES", str(16 * 1024 * 1024)))
+MAX_QUEUE_SIZE = int(os.getenv("TTS_MAX_QUEUE_SIZE", "20"))
 _STREAM_END: Final = object()
 _SILENCE_STEREO_FRAME: Final = b"\x00" * STEREO_PCM_FRAME_BYTES
 
@@ -272,6 +273,17 @@ class AudioQueue:
 
     async def enqueue(self, guild: discord.Guild, req: AudioRequest) -> None:
         queue = self._queues.setdefault(guild.id, asyncio.Queue())
+        # 채팅 폭주 시 가장 오래된 미실행 요청을 드롭해 누적 지연을 방지한다.
+        while queue.qsize() >= MAX_QUEUE_SIZE:
+            try:
+                dropped = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            queue.task_done()
+            log.warning(
+                "audio queue overflow, dropped: guild_id=%s text=%r",
+                guild.id, dropped.text[:40],
+            )
         await queue.put(req)
         worker = self._workers.get(guild.id)
         if worker is None or worker.done():
@@ -293,35 +305,89 @@ class AudioQueue:
 
     async def _worker(self, guild: discord.Guild) -> None:
         queue = self._queues[guild.id]
-        while True:
-            try:
-                req = await asyncio.wait_for(queue.get(), timeout=IDLE_TIMEOUT_SEC)
-            except asyncio.TimeoutError:
-                await self._disconnect(guild)
-                # disconnect 도중 enqueue 가 들어왔다면 worker 를 살려둔다
-                if queue.empty():
-                    self._workers.pop(guild.id, None)
-                    return
-                continue
+        prefetch_task: asyncio.Task | None = None
+        try:
+            while True:
+                try:
+                    req = await asyncio.wait_for(queue.get(), timeout=IDLE_TIMEOUT_SEC)
+                except asyncio.TimeoutError:
+                    await self._disconnect(guild)
+                    # disconnect 도중 enqueue 가 들어왔다면 worker 를 살려둔다
+                    if queue.empty():
+                        self._workers.pop(guild.id, None)
+                        return
+                    continue
 
-            try:
-                trace_start = time.perf_counter()
-                queued_ms = (trace_start - req.enqueued_at) * 1000
-                vc = await self._ensure_voice(guild, req.voice_channel_id)
-                ensure_ms = (time.perf_counter() - trace_start) * 1000
-                await self._play_streaming(
-                    vc,
-                    req.text,
-                    req.voice,
-                    guild_id=guild.id,
-                    queued_ms=queued_ms,
-                    ensure_ms=ensure_ms,
-                    trace_start=trace_start,
-                )
-            except Exception:
-                log.exception("audio worker failed: guild_id=%s", guild.id)
-            finally:
-                queue.task_done()
+                # 이전 iter 에서 본 req 에 대한 prefetch 가 있으면 캐시 적재가 끝날 때까지 대기.
+                # _play_streaming 이 이후 캐시 히트로 즉시 재생을 시작할 수 있다.
+                if prefetch_task is not None:
+                    with suppress(Exception):
+                        await prefetch_task
+                    prefetch_task = None
+
+                # 다음 항목을 미리 합성해 캐시에 채워둔다 (peek, dequeue 하지 않음).
+                next_req = self._peek_next(queue)
+                if next_req is not None:
+                    prefetch_task = asyncio.create_task(
+                        self._prefetch(next_req),
+                        name=f"audio-prefetch-{guild.id}",
+                    )
+
+                try:
+                    trace_start = time.perf_counter()
+                    queued_ms = (trace_start - req.enqueued_at) * 1000
+                    vc = await self._ensure_voice(guild, req.voice_channel_id)
+                    ensure_ms = (time.perf_counter() - trace_start) * 1000
+                    await self._play_streaming(
+                        vc,
+                        req.text,
+                        req.voice,
+                        guild_id=guild.id,
+                        queued_ms=queued_ms,
+                        ensure_ms=ensure_ms,
+                        trace_start=trace_start,
+                    )
+                except Exception:
+                    log.exception("audio worker failed: guild_id=%s", guild.id)
+                finally:
+                    queue.task_done()
+        finally:
+            if prefetch_task is not None and not prefetch_task.done():
+                prefetch_task.cancel()
+
+    @staticmethod
+    def _peek_next(queue: asyncio.Queue[AudioRequest]) -> AudioRequest | None:
+        # asyncio.Queue 는 내부적으로 collections.deque (`_queue`) 를 사용한다.
+        # 단일 consumer (worker) 환경이므로 직접 peek 해도 안전하다.
+        deque_ = getattr(queue, "_queue", None)
+        if not deque_:
+            return None
+        return deque_[0]
+
+    async def _prefetch(self, req: AudioRequest) -> None:
+        """다음 요청을 백그라운드로 합성해 PCM/Opus 캐시에 채운다."""
+        if self._opus_cache.get(req.text, req.voice) is not None:
+            return
+        if self._cache.get(req.text, req.voice) is not None:
+            return
+
+        collected = bytearray()
+        try:
+            async for chunk in stream_synthesize(req.text, req.voice):
+                if len(collected) + len(chunk) > CACHE_MAX_ITEM_BYTES:
+                    return  # 너무 커서 캐시 불가, prefetch 포기
+                collected.extend(chunk)
+        except Exception:
+            log.debug("prefetch failed: text=%r", req.text[:40], exc_info=True)
+            return
+
+        pcm_audio = bytes(collected)
+        if not pcm_audio:
+            return
+        self._cache.put(req.text, req.voice, pcm_audio)
+        opus_stream = _mono_pcm_to_opus_stream(pcm_audio)
+        if opus_stream is not None:
+            self._opus_cache.put(req.text, req.voice, opus_stream)
 
     async def _ensure_voice(
         self, guild: discord.Guild, channel_id: int
