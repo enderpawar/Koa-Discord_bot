@@ -1,238 +1,229 @@
-# Discord 한국어 TTS 봇
+# Nothing Bot
 
-텍스트 채널의 메시지와 음성 채널의 입·퇴장을 한국어 음성으로 읽어주는 Discord 봇입니다.
+디스코드 서버에서 채팅을 한국어 음성으로 읽어주고, 음성 채널 입장/퇴장도 알려주고, 이번 주 활동 랭킹까지 보여주는 서버용 봇입니다.
 
-- **TTS**: 지정된 텍스트 채널에 입력된 메시지를 [Azure Speech (Neural TTS)](https://learn.microsoft.com/azure/ai-services/speech-service/text-to-speech) 한국어 보이스로 합성하여 음성 채널에 재생
-- **입·퇴장 알림**: 지정된 음성 채널에 사용자가 들어오거나 나갈 때 `{닉네임}님 입장/퇴장` 안내
-- **자동 절전**: 5분간 메시지가 없으면 자동으로 음성 채널에서 퇴장, 다음 메시지에 자동 재입장
+채팅방에 글을 쓰면 봇이 음성 채널에서 읽어줍니다. 회의, 게임, 작업방, 라디오처럼 틀어두는 서버에 잘 맞습니다.
 
----
+## 이런 일을 해요
 
-## 빠른 시작
+- 지정한 텍스트 채널 메시지를 한국어 TTS로 읽기
+- 지정한 음성 채널 입장/퇴장 안내
+- 5분 동안 읽을 메시지가 없으면 자동 퇴장
+- 새 메시지가 오면 다시 입장해서 재생
+- 이번 주 활동 점수, 개인 랭크, TOP 10 리더보드 제공
+- 관리자 웹 대시보드로 TTS/리더보드 설정 관리
 
-```bash
-# 1. 저장소 클론 후 진입
-git clone <this-repo> discord-tts-bot && cd discord-tts-bot
+## 빠른 사용법
 
-# 2. 가상환경 + 의존성
-python -m venv .venv
-.venv\Scripts\activate          # Windows
-# source .venv/bin/activate     # macOS / Linux
-pip install -r requirements.txt
+봇을 서버에 초대한 뒤 Discord에서 아래 순서대로 입력하면 됩니다.
 
-# 3. .env 작성 (.env.example 복사 후 토큰 채우기)
-copy .env.example .env          # Windows
-# cp .env.example .env          # macOS / Linux
-
-# 4. 봇 실행
-python bot.py
+```text
+/settts #tts채널
+/setvc 음성채널
+/join
 ```
 
-콘솔에 `logged in as <봇이름>` / `synced N slash commands (global)` 가 보이면 성공.
+이후 `#tts채널`에 메시지를 쓰면 봇이 설정한 음성 채널에서 읽어줍니다.
 
----
-
-## 사전 요구사항
-
-| 항목 | 버전/조건 |
-|------|----------|
-| Python | 3.10 이상 |
-| FFmpeg | 시스템 PATH 등록 (음성 인코딩) |
-| Discord 봇 토큰 | Developer Portal 에서 발급 |
-| Azure Speech 키 + 리전 | [Azure Portal](https://portal.azure.com) 에서 Speech Service 리소스 생성 (F0 무료 티어 가능) |
-| 인터넷 연결 | Azure Speech 엔드포인트 호출용 |
-
-### FFmpeg 설치
-
-| OS | 명령 |
-|----|------|
-| Windows | `winget install --id=Gyan.FFmpeg` (또는 `choco install ffmpeg`) |
-| macOS | `brew install ffmpeg` |
-| Ubuntu/Debian | `sudo apt install -y ffmpeg` |
-
-설치 확인: 새 터미널에서 `ffmpeg -version` 출력이 보여야 합니다. PATH 등록 안 되면 봇이 시작 시 `RuntimeError: FFmpeg가 PATH에 없습니다` 로 종료됩니다.
-
----
-
-## Discord Application 생성
-
-1. https://discord.com/developers/applications 접속 → **New Application**
-2. 좌측 **Bot** 탭 → **Reset Token** 으로 토큰 발급 → `.env` 의 `DISCORD_TOKEN` 에 입력
-3. 같은 탭의 **Privileged Gateway Intents** 에서 다음 두 개를 **반드시 활성화**:
-   - ✅ Server Members Intent
-   - ✅ Message Content Intent
-4. 좌측 **OAuth2 → URL Generator**:
-   - **Scopes**: `bot`, `applications.commands`
-   - **Bot Permissions**: View Channels / Send Messages / Read Message History / Connect / Speak / Use Voice Activity / Use Slash Commands
-5. 생성된 URL 을 브라우저에서 열어 봇을 서버에 초대
-
-> **권한 누락 시 증상**: 슬래시 명령이 안 보이거나 (`applications.commands` 누락), 음성 채널에 입장 못 함 (`Connect/Speak` 누락), 메시지 본문이 빈 문자열로 도착 (Message Content Intent 누락).
-
----
-
-## 환경변수 (`.env`)
-
-`.env.example` 을 복사한 뒤 다음 값을 채웁니다.
-
-```ini
-DISCORD_TOKEN=<발급받은 봇 토큰>
-LOG_LEVEL=INFO
-
-AZURE_SPEECH_KEY=<Azure Speech 리소스의 Key 1 또는 Key 2>
-AZURE_SPEECH_REGION=koreacentral
-
-# 선택 — 개발 시 슬래시 명령을 특정 길드로 즉시 sync (전역 sync 는 캐시 1시간)
-# TEST_GUILD_ID=123456789012345678
-
-# 선택 — 웹 관리자 대시보드
-# ADMIN_WEB_TOKEN=긴_랜덤_관리자_토큰
-# ADMIN_WEB_HOST=127.0.0.1
-# ADMIN_WEB_PORT=8080
-# ADMIN_WEB_PUBLIC_URL=https://your-admin.example.com
-# ADMIN_WEB_GUILD_IDS=123456789012345678
-```
-
-`.env` 는 절대 커밋하지 마세요. `.gitignore` 에 이미 등록되어 있습니다.
-
----
+음성 채널 채팅을 바로 TTS 입력 채널로 쓰고 싶다면, 음성 채널에 들어갔을 때 표시되는 `TTS 켜기` 버튼을 눌러도 됩니다.
 
 ## 명령어
 
-모든 명령은 슬래시 명령이며, 응답은 ephemeral (자기에게만 보임).
+| 명령어 | 권한 | 설명 |
+|---|---:|---|
+| `/settts` | 채널 관리 | 봇이 읽을 텍스트 채널을 정합니다. |
+| `/setvc` | 채널 관리 | 봇이 말할 음성 채널을 정합니다. |
+| `/setvoice` | 채널 관리 | TTS 목소리를 바꿉니다. |
+| `/join` | 누구나 | 설정된 음성 채널로 봇을 부릅니다. |
+| `/leave` | 누구나 | 봇을 음성 채널에서 내보냅니다. |
+| `/status` | 누구나 | 현재 TTS 설정을 확인합니다. |
+| `/rank` | 누구나 | 내 활동 점수 또는 멤버 활동 점수를 봅니다. |
+| `/leaderboard` | 누구나 | 이번 주 서버 활동 TOP 10을 봅니다. |
+| `/admin panel` | 관리자 | 웹 관리자 대시보드 링크를 엽니다. |
 
-| 명령 | 권한 | 설명 |
-|------|------|------|
-| `/settts <text-channel>` | 채널 관리 | TTS 가 읽을 텍스트 채널 지정 |
-| `/setvc <voice-channel>` | 채널 관리 | 봇이 음성 출력할 음성 채널 지정 |
-| `/setvoice <voice>` | 채널 관리 | 보이스 변경 (4종 한국어 보이스) |
-| `/join` | 일반 | 설정된 음성 채널로 즉시 입장 |
-| `/leave` | 일반 | 음성 채널에서 퇴장 |
-| `/status` | 일반 | 현재 설정 확인 |
-| `/rank [member]` | 일반 | 이번 주 멤버별 활동 내역 확인 |
-| `/leaderboard` | 일반 | 이번 주 서버 활동 점수 TOP 10 리더보드 확인 |
-| `/admin panel` | 관리자 | 웹 관리자 대시보드 링크 열기 |
+선택 가능한 목소리는 `여성-차분`, `남성-자연`, `남성-무게감`, `남성-친근`입니다.
 
-**보이스 선택지**: `ko-KR-SunHiNeural` (여성, 차분 — 기본) / `ko-KR-InJoonNeural` (남성, 자연) / `ko-KR-BongJinNeural` (남성, 무게감) / `ko-KR-GookMinNeural` (남성, 친근).
+## 설치하기
 
-### 일반적인 사용 흐름
+### 1. 필요한 것
 
+- Python 3.10 이상
+- FFmpeg
+- Discord 봇 토큰
+- Azure Speech 리소스 키와 리전
+
+FFmpeg 설치 예시:
+
+```bash
+# Windows
+winget install --id=Gyan.FFmpeg
+
+# macOS
+brew install ffmpeg
+
+# Ubuntu / Debian
+sudo apt install -y ffmpeg
 ```
-/settts #tts-입력          ← TTS 입력용 텍스트 채널 지정
-/setvc 🔊 일반음성          ← 봇이 출력할 음성 채널 지정
-/setvoice 남성-자연         ← (선택) 보이스 변경
-/join                      ← 봇이 음성 채널 입장
-# 이후 #tts-입력 채널에 메시지 → 음성 채널에서 재생됨
+
+설치 후 새 터미널에서 확인합니다.
+
+```bash
+ffmpeg -version
 ```
 
-설정은 `config.json` 에 guild 별로 저장되며 봇 재시작 후에도 유지됩니다.
+### 2. Python 패키지 설치
 
-### 웹 관리자 대시보드
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-`ADMIN_WEB_TOKEN` 을 설정하고 봇을 재시작하면 웹 대시보드가 함께 실행됩니다.
+macOS/Linux라면 가상환경 활성화 명령만 바꿔주세요.
+
+```bash
+source .venv/bin/activate
+```
+
+### 3. `.env` 만들기
+
+프로젝트 루트에 `.env` 파일을 만들고 아래 값을 채웁니다.
+
+```ini
+DISCORD_TOKEN=디스코드_봇_토큰
+AZURE_SPEECH_KEY=Azure_Speech_키
+AZURE_SPEECH_REGION=koreacentral
+LOG_LEVEL=INFO
+
+# 선택: 개발 서버에 슬래시 명령을 바로 반영하고 싶을 때
+# TEST_GUILD_ID=123456789012345678
+```
+
+`.env`에는 토큰이 들어가므로 절대 공개 저장소에 올리지 마세요.
+
+### 4. 실행
+
+```bash
+python bot.py
+```
+
+콘솔에 `logged in as ...`와 `synced ... slash commands`가 보이면 준비 끝입니다.
+
+## Discord 봇 초대 설정
+
+Discord Developer Portal에서 봇을 만들고 아래 설정을 확인하세요.
+
+1. **Bot** 탭에서 토큰을 발급해 `.env`의 `DISCORD_TOKEN`에 넣기
+2. **Privileged Gateway Intents**에서 아래 2개 켜기
+   - Server Members Intent
+   - Message Content Intent
+3. **OAuth2 -> URL Generator**에서 체크
+   - Scopes: `bot`, `applications.commands`
+   - Bot Permissions: `View Channels`, `Send Messages`, `Read Message History`, `Connect`, `Speak`, `Use Voice Activity`, `Use Slash Commands`
+4. 생성된 URL로 봇을 서버에 초대
+
+권한이 빠지면 슬래시 명령이 안 보이거나, 메시지를 못 읽거나, 음성 채널에 못 들어갈 수 있습니다.
+
+## 관리자 웹 대시보드
+
+웹 UI를 켜면 브라우저에서 서버별 설정을 관리할 수 있습니다.
 
 ```ini
 ADMIN_WEB_TOKEN=긴_랜덤_관리자_토큰
 ADMIN_WEB_HOST=127.0.0.1
 ADMIN_WEB_PORT=8080
-# 배포 환경에서 /admin panel 의 "웹 대시보드 열기" 버튼에 사용할 URL
+
+# 배포 환경에서 /admin panel 버튼에 보여줄 공개 주소
 # ADMIN_WEB_PUBLIC_URL=https://your-admin.example.com
-# 선택 — 웹 대시보드에서 노출할 서버 ID 목록. 쉼표로 여러 개 지정 가능
+
+# 특정 서버만 웹 UI에 보이게 할 때
 # ADMIN_WEB_GUILD_IDS=123456789012345678
 ```
 
-로컬 실행 기본 접속 주소:
+로컬 기본 주소:
 
 ```text
 http://127.0.0.1:8080
 ```
 
-대시보드에서 서버 선택, TTS 채널, 음성 채널, 일일 리더보드 채널, 발송 시각, 자동 발송 여부를 편집할 수 있고 리더보드 즉시 발송 및 리더보드 데이터 초기화도 가능합니다. 공개 서버에 노출할 때는 반드시 강한 `ADMIN_WEB_TOKEN` 을 사용하세요.
+웹 대시보드에서 할 수 있는 일:
 
-`/admin panel` 명령은 Discord 안에 `웹 대시보드 열기` 링크 버튼을 표시합니다. 배포환경에서는 `ADMIN_WEB_PUBLIC_URL` 을 실제 접속 가능한 HTTPS 주소로 설정하세요.
+- TTS 입력 채널 변경
+- 음성 출력 채널 변경
+- 일일 리더보드 채널 설정
+- 리더보드 자동 발송 켜기/끄기
+- 발송 시각 변경
+- 리더보드 즉시 발송
+- 리더보드 데이터 초기화
 
-특정 서버만 웹 UI에 보이게 하려면 `ADMIN_WEB_GUILD_IDS` 에 Discord 서버 ID를 넣으세요. 예: `ADMIN_WEB_GUILD_IDS=123456789012345678`
+공개 주소로 배포한다면 `ADMIN_WEB_TOKEN`은 길고 예측하기 어렵게 설정하세요.
 
----
+## 활동 랭킹 기준
 
-## 동작 세부 사항
+랭킹은 서버 안에서만 계산됩니다.
 
-### 메시지 처리 (`on_message`)
-- 다른 봇/webhook 메시지는 무시 (루프 방지)
-- 멘션은 표시명으로, URL 은 `링크` 로, 마크다운은 제거하여 합성
-- 200자 초과 시 잘리고 끝에 `…` 부착
-- 빈 메시지 (첨부만)는 무반응
+- 음성 채널에 머문 시간 집계
+- 메시지 개수 집계
+- 점수는 `음성 70% + 메시지 30%`
+- 서버 내 최고 음성 시간과 최고 메시지 수를 각각 100% 기준으로 환산
+- 매주 금요일 00:00(KST)에 초기화
+- 데이터는 기본적으로 `rank_stats.json`에 저장
 
-### 입·퇴장 알림 (`on_voice_state_update`)
-- `/setvc` 로 지정한 음성 채널에 누군가 들어오거나 나갈 때만 알림
-- mute/deafen/카메라 변경 등은 무시
-- 봇 자기 자신의 입·퇴장은 무시 (루프 방지)
+## 메시지는 이렇게 읽어요
 
-### 활동 랭킹
-- 음성 시간은 사용자가 음성 채널에 들어온 시점부터 나간 시점까지 누적
-- 채팅 활동은 시간 추정 없이 메시지 개수만 누적
-- 리더보드는 서버 내부 전용이며 `음성 시간 70% + 메시지 수 30%` 점수 기준으로 TOP 10만 표시
-- 점수는 주간 서버 내 최대 음성 시간과 최대 메시지 수를 각각 100%로 환산한 뒤 가중합으로 계산
-- `/admin panel` 의 웹 대시보드에서 채널 선택, 자동 발송 토글, 발송 시각 변경, 즉시 발송, 리더보드 데이터 초기화 처리 가능
-- 통계는 `rank_stats.json` 에 guild 별로 저장되며 `RANK_PATH` 환경변수로 경로 변경 가능
-- 매주 금요일 00:00(KST)에 자동 초기화
+봇이 읽기 전에 메시지를 살짝 정리합니다.
 
-### 5분 idle 정책
-- 큐에 메시지가 5분간 없으면 봇이 음성 채널에서 자동 퇴장
-- 새 메시지가 들어오면 자동으로 다시 입장 후 재생
-- "혼자 채널에 머무는 봇" 으로 인한 UX 노이즈 방지
+- 다른 봇이나 웹훅 메시지는 무시
+- 멘션은 표시명으로 읽기
+- URL은 `링크`로 읽기
+- 마크다운 문법 제거
+- 너무 긴 메시지는 200자 근처에서 자르기
+- 첨부만 있는 빈 메시지는 읽지 않기
 
----
+## 자주 막히는 부분
 
-## 트러블슈팅
+| 증상 | 확인할 것 |
+|---|---|
+| `FFmpeg가 PATH에 없습니다` | FFmpeg 설치 후 새 터미널에서 다시 실행 |
+| 슬래시 명령이 안 보임 | `applications.commands` 권한, 전역 명령 반영 대기, `TEST_GUILD_ID` 사용 |
+| 봇이 채팅을 못 읽음 | Message Content Intent 켰는지 확인 |
+| 입장/퇴장 알림이 안 됨 | Server Members Intent 켰는지 확인 |
+| 음성 채널 입장 실패 | `Connect`, `Speak` 권한과 채널 권한 오버라이드 확인 |
+| 한글 발음이 이상함 | `/setvoice`로 `ko-KR-*` 보이스 선택 |
+| TTS 설정 명령이 거부됨 | 실행한 사용자가 `채널 관리` 권한을 가졌는지 확인 |
 
-| 증상 | 원인 | 조치 |
-|------|------|------|
-| 시작 시 `FFmpeg가 PATH에 없습니다` | FFmpeg 미설치 | 위 §FFmpeg 설치 참고 |
-| 슬래시 명령이 보이지 않음 | 전역 sync 캐시 (최대 1시간) | `.env` 에 `TEST_GUILD_ID=...` 추가 후 재시작 |
-| `/settts` 권한 부족 안내 | 사용자가 채널 관리 권한 없음 | 서버 역할 설정에서 부여 |
-| 음성 채널 입장 실패 | Connect / Speak 권한 부족 | OAuth 권한 재검토 또는 채널 권한 오버라이드 확인 |
-| 메시지 본문이 빈 문자열로 도착 | Message Content Intent 미활성 | Developer Portal 에서 활성화 후 재시작 |
-| 입·퇴장 이벤트가 오지 않음 | Server Members Intent 미활성 | Developer Portal 에서 활성화 후 재시작 |
-| 봇이 자기 입장도 안내함 | 비정상 (Rule 01 위반) | 코드 이슈 — 이슈 트래커에 보고 |
-| 한글이 깨져 발음됨 | 영문 보이스 사용 | `/setvoice` 로 `ko-KR-*` 보이스 선택 |
-| 합성은 되는데 무음 | 음성 region 이슈 | Discord 서버 설정에서 region 변경 후 재시도 |
+자세한 로그가 필요하면 `.env`에서 바꿉니다.
 
-`LOG_LEVEL=DEBUG` 로 환경변수 변경 후 재시작하면 상세 로그가 출력됩니다.
-
----
-
-## 24시간 운영 (배포)
-
-본 봇은 단일 Python 프로세스이므로 별도 백엔드 서버 없이 **어디든 켜져 있는 컴퓨터** 에서만 동작합니다.
-
-| 옵션 | 비용 | 가이드 |
-|------|------|--------|
-| Railway | 무료 크레딧 $5/월 (실측 ~$2–3 사용) | [`docs/deploy-railway.md`](docs/deploy-railway.md) |
-| Oracle Cloud Always Free VM | 평생 무료 | systemd unit + git pull |
-| 본인 PC | 전기료 | `python bot.py` (PC 끄면 봇 꺼짐) |
-
----
-
-## 개발자 가이드
-
-본 프로젝트는 **8개 Phase** 로 점진적 구축되었습니다. 코드 구조·테스트 파이프라인·구현 워크플로는 다음 문서를 참고하세요.
-
-- **`CLAUDE.md`** — 명령 / 아키텍처 / Phase 워크플로 요약 (Claude Code 용)
-- **`docs/pipeline.md`** — 8 Phase 정의와 의존 그래프
-- **`docs/skills/`** — 재사용 능력 단위 (bot 부트스트랩, config 저장, 메시지 정제, TTS, 큐, voice, 슬래시)
-- **`docs/rules/`** — 봇 전반의 불변 제약 (루프 방지 · guild 격리 · 복원력 · 보안 · async · 로깅 · 한국어)
-- **`docs/testing.md`** — 자동/수동 테스트 파이프라인
-- **`docs/discord-environment-testing.md`** — 라이브 환경 검증 절차
-
-### 테스트
-```bash
-pip install -r requirements-dev.txt
-python -m pytest tests/unit -q                       # 단위 회귀
-RUN_LIVE=1 python -m pytest tests/unit -m live -q    # 라이브 (Azure Speech 도달)
-python .claude/scripts/check_phase_status.py         # Phase 상태표
+```ini
+LOG_LEVEL=DEBUG
 ```
 
-수동 체크리스트:
-- `tests/integration/test_phase6_commands.md` — 슬래시 명령 6종
-- `tests/integration/test_phase7_events.md` — TTS / 입퇴장 / 봇 루프 방지
-- `tests/manual/phase8_release_checklist.md` — 릴리즈 준비 점검
+## 배포
+
+봇은 Python 프로세스 하나로 동작합니다. 봇이 계속 켜져 있으려면 PC, VM, Railway 같은 실행 환경이 계속 살아 있어야 합니다.
+
+- Railway 배포: [docs/deploy-railway.md](docs/deploy-railway.md)
+- 직접 서버 운영: `python bot.py`
+- 개인 PC 운영: PC가 꺼지면 봇도 꺼집니다.
+
+## 개발 메모
+
+테스트 실행:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/unit -q
+```
+
+라이브 Azure Speech 테스트:
+
+```bash
+RUN_LIVE=1 python -m pytest tests/unit -m live -q
+```
+
+관련 문서:
+
+- [docs/testing.md](docs/testing.md)
+- [docs/pipeline.md](docs/pipeline.md)
+- [docs/discord-environment-testing.md](docs/discord-environment-testing.md)
+- [CLAUDE.md](CLAUDE.md)
