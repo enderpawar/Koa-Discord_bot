@@ -1,0 +1,146 @@
+name: Deploy to Oracle Always Free
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: nothing-bot-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate deployment secrets
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+          OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          OCI_SSH_KNOWN_HOSTS: ${{ secrets.OCI_SSH_KNOWN_HOSTS }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+        run: |
+          set -Eeuo pipefail
+          for key in \
+            OCI_HOST OCI_USER OCI_SSH_PRIVATE_KEY OCI_SSH_KNOWN_HOSTS \
+            DISCORD_TOKEN AZURE_SPEECH_KEY AZURE_SPEECH_REGION
+          do
+            if [[ -z "${!key:-}" ]]; then
+              echo "::error::Required repository secret is missing: ${key}"
+              exit 1
+            fi
+          done
+
+      - name: Prepare SSH and deployment artifacts
+        env:
+          OCI_SSH_PRIVATE_KEY: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+          OCI_SSH_KNOWN_HOSTS: ${{ secrets.OCI_SSH_KNOWN_HOSTS }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+          AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          TEST_GUILD_ID: ${{ secrets.TEST_GUILD_ID }}
+          ADMIN_WEB_TOKEN: ${{ secrets.ADMIN_WEB_TOKEN }}
+          ADMIN_WEB_HOST: ${{ vars.ADMIN_WEB_HOST }}
+          ADMIN_WEB_PORT: ${{ vars.ADMIN_WEB_PORT }}
+          ADMIN_WEB_PUBLIC_URL: ${{ vars.ADMIN_WEB_PUBLIC_URL }}
+          ADMIN_WEB_GUILD_IDS: ${{ vars.ADMIN_WEB_GUILD_IDS }}
+          MEM_ANCHOR_BYTES: ${{ vars.MEM_ANCHOR_BYTES }}
+          MEM_ANCHOR_INTERVAL_SEC: ${{ vars.MEM_ANCHOR_INTERVAL_SEC }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_ZONE: ${{ vars.GCP_ZONE }}
+          GCP_INSTANCE_NAME: ${{ vars.GCP_INSTANCE_NAME }}
+          GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
+          MC_SERVER_HOST: ${{ vars.MC_SERVER_HOST }}
+          MC_SERVER_PORT: ${{ vars.MC_SERVER_PORT }}
+          MC_CONTROL_PASSWORD: ${{ secrets.MC_CONTROL_PASSWORD }}
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "${HOME}/.ssh"
+          printf '%s\n' "$OCI_SSH_PRIVATE_KEY" > "${HOME}/.ssh/oracle"
+          printf '%s\n' "$OCI_SSH_KNOWN_HOSTS" > "${HOME}/.ssh/known_hosts"
+          chmod 600 "${HOME}/.ssh/oracle" "${HOME}/.ssh/known_hosts"
+
+          git archive \
+            --format=tar.gz \
+            --output="/tmp/nothing-bot-${GITHUB_SHA}.tar.gz" \
+            "$GITHUB_SHA"
+
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          required = (
+              "DISCORD_TOKEN",
+              "AZURE_SPEECH_KEY",
+              "AZURE_SPEECH_REGION",
+          )
+          optional = (
+              "LOG_LEVEL",
+              "TEST_GUILD_ID",
+              "ADMIN_WEB_TOKEN",
+              "ADMIN_WEB_HOST",
+              "ADMIN_WEB_PORT",
+              "ADMIN_WEB_PUBLIC_URL",
+              "ADMIN_WEB_GUILD_IDS",
+              "MEM_ANCHOR_BYTES",
+              "MEM_ANCHOR_INTERVAL_SEC",
+              # 마인크래프트 전원 제어(/mc on|off|status). 여기서 빠지면 재배포 때
+              # .env 가 통째로 새로 써지면서 설정이 사라지고 명령이 죽는다.
+              "GCP_PROJECT_ID",
+              "GCP_ZONE",
+              "GCP_INSTANCE_NAME",
+              "GCP_SA_KEY_B64",
+              "MC_SERVER_HOST",
+              "MC_SERVER_PORT",
+              "MC_CONTROL_PASSWORD",
+          )
+
+          lines = []
+          for key in required + optional:
+              value = os.environ.get(key, "")
+              if value or key in required:
+                  lines.append(f"{key}={json.dumps(value)}")
+
+          Path(f"/tmp/nothing-bot-{os.environ['GITHUB_SHA']}.env").write_text(
+              "\n".join(lines) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          chmod 600 "/tmp/nothing-bot-${GITHUB_SHA}.env"
+
+      - name: Upload release
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+        run: |
+          set -Eeuo pipefail
+          scp -i "${HOME}/.ssh/oracle" \
+            "/tmp/nothing-bot-${GITHUB_SHA}.tar.gz" \
+            "/tmp/nothing-bot-${GITHUB_SHA}.env" \
+            "scripts/remote_deploy.sh" \
+            "${OCI_USER}@${OCI_HOST}:/tmp/"
+
+      - name: Deploy and verify
+        env:
+          OCI_HOST: ${{ secrets.OCI_HOST }}
+          OCI_USER: ${{ secrets.OCI_USER }}
+        run: |
+          set -Eeuo pipefail
+          ssh -i "${HOME}/.ssh/oracle" \
+            "${OCI_USER}@${OCI_HOST}" \
+            "mv /tmp/remote_deploy.sh /tmp/nothing-bot-${GITHUB_SHA}-deploy.sh && chmod 700 /tmp/nothing-bot-${GITHUB_SHA}-deploy.sh && /tmp/nothing-bot-${GITHUB_SHA}-deploy.sh ${GITHUB_SHA}"
