@@ -1,0 +1,292 @@
+# Oracle Cloud 배포 가이드
+
+본 문서는 Oracle Cloud Infrastructure(OCI) 의 **Always Free** ARM 인스턴스에서 본 Discord TTS 봇을 24시간 운영하는 단계별 절차입니다.
+
+> 예상 비용: Always Free 한도 내에서 무료. 단 아래 §0 의 제약을 먼저 확인할 것.
+
+---
+
+## 0. 시작 전에 알아야 할 것
+
+Always Free 는 **기간** 제한이 없을 뿐, **사양과 정책은 예고 없이 바뀝니다.**
+
+- **2026-06-15** 자로 Ampere A1 무료 한도가 4 OCPU/24GB → **2 OCPU/12GB** 로 축소됐습니다 (공지 없이 시행). 본 봇에는 2 OCPU/12GB 로도 충분합니다.
+- **유휴 인스턴스 회수**: 7일 기준 **CPU 사용률 AND 네트워크 사용률 AND(멀티 OCPU 샤드는) 메모리 사용률** 이 95th percentile 로 모두 20% 미만이어야 회수 대상입니다 — 세 지표가 **모두** 낮아야 유휴로 판정되는 AND 조건입니다. **TTS 봇은 CPU/네트워크가 대부분 유휴라 그대로 두면 회수 대상입니다.**
+  → **대응: 메모리 사용률만 20% 이상으로 유지.** 카드 등록·PAYG 전환 없이 Always Free 그대로, 이미 할당된 12GB 중 일부를 상시 점유해 세 조건 중 하나를 깨뜨리는 방식. 본 저장소의 `docker-compose.yml` 에 포함된 `mem-anchor` 서비스(`scripts/mem_anchor.py`)가 이를 자동 수행합니다 — 별도 설정 불필요, `docker compose up -d` 만으로 같이 뜸.
+  - 전제조건: 인스턴스의 **Oracle Cloud Agent → Compute Instance Monitoring** 플러그인이 Running 상태여야 사용률 지표 자체가 수집됩니다 (§8 에서 확인).
+  - 카드 등록 자체를 꺼리지 않는다면 PAYG 업그레이드도 대안입니다: Always Free 한도 내 사용은 계속 무료이고 회수 리스크가 완전히 사라지지만, 초과 리소스를 실수로 만들면 과금될 수 있습니다 — 이 경우 OCI Billing → Budgets 에서 $1 이하 알림을 걸어두세요.
+- **용량 확보**: 인기 리전은 `Out of host capacity` 가 상시 발생합니다. 한국 사용자는 서울/춘천이 특히 어렵고, 일본(도쿄/오사카) 이 차선입니다. 며칠 걸릴 수 있으니 감안하세요.
+- **계정 정지 리스크**: 사전 통보 없는 무료 계정 정지 사례가 보고됩니다. §7 의 백업을 반드시 설정하세요.
+
+---
+
+## 1. 사전 준비
+
+- [ ] Oracle Cloud 계정 생성 (Always Free 그대로 유지 — §0 의 메모리 앵커로 회수 방지)
+- [ ] Discord Developer Portal 의 봇 토큰
+- [ ] Azure Speech 리소스의 키와 리전
+- [ ] Discord Developer Portal → Bot → **Privileged Gateway Intents**: `SERVER MEMBERS` + `MESSAGE CONTENT` 둘 다 ON
+
+---
+
+## 2. 인스턴스 생성
+
+1. OCI 콘솔 → **Compute** → **Instances** → **Create Instance**
+2. **Image and shape** → **Change shape**:
+   - Shape series: **Ampere**
+   - Shape: `VM.Standard.A1.Flex`
+   - OCPU **2**, Memory **12 GB** (현재 Always Free 한도)
+3. **Image**: Ubuntu 22.04 또는 24.04 (ARM64 빌드)
+4. **Add SSH keys** → 공개키 업로드 또는 생성한 키 다운로드
+5. **Create**
+
+> `Out of host capacity` 가 뜨면 다른 가용 도메인(AD) 또는 리전으로 재시도하세요.
+
+---
+
+## 3. 서버 기본 설정
+
+SSH 접속 후:
+
+```bash
+ssh -i <개인키> ubuntu@<인스턴스_공인IP>
+
+# Docker 설치
+sudo apt-get update
+sudo apt-get install -y docker.io docker-compose-v2 git
+sudo usermod -aG docker $USER
+newgrp docker   # 또는 재로그인
+```
+
+Docker 부팅 시 자동 시작:
+
+```bash
+sudo systemctl enable --now docker
+```
+
+---
+
+## 4. 코드 배포
+
+```bash
+git clone https://github.com/enderpawar/Nothing_bot.git
+cd Nothing_bot
+cp .env.example .env
+nano .env        # §5 참고해 값 입력
+mkdir -p data    # 볼륨 마운트 지점
+```
+
+**Railway 에서 백업해 둔 `config.json` 이 있다면 지금 복원합니다:**
+
+```bash
+# 로컬에서 서버로 전송
+scp -i <개인키> config.json ubuntu@<공인IP>:~/Nothing_bot/data/config.json
+```
+
+빌드 및 기동:
+
+```bash
+docker compose up -d --build
+```
+
+첫 빌드는 ARM 에서 5~10분 걸립니다.
+
+---
+
+## 5. 환경변수 (`.env`)
+
+| Key | 필수 | 값 |
+|-----|------|-----|
+| `DISCORD_TOKEN` | ✅ | Developer Portal 의 봇 토큰 |
+| `AZURE_SPEECH_KEY` | ✅ | Azure Speech 리소스 키 |
+| `AZURE_SPEECH_REGION` | ✅ | 예: `koreacentral` |
+| `LOG_LEVEL` | – | `INFO` (기본 권장) |
+| `TEST_GUILD_ID` | – | 슬래시 명령 즉시 sync 할 길드 ID. 미설정 시 전역 sync (캐시 1시간) |
+| `ADMIN_WEB_TOKEN` | – | 설정 시 웹 어드민 활성화 |
+| `ADMIN_WEB_HOST` | ⚠️ | 웹 어드민 사용 시 **반드시 `0.0.0.0`** — §6 참조 |
+| `ADMIN_WEB_PUBLIC_URL` | – | `http://<공인IP>:8080` — 봇이 안내하는 대시보드 주소 |
+
+> ⚠️ `DISCORD_TOKEN` 과 `AZURE_SPEECH_KEY` 는 절대 저장소에 커밋하지 마세요. `.env` 는 `.gitignore` 대상입니다.
+
+`CONFIG_PATH` / `RANK_PATH` 는 `Dockerfile` 의 `ENV` 가 `/data` 볼륨을 가리키므로 `.env` 에서 생략합니다.
+
+---
+
+## 6. 웹 어드민을 쓸 경우 (선택)
+
+**Railway 와 동작이 다릅니다.** `cogs/web_admin_cog.py` 의 `_web_host()` 는 `ADMIN_WEB_HOST` 가 없으면 `RAILWAY_*` 환경변수 존재 여부로 바인딩을 결정합니다. Oracle 에는 그 변수가 없으므로 **`127.0.0.1` 에 바인딩되어 외부 접속이 불가능해집니다.**
+
+`.env` 에 명시하세요:
+
+```
+ADMIN_WEB_TOKEN=<충분히 긴 랜덤 문자열>
+ADMIN_WEB_HOST=0.0.0.0
+ADMIN_WEB_PORT=8080
+ADMIN_WEB_PUBLIC_URL=http://<공인IP>:8080
+```
+
+추가로 **방화벽 2곳을 모두** 열어야 합니다:
+
+1. OCI 콘솔 → VCN → Security List → **Ingress Rules** 에 TCP 8080 허용 추가
+2. 인스턴스 내부:
+   ```bash
+   sudo iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
+   sudo netfilter-persistent save
+   ```
+
+> Ubuntu 이미지는 기본 iptables 규칙이 막고 있어 OCI 콘솔만 열면 접속되지 않습니다. 둘 다 필요합니다.
+
+웹 어드민을 쓰지 않으면 `ADMIN_WEB_TOKEN` 을 비워 두세요. 자동으로 비활성화되고 포트를 열 필요도 없습니다.
+
+---
+
+## 7. 백업 — 반드시 설정할 것
+
+`data/` 에 `config.json` 과 `rank_stats.json` 이 들어 있습니다. 계정 정지나 인스턴스 손실에 대비해 주기적으로 서버 밖으로 빼내세요.
+
+간단한 cron 예시 (매일 04:00, 최근 14개 보관):
+
+```bash
+mkdir -p ~/backups
+crontab -e
+```
+
+```cron
+0 4 * * * cd ~/Nothing_bot && tar czf ~/backups/data-$(date +\%F).tar.gz data/ && ls -1t ~/backups/data-*.tar.gz | tail -n +15 | xargs -r rm
+```
+
+이것만으로는 인스턴스가 사라지면 백업도 같이 사라집니다. **로컬 PC 로 주기적으로 내려받거나** OCI Object Storage 로 업로드하세요:
+
+```bash
+# 로컬에서 실행
+scp -i <개인키> ubuntu@<공인IP>:~/backups/data-*.tar.gz ./backups/
+```
+
+---
+
+## 8. 배포 확인
+
+```bash
+docker compose logs -f
+```
+
+다음 로그가 보이면 성공:
+
+```
+logged in as <봇이름> (id=...)
+synced N slash commands (global)
+loaded extension: cogs.tts_cog
+```
+
+Discord 서버 멤버 목록에서 봇 아이콘이 **초록색(online)** 인지 확인합니다.
+
+**유휴 회수 방지 확인** (Always Free 유지 시):
+
+```bash
+docker stats --no-stream mem-anchor
+```
+`MEM USAGE` 가 `~2.6GB` 근처인지 확인합니다. 이어서 OCI 콘솔 → 인스턴스 상세 →
+**Oracle Cloud Agent** 탭에서 **Compute Instance Monitoring** 플러그인이
+**Running** 상태인지 확인하세요 — 꺼져 있으면 메모리 앵커를 띄워도 사용률 지표
+자체가 Oracle 쪽에 집계되지 않아 무의미합니다.
+
+---
+
+## 9. GitHub Actions 자동 재배포
+
+저장소의 `.github/workflows/deploy-oracle.yml` 은 `main` 브랜치 push 또는
+GitHub Actions 화면의 수동 실행으로 새 릴리스를 전송하고, Docker 이미지를
+재빌드한 뒤 Discord 로그인과 메모리 앵커 구동까지 확인합니다. 서버의 영구
+데이터는 `~/nothing-bot/shared/data`, 환경변수는
+`~/nothing-bot/shared/.env` 에 보존됩니다.
+
+GitHub 저장소 **Settings → Secrets and variables → Actions** 에 다음 값을
+등록합니다.
+
+| 종류 | 이름 | 값 |
+|------|------|----|
+| Secret | `OCI_HOST` | 인스턴스 공인 IP 또는 DNS 이름 |
+| Secret | `OCI_USER` | Ubuntu 이미지라면 `ubuntu` |
+| Secret | `OCI_SSH_PRIVATE_KEY` | 인스턴스 SSH 개인키 전체 |
+| Secret | `OCI_SSH_KNOWN_HOSTS` | `ssh-keyscan -H <공인IP>` 결과를 별도 신뢰 경로에서 지문 확인 후 등록 |
+| Secret | `DISCORD_TOKEN` | Discord 봇 토큰 |
+| Secret | `AZURE_SPEECH_KEY` | Azure Speech 키 |
+| Secret | `AZURE_SPEECH_REGION` | Azure Speech 리전 |
+| Secret | `TEST_GUILD_ID` | 선택: 즉시 슬래시 명령 동기화 대상 |
+| Secret | `ADMIN_WEB_TOKEN` | 선택: 웹 어드민 토큰 |
+| Variable | `LOG_LEVEL` | 선택: 기본 `INFO` |
+| Variable | `ADMIN_WEB_HOST` | 웹 어드민 사용 시 `0.0.0.0` |
+| Variable | `ADMIN_WEB_PORT` | 선택: 기본 `8080` |
+| Variable | `ADMIN_WEB_PUBLIC_URL` | 선택: 외부 대시보드 URL |
+| Variable | `ADMIN_WEB_GUILD_IDS` | 선택: 웹 어드민 길드 목록 |
+| Variable | `MEM_ANCHOR_BYTES` | 선택: 기본 `2600000000` |
+| Variable | `MEM_ANCHOR_INTERVAL_SEC` | 선택: 기본 `30` |
+
+`OCI_SSH_KNOWN_HOSTS` 는 Actions 실행 중 즉석에서 수집하지 않습니다.
+서버 지문을 미리 확인한 값을 고정해야 중간자 공격으로 다른 서버에 토큰을
+전송하는 일을 막을 수 있습니다.
+
+최초 실행도 별도 수동 설치 없이 가능합니다. 배포 스크립트가 Docker와
+Compose를 설치하고 부팅 시 Docker 자동 시작을 활성화합니다. 단 `OCI_USER` 는
+비밀번호 없이 `sudo apt-get` 과 `sudo systemctl` 을 실행할 수 있어야 합니다
+(기본 Ubuntu OCI 사용자는 해당).
+
+---
+
+## 10. 운영
+
+### 코드 업데이트
+GitHub Actions를 설정했다면 `main` push마다 자동 재배포됩니다. 서버에서
+직접 수동 배포하려면:
+
+```bash
+cd ~/Nothing_bot
+git pull
+docker compose up -d --build
+```
+
+### 재시작 / 중지
+```bash
+docker compose restart
+docker compose down
+```
+`data/` 는 bind mount 이므로 컨테이너를 지워도 설정과 랭킹은 남습니다.
+
+### 로그
+```bash
+docker compose logs -f --tail 100
+```
+`LOG_LEVEL=DEBUG` 로 바꾸고 `docker compose up -d` 하면 상세 게이트웨이 로그까지 출력됩니다. 로그는 10MB × 3 파일로 자동 로테이션됩니다 (`docker-compose.yml`).
+
+### 토큰 회전
+`.env` 의 `DISCORD_TOKEN` 수정 → `docker compose up -d` (재빌드 불필요).
+
+---
+
+## 11. 트러블슈팅
+
+| 증상 | 원인 | 조치 |
+|------|------|------|
+| 인스턴스 생성 시 `Out of host capacity` | 리전 ARM 용량 소진 | 다른 AD/리전으로 재시도. 며칠 걸릴 수 있음 |
+| 인스턴스가 어느 날 사라짐 | 유휴 회수 정책, `mem-anchor` 미기동 상태로 방치됨 | §0/§8 확인 — 그래도 불안하면 PAYG 업그레이드 (§0) |
+| 시작 직후 crash + `RuntimeError: FFmpeg` | 이미지 빌드 실패 | `docker compose build --no-cache` |
+| 웹 어드민에 접속 불가 | `ADMIN_WEB_HOST` 미설정 또는 방화벽 | §6 의 두 방화벽 + `0.0.0.0` 확인 |
+| 재시작 후 guild 설정 사라짐 | `data/` 미생성 또는 볼륨 미마운트 | `mkdir -p data` 후 `docker compose up -d` |
+| 재시작 후 랭킹만 사라짐 | `RANK_PATH` 미설정 (구버전 Dockerfile) | 최신 `Dockerfile` 로 재빌드 |
+| 슬래시 명령이 Discord 에서 안 보임 | 전역 sync 캐시 1시간 | `TEST_GUILD_ID` 추가 후 재시작하면 즉시 반영 |
+| `Privileged Intents` 에러로 게이트웨이 거부 | Developer Portal 의 Intents 미활성 | Server Members + Message Content 둘 다 ON |
+| 음성은 되는데 소리가 안 남 | `libopus0` 누락 | 이미지 재빌드 |
+| 며칠 뒤 인스턴스가 사라짐 (Always Free 유지 중) | `mem-anchor` 컨테이너가 안 뜸 / Cloud Agent 모니터링 플러그인 꺼짐 | `docker ps` 로 `mem-anchor` Up 상태 확인, OCI 콘솔에서 Compute Instance Monitoring 플러그인 Running 확인 |
+| 인스턴스 메모리가 부족해 보임 (`free -h`) | `mem-anchor` 가 2.6GB 점유 중 (의도된 동작) | 문제 없음. 봇 자체 메모리 사용량이 크다면 `docker-compose.yml` 의 `MEM_ANCHOR_BYTES` 를 낮춰 여유 확보 (단 12GB 의 20%=2.4GB 이상은 유지) |
+
+---
+
+## 12. Railway 에서 이전할 때 체크리스트
+
+- [ ] Railway 볼륨의 `/data/config.json` 백업 (`railway ssh` → `cat /data/config.json`)
+- [ ] `rank_stats.json` 은 백업 불가 — 구버전은 볼륨이 아닌 컨테이너 FS 에 기록되어 재배포마다 초기화됐음. 랭킹은 새로 시작됨
+- [ ] `.env` 에 `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` 포함 (Railway Variables 에서 확인)
+- [ ] 웹 어드민을 썼다면 `ADMIN_WEB_HOST=0.0.0.0` 과 `ADMIN_WEB_PUBLIC_URL` 추가 (§6)
+- [ ] `data/config.json` 복원 후 `docker compose up -d --build`
+- [ ] Discord 에서 `/status` 로 길드 설정이 살아있는지 확인
+- [ ] 백업 cron 설정 (§7)

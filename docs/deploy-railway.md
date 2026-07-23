@@ -1,5 +1,8 @@
 # Railway 배포 가이드
 
+> ⚠️ **현재 운영 환경이 아닙니다.** 본 프로젝트는 Oracle Cloud 로 이전했습니다 → [docs/deploy-oracle.md](deploy-oracle.md)
+> 이 문서는 참고용으로 남겨 둡니다. 아래 §2 의 환경변수 표에는 `RANK_PATH` 가 누락되어 있어, 이 설정 그대로 운영하면 재배포마다 랭킹 데이터가 초기화됩니다.
+
 본 문서는 Railway.app 의 무료 크레딧으로 본 Discord TTS 봇을 24시간 운영하는 단계별 절차입니다.
 
 > 예상 비용: Railway Hobby 플랜의 무료 $5/월 크레딧 안에서 일반 운영 가능 (실측 약 $2~3/월).

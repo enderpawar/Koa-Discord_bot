@@ -1,5 +1,6 @@
 # Secrets / runtime state
 .env
+.deploy/
 config.json
 rank_stats.json
 

@@ -12,6 +12,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.deploy/
+data/
+.agents/
 config.json
 *.mp3
 *.tmp

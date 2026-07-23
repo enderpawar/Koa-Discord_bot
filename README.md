@@ -200,9 +200,10 @@ LOG_LEVEL=DEBUG
 
 ## 배포
 
-봇은 Python 프로세스 하나로 동작합니다. 봇이 계속 켜져 있으려면 PC, VM, Railway 같은 실행 환경이 계속 살아 있어야 합니다.
+봇은 Python 프로세스 하나로 동작합니다. Discord 음성 송출은 상시 WebSocket 연결과 UDP 스트리밍을 요구하므로 **서버리스(Lambda, Cloudflare Workers 등)로는 운영할 수 없습니다.** 봇이 계속 켜져 있으려면 PC, VM 같은 실행 환경이 계속 살아 있어야 합니다.
 
-- Railway 배포: [docs/deploy-railway.md](docs/deploy-railway.md)
+- **Oracle Cloud 배포 (현행): [docs/deploy-oracle.md](docs/deploy-oracle.md)**
+- Railway 배포 (구): [docs/deploy-railway.md](docs/deploy-railway.md)
 - 직접 서버 운영: `python bot.py`
 - 개인 PC 운영: PC가 꺼지면 봇도 꺼집니다.
 
