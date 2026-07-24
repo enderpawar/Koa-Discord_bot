@@ -35,6 +35,36 @@ async def test_voice_time_round_trip(rank_path: Path):
     assert stats["total_seconds"] == 365
 
 
+async def test_record_message_debounces_disk_write(rank_path: Path):
+    from cogs.rank_store import RANK_FLUSH_INTERVAL_SEC, RankStore
+
+    store = _store(rank_path)
+    await store.record_message(1, 10, now_ts=1000)
+
+    # 핫 경로는 인메모리만 갱신 — flush 전에는 디스크 기록이 없어야 한다.
+    if RANK_FLUSH_INTERVAL_SEC > 0:
+        assert not rank_path.exists()
+
+    await store.flush()
+    assert rank_path.exists()
+
+    # 새 인스턴스가 디스크에서 읽어 카운트를 복원 (디스크 라운드트립 검증).
+    fresh = RankStore(rank_path)
+    stats = await fresh.user_stats(1, 10)
+    assert stats["message_count"] == 1
+
+
+async def test_flush_is_noop_when_clean(rank_path: Path):
+    store = _store(rank_path)
+    await store.record_message(1, 10, now_ts=1000)
+    await store.flush()
+    mtime_after_first = rank_path.stat().st_mtime_ns
+
+    # clean 상태에서의 flush 는 디스크를 건드리지 않는다.
+    await store.flush()
+    assert rank_path.stat().st_mtime_ns == mtime_after_first
+
+
 async def test_chat_activity_counts_messages_only(rank_path: Path):
     store = _store(rank_path)
     await store.record_message(1, 10, now_ts=1000)

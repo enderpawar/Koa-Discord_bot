@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from cogs.config_store import ConfigStore
-from cogs.rank_store import RankStore
+from cogs.rank_store import RANK_FLUSH_INTERVAL_SEC, RankStore
 from cogs.ui import BRAND_COLOR, notice_embed
 
 log = logging.getLogger(__name__)
@@ -69,10 +69,21 @@ class RankCog(commands.Cog):
         self._startup_synced = False
         self._reset_task.start()
         self._leaderboard_task.start()
+        # 핫 경로(record_message 등)는 인메모리만 갱신하므로, 대기 중 변경을
+        # 주기적으로 디스크에 내려쓴다. interval<=0 이면 store 가 즉시 기록하므로 불필요.
+        if RANK_FLUSH_INTERVAL_SEC > 0:
+            self._flush_loop.start()
 
     async def cog_unload(self) -> None:
         self._reset_task.cancel()
         self._leaderboard_task.cancel()
+        if self._flush_loop.is_running():
+            self._flush_loop.cancel()
+        # 종료 시 마지막 대기 변경을 유실하지 않도록 1회 flush.
+        try:
+            await self.store.flush()
+        except Exception:
+            log.exception("rank flush on unload failed")
 
     @tasks.loop(minutes=1)
     async def _reset_task(self) -> None:
@@ -80,6 +91,17 @@ class RankCog(commands.Cog):
 
     @_reset_task.before_loop
     async def _before_reset_task(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(seconds=max(1.0, RANK_FLUSH_INTERVAL_SEC))
+    async def _flush_loop(self) -> None:
+        try:
+            await self.store.flush()
+        except Exception:
+            log.exception("rank periodic flush failed")
+
+    @_flush_loop.before_loop
+    async def _before_flush_loop(self) -> None:
         await self.bot.wait_until_ready()
 
     @tasks.loop(minutes=1)

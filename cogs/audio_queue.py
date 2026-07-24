@@ -416,10 +416,20 @@ class AudioQueue:
         pcm_audio = bytes(collected)
         if not pcm_audio:
             return
-        self._cache.put(req.text, req.voice, pcm_audio)
-        opus_stream = _mono_pcm_to_opus_stream(pcm_audio)
+        await self._store_synthesis(req.text, req.voice, pcm_audio)
+
+    async def _store_synthesis(self, text: str, voice: str, pcm_audio: bytes) -> None:
+        """합성 결과를 캐시에 적재한다.
+
+        PCM 적재는 이벤트 루프에서 즉시 수행하고, CPU 비용이 큰 Opus 인코딩은
+        `asyncio.to_thread` 로 오프로드한다. 인코딩은 발화 전체 프레임을 도는
+        루프라, 이벤트 루프에서 돌리면 그동안 다른 guild 의 오디오 송출 예약과
+        네트워크 콜백이 밀린다.
+        """
+        self._cache.put(text, voice, pcm_audio)
+        opus_stream = await asyncio.to_thread(_mono_pcm_to_opus_stream, pcm_audio)
         if opus_stream is not None:
-            self._opus_cache.put(req.text, req.voice, opus_stream)
+            self._opus_cache.put(text, voice, opus_stream)
 
     async def _ensure_voice(
         self, guild: discord.Guild, channel_id: int
@@ -530,10 +540,7 @@ class AudioQueue:
                 if should_cache and len(collected) <= CACHE_MAX_ITEM_BYTES:
                     pcm_audio = bytes(collected)
                     cached_bytes = len(pcm_audio)
-                    self._cache.put(text, voice, pcm_audio)
-                    opus_stream = _mono_pcm_to_opus_stream(pcm_audio)
-                    if opus_stream is not None:
-                        self._opus_cache.put(text, voice, opus_stream)
+                    await self._store_synthesis(text, voice, pcm_audio)
             except Exception:
                 source.abort()
                 raise

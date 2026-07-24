@@ -25,6 +25,12 @@ CHAT_WEIGHT = 30
 HISTORY_TOP_N = 10
 MAX_HISTORY_WEEKS = 12
 
+# 채팅/보이스 이벤트마다 전체 JSON 을 원자적 재기록하면 메시지당 write 가
+# 선형으로 늘어나 (특히 IOPS 가 제한된 배포 환경에서) 병목이 된다. 핫 경로는
+# 인메모리만 갱신하고 _dirty 로 표시한 뒤, 소유자(RankCog)가 이 주기로 flush 한다.
+# 0 이하로 두면 기존처럼 매 변경 즉시 기록 (durability 우선) 하도록 opt-out.
+RANK_FLUSH_INTERVAL_SEC = float(os.getenv("RANK_FLUSH_INTERVAL_SEC", "5"))
+
 
 def activity_score(
     voice_seconds: int,
@@ -65,6 +71,8 @@ class RankStore:
         self._path = Path(path) if path is not None else _default_rank_path()
         self._lock = asyncio.Lock()
         self._data: dict[str, dict[str, Any]] = {}
+        # 인메모리 변경이 아직 디스크에 반영되지 않았는지 여부. flush() 가 소비한다.
+        self._dirty = False
         self._load_from_disk()
 
     def _load_from_disk(self) -> None:
@@ -116,6 +124,7 @@ class RankStore:
                     changed = True
             if changed:
                 await self._save_unlocked()
+                self._dirty = False
                 log.info("weekly rank stats reset: anchor=%s", anchor)
             return changed
 
@@ -174,7 +183,7 @@ class RankStore:
         async with self._lock:
             user = self._user_unlocked(guild_id, user_id)
             user["message_count"] = int(user.get("message_count", 0)) + 1
-            await self._save_unlocked()
+            await self._touch_unlocked()
 
     async def start_voice(
         self,
@@ -189,7 +198,7 @@ class RankStore:
             user = self._user_unlocked(guild_id, user_id)
             user["voice_joined_at"] = now_value
             user["voice_channel_id"] = channel_id
-            await self._save_unlocked()
+            await self._touch_unlocked()
 
     async def stop_voice(
         self, guild_id: int, user_id: int, *, now_ts: float | None = None
@@ -203,7 +212,7 @@ class RankStore:
             if isinstance(joined_at, (int, float)):
                 added = max(0, int(now_value - float(joined_at)))
                 user["voice_seconds"] = int(user.get("voice_seconds", 0)) + added
-            await self._save_unlocked()
+            await self._touch_unlocked()
             return added
 
     async def leaderboard(
@@ -291,6 +300,7 @@ class RankStore:
             guild["week_anchor"] = weekly_reset_anchor()
             guild["users"] = active_users
             await self._save_unlocked()
+            self._dirty = False
             return {"cleared_users": cleared_users, "active_users": len(active_users)}
 
     def _guild_unlocked(self, guild_id: int) -> dict[str, Any]:
@@ -316,6 +326,28 @@ class RankStore:
         if isinstance(joined_at, (int, float)):
             voice_seconds += max(0, int(now_ts - float(joined_at)))
         return voice_seconds
+
+    async def _touch_unlocked(self) -> None:
+        """핫 경로 변경 표시. 디스크 기록은 주기적 flush() 로 미룬다.
+
+        `RANK_FLUSH_INTERVAL_SEC <= 0` 이면 debounce 를 끄고 기존처럼 즉시 기록해
+        durability 를 우선한다 (변경 없이 이전 동작으로 롤백하는 escape hatch).
+        """
+        self._dirty = True
+        if RANK_FLUSH_INTERVAL_SEC <= 0:
+            await self._save_unlocked()
+            self._dirty = False
+
+    async def flush(self) -> None:
+        """대기 중인 인메모리 변경을 디스크에 반영. clean 상태면 no-op.
+
+        소유자(RankCog)가 주기적으로, 그리고 종료 시 1회 호출한다.
+        """
+        async with self._lock:
+            if not self._dirty:
+                return
+            await self._save_unlocked()
+            self._dirty = False
 
     async def _save_unlocked(self) -> None:
         snapshot = json.dumps(self._data, ensure_ascii=False, indent=2)
