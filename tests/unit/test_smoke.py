@@ -5,9 +5,12 @@ Phase 1 — Foundation smoke test
 """
 from __future__ import annotations
 import importlib.util
+import runpy
 import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import discord
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,3 +34,28 @@ def test_bot_module_importable(monkeypatch) -> None:
     assert spec is not None and spec.loader is not None
     # 실행은 하지 않고 spec만 검증 (bot.run 호출 회피)
     # 실제 실행 검증은 통합 테스트로
+
+
+def test_bot_activity_pool_contains_cute_game_messages(monkeypatch) -> None:
+    monkeypatch.setenv("DISCORD_TOKEN", "dummy_for_import")
+    namespace = runpy.run_path(str(BOT_PY), run_name="bot_test")
+    names = namespace["_activity_names"](
+        datetime(2026, 7, 25, 2, tzinfo=timezone(timedelta(hours=9)))
+    )
+
+    assert "🛋️ 뒹굴거리는 중" in names
+    assert "🥈 실버 승급전 중!!" in names
+    assert "🌙 새벽반과 밤샘 큐 돌리는 중" in names
+    assert "🎉 주말 풀파티 즐기는 중" in names
+
+
+def test_bot_activity_does_not_immediately_repeat(monkeypatch) -> None:
+    monkeypatch.setenv("DISCORD_TOKEN", "dummy_for_import")
+    namespace = runpy.run_path(str(BOT_PY), run_name="bot_test")
+    activity = namespace["_build_activity"](
+        previous="🛋️ 뒹굴거리는 중",
+        chooser=lambda choices: choices[0],
+    )
+
+    assert isinstance(activity, discord.Game)
+    assert activity.name != "🛋️ 뒹굴거리는 중"

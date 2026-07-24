@@ -193,7 +193,14 @@ class ConfirmStopView(discord.ui.View):
 
 
 class MCControlCog(commands.Cog):
-    mc = app_commands.Group(name="mc", description="마인크래프트 서버 전원 제어")
+    # Discord에 `default_member_permissions: null`로 등록한다. 빈 Permissions
+    # 객체는 값이 0이어서 오히려 관리자만 사용할 수 있으므로 쓰면 안 된다.
+    # on/off의 권한 경계는 Discord 역할이 아니라 아래 PasswordModal이다.
+    mc = app_commands.Group(
+        name="mc",
+        description="서버 구성원 누구나 암호로 사용하는 마인크래프트 전원 제어",
+        default_permissions=None,
+    )
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot

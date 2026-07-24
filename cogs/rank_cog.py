@@ -16,7 +16,7 @@ from cogs.ui import BRAND_COLOR, notice_embed
 log = logging.getLogger(__name__)
 
 KST = ZoneInfo("Asia/Seoul")
-DEFAULT_LEADERBOARD_POST_TIME = "23:59"
+DEFAULT_LEADERBOARD_POST_TIME = "00:00"
 
 
 def _format_duration(seconds: int) -> str:
@@ -35,6 +35,25 @@ def _format_score(score: int) -> str:
 
 def _rank_icon(rank: int) -> str:
     return {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"`{rank}`")
+
+
+def _leaderboard_post_is_due(
+    now: datetime,
+    *,
+    post_time: str,
+    last_post_date: str | None,
+) -> bool:
+    """설정 시각 이후 오늘 아직 발송하지 않았으면 True."""
+    try:
+        hour, minute = (int(part) for part in post_time.split(":", 1))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return False
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+    today = now.date().isoformat()
+    scheduled = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return last_post_date != today and now >= scheduled
 
 
 def _rank_stats_embed(display_name: str, stats: dict[str, int]) -> discord.Embed:
@@ -107,48 +126,63 @@ class RankCog(commands.Cog):
     @tasks.loop(minutes=1)
     async def _leaderboard_task(self) -> None:
         now = datetime.now(KST)
-        post_time = now.strftime("%H:%M")
-        today = now.date().isoformat()
         for guild in self.bot.guilds:
-            cfg = await self.config.get(guild.id)
-            if not cfg.get("leaderboard_daily_enabled", False):
-                continue
-            if cfg.get("leaderboard_post_time", DEFAULT_LEADERBOARD_POST_TIME) != post_time:
-                continue
-            if cfg.get("leaderboard_last_post_date") == today:
-                continue
-
-            channel_id = cfg.get("leaderboard_channel_id")
-            channel = guild.get_channel(channel_id) if channel_id else None
-            if not isinstance(channel, discord.TextChannel):
-                log.warning(
-                    "leaderboard channel missing: guild_id=%s channel_id=%s",
-                    guild.id,
-                    channel_id,
-                )
-                continue
-
-            await self.store.ensure_week()
-            embed = await self._leaderboard_embed(guild, limit=10)
-            if embed is None:
-                continue
             try:
-                await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-            except discord.Forbidden:
-                log.warning(
-                    "leaderboard channel forbidden: guild_id=%s channel_id=%s",
-                    guild.id,
-                    channel.id,
-                )
-                continue
-            except discord.HTTPException:
-                log.exception(
-                    "leaderboard scheduled post failed: guild_id=%s channel_id=%s",
-                    guild.id,
-                    channel.id,
-                )
-                continue
-            await self.config.set(guild.id, leaderboard_last_post_date=today)
+                await self._post_scheduled_leaderboard(guild, now)
+            except Exception:
+                log.exception("leaderboard scheduler failed: guild_id=%s", guild.id)
+
+    async def _post_scheduled_leaderboard(
+        self,
+        guild: discord.Guild,
+        now: datetime,
+    ) -> None:
+        cfg = await self.config.get(guild.id)
+        if not cfg.get("leaderboard_daily_enabled", False):
+            return
+
+        post_time = cfg.get("leaderboard_post_time") or DEFAULT_LEADERBOARD_POST_TIME
+        if not _leaderboard_post_is_due(
+            now,
+            post_time=post_time,
+            last_post_date=cfg.get("leaderboard_last_post_date"),
+        ):
+            return
+
+        channel_id = cfg.get("leaderboard_channel_id")
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if not isinstance(channel, discord.TextChannel):
+            log.warning(
+                "leaderboard channel missing: guild_id=%s channel_id=%s",
+                guild.id,
+                channel_id,
+            )
+            return
+
+        await self.store.ensure_week()
+        embed = await self._leaderboard_embed(guild, limit=10)
+        if embed is None:
+            return
+        try:
+            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        except discord.Forbidden:
+            log.warning(
+                "leaderboard channel forbidden: guild_id=%s channel_id=%s",
+                guild.id,
+                channel.id,
+            )
+            return
+        except discord.HTTPException:
+            log.exception(
+                "leaderboard scheduled post failed: guild_id=%s channel_id=%s",
+                guild.id,
+                channel.id,
+            )
+            return
+        await self.config.set(
+            guild.id,
+            leaderboard_last_post_date=now.date().isoformat(),
+        )
 
     @_leaderboard_task.before_loop
     async def _before_leaderboard_task(self) -> None:

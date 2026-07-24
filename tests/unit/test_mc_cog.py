@@ -76,6 +76,19 @@ def test_source_contains_no_literal_password():
     assert '"1224"' not in src and "'1224'" not in src
 
 
+def test_power_commands_require_no_discord_member_permissions():
+    """on/off는 Discord 역할이 아니라 암호만으로 사용 권한을 판정한다."""
+    group = mc_cog.MCControlCog.mc
+    commands = {command.name: command for command in group.commands}
+
+    # None은 Discord API의 default_member_permissions=null이다.
+    # Permissions.none()(값 0)은 관리자 외 전원 차단이므로 허용하지 않는다.
+    assert group.default_permissions is None
+    for name in ("on", "off"):
+        assert commands[name].default_permissions is None
+        assert commands[name].checks == []
+
+
 # ---- 주소 표기 -------------------------------------------------------------
 
 

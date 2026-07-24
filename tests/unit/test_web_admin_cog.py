@@ -15,7 +15,7 @@ from cogs.web_admin_cog import (
 
 def test_clean_time_accepts_hh_mm() -> None:
     assert _clean_time("23:59") == "23:59"
-    assert _clean_time(None) == "23:59"
+    assert _clean_time(None) == "00:00"
 
 
 def test_clean_time_rejects_invalid_value() -> None:
