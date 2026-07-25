@@ -11,7 +11,7 @@ import logging
 import os
 import queue
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from contextlib import suppress
 from dataclasses import dataclass, field
 from io import BufferedReader
@@ -33,11 +33,33 @@ IDLE_TIMEOUT_SEC = float(os.getenv("TTS_IDLE_DISCONNECT_SEC", "0"))
 MONO_PCM_FRAME_BYTES = 1920  # 20ms * 48kHz * 16-bit * mono
 STEREO_PCM_FRAME_BYTES = 3840  # 20ms * 48kHz * 16-bit * stereo
 PRE_ROLL_MS = int(os.getenv("TTS_PRE_ROLL_MS", "120"))
+TRIM_SILENCE = os.getenv("TTS_TRIM_SILENCE", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+SILENCE_RMS_THRESHOLD = max(
+    0,
+    int(os.getenv("TTS_SILENCE_RMS_THRESHOLD", "40")),
+)
+SILENCE_LEADING_PAD_MS = max(
+    0,
+    int(os.getenv("TTS_SILENCE_LEADING_PAD_MS", "20")),
+)
+SILENCE_TRAILING_PAD_MS = max(
+    0,
+    int(os.getenv("TTS_SILENCE_TRAILING_PAD_MS", "160")),
+)
 CACHE_MAX_ENTRIES = int(os.getenv("TTS_CACHE_MAX_ENTRIES", "256"))
 CACHE_MAX_BYTES = int(os.getenv("TTS_CACHE_MAX_BYTES", str(32 * 1024 * 1024)))
 CACHE_MAX_ITEM_BYTES = int(os.getenv("TTS_CACHE_MAX_ITEM_BYTES", str(512 * 1024)))
 OPUS_CACHE_MAX_BYTES = int(os.getenv("TTS_OPUS_CACHE_MAX_BYTES", str(16 * 1024 * 1024)))
 MAX_QUEUE_SIZE = int(os.getenv("TTS_MAX_QUEUE_SIZE", "20"))
+MAX_QUEUE_AGE_SEC = max(
+    0.0,
+    float(os.getenv("TTS_MAX_QUEUE_AGE_SEC", "3")),
+)
 VOICE_CONNECT_TIMEOUT_SEC = float(os.getenv("TTS_VOICE_CONNECT_TIMEOUT_SEC", "10"))
 VOICE_RECONNECT_GRACE_SEC = float(os.getenv("TTS_VOICE_RECONNECT_GRACE_SEC", "8"))
 VOICE_CONNECT_ATTEMPTS = max(1, int(os.getenv("TTS_VOICE_CONNECT_ATTEMPTS", "3")))
@@ -159,6 +181,158 @@ def _mono_frame_to_stereo(mono: bytes) -> bytes:
     return stereo
 
 
+def _select_pcm_rms():
+    try:
+        import audioop
+
+        def _via_audioop(pcm: bytes) -> int:
+            return audioop.rms(pcm, 2) if len(pcm) >= 2 else 0
+
+        return _via_audioop
+    except ImportError:
+        pass
+
+    def _pure_python(pcm: bytes) -> int:
+        sample_count = len(pcm) // 2
+        if sample_count <= 0:
+            return 0
+        total = 0
+        for offset in range(0, sample_count * 2, 2):
+            sample = int.from_bytes(
+                pcm[offset : offset + 2],
+                "little",
+                signed=True,
+            )
+            total += sample * sample
+        return int((total / sample_count) ** 0.5)
+
+    return _pure_python
+
+
+_pcm_rms = _select_pcm_rms()
+
+
+def _pcm_frame_is_active(
+    frame: bytes | memoryview,
+    *,
+    threshold: int = SILENCE_RMS_THRESHOLD,
+) -> bool:
+    even_length = len(frame) - (len(frame) % 2)
+    return even_length > 0 and _pcm_rms(frame[:even_length]) >= threshold
+
+
+class PCMActivityTracker:
+    """Track speech bounds across arbitrarily split mono PCM chunks.
+
+    Only a partial 20ms frame is retained, so long messages do not add memory
+    pressure.  Internal pauses are preserved because trimming is based on the
+    first and final active frame after the complete stream has arrived.
+    """
+
+    def __init__(
+        self,
+        *,
+        threshold: int = SILENCE_RMS_THRESHOLD,
+        leading_pad_ms: int = SILENCE_LEADING_PAD_MS,
+        trailing_pad_ms: int = SILENCE_TRAILING_PAD_MS,
+    ) -> None:
+        self._threshold = max(0, threshold)
+        self._leading_pad_bytes = max(0, leading_pad_ms // 20) * MONO_PCM_FRAME_BYTES
+        self._trailing_pad_bytes = (
+            max(0, trailing_pad_ms // 20) * MONO_PCM_FRAME_BYTES
+        )
+        self._partial = bytearray()
+        self._processed_bytes = 0
+        self._total_bytes = 0
+        self._first_active_start: int | None = None
+        self._last_active_end: int | None = None
+        self._finalized = False
+
+    def feed(self, chunk: bytes) -> None:
+        if self._finalized:
+            raise RuntimeError("cannot feed a finalized PCM activity tracker")
+        if not chunk:
+            return
+        self._total_bytes += len(chunk)
+        view = memoryview(chunk)
+        offset = 0
+
+        if self._partial:
+            needed = MONO_PCM_FRAME_BYTES - len(self._partial)
+            take = min(needed, len(view))
+            self._partial.extend(view[:take])
+            offset += take
+            if len(self._partial) == MONO_PCM_FRAME_BYTES:
+                frame = bytes(self._partial)
+                self._partial.clear()
+                self._record_frame(
+                    frame,
+                    start=self._processed_bytes,
+                    actual_length=MONO_PCM_FRAME_BYTES,
+                )
+                self._processed_bytes += MONO_PCM_FRAME_BYTES
+
+        while offset + MONO_PCM_FRAME_BYTES <= len(view):
+            frame = view[offset : offset + MONO_PCM_FRAME_BYTES]
+            self._record_frame(
+                frame,
+                start=self._processed_bytes,
+                actual_length=MONO_PCM_FRAME_BYTES,
+            )
+            self._processed_bytes += MONO_PCM_FRAME_BYTES
+            offset += MONO_PCM_FRAME_BYTES
+
+        if offset < len(view):
+            self._partial.extend(view[offset:])
+
+    def _record_frame(
+        self,
+        frame: bytes | memoryview,
+        *,
+        start: int,
+        actual_length: int,
+    ) -> None:
+        if not _pcm_frame_is_active(frame, threshold=self._threshold):
+            return
+        if self._first_active_start is None:
+            self._first_active_start = start
+        self._last_active_end = start + actual_length
+
+    def finish(self) -> tuple[int, int]:
+        if not self._finalized:
+            if self._partial:
+                actual_length = len(self._partial) - (len(self._partial) % 2)
+                if actual_length > 0:
+                    frame = bytes(self._partial[:actual_length])
+                    self._record_frame(
+                        frame,
+                        start=self._processed_bytes,
+                        actual_length=actual_length,
+                    )
+                    self._processed_bytes += actual_length
+            self._partial.clear()
+            self._total_bytes -= self._total_bytes % 2
+            self._finalized = True
+
+        if self._first_active_start is None or self._last_active_end is None:
+            return 0, 0
+        start = max(0, self._first_active_start - self._leading_pad_bytes)
+        end = min(
+            self._total_bytes,
+            self._last_active_end + self._trailing_pad_bytes,
+        )
+        return start, max(start, end)
+
+
+def _trim_pcm_silence(audio: bytes) -> bytes:
+    if not TRIM_SILENCE or not audio:
+        return audio
+    tracker = PCMActivityTracker()
+    tracker.feed(audio)
+    start, end = tracker.finish()
+    return audio[start:end]
+
+
 class PCMCache:
     """Small LRU cache for completed syntheses."""
 
@@ -224,6 +398,13 @@ def _mono_pcm_to_opus_stream(audio: bytes) -> bytes | None:
     return bytes(encoded_frames)
 
 
+def _prepare_cached_audio(audio: bytes) -> tuple[bytes, bytes | None]:
+    trimmed = _trim_pcm_silence(audio)
+    if not trimmed:
+        return b"", None
+    return trimmed, _mono_pcm_to_opus_stream(trimmed)
+
+
 class StreamingMonoPCMToStereo(discord.AudioSource):
     """Thread-safe streaming source for Azure mono PCM chunks.
 
@@ -234,7 +415,13 @@ class StreamingMonoPCMToStereo(discord.AudioSource):
     """
 
     def __init__(
-        self, *, read_timeout_sec: float = 15.0, pre_roll_ms: int = PRE_ROLL_MS
+        self,
+        *,
+        read_timeout_sec: float = 15.0,
+        pre_roll_ms: int = PRE_ROLL_MS,
+        trim_silence: bool = TRIM_SILENCE,
+        silence_threshold: int = SILENCE_RMS_THRESHOLD,
+        leading_pad_ms: int = SILENCE_LEADING_PAD_MS,
     ) -> None:
         self._chunks: queue.Queue[bytes | object] = queue.Queue()
         self._current_chunk: memoryview | None = None
@@ -246,6 +433,17 @@ class StreamingMonoPCMToStereo(discord.AudioSource):
         self._finished = False
         self._aborted = False
         self._closed = False
+        self._trim_silence = trim_silence
+        self._silence_threshold = max(0, silence_threshold)
+        self._leading_pad_frames = max(0, leading_pad_ms // 20)
+        self._leading_frames: deque[bytes] = deque(
+            maxlen=self._leading_pad_frames or None
+        )
+        self._ready_frames: deque[bytes] = deque()
+        self._speech_started = not trim_silence
+        self._mono_bytes_consumed = 0
+        self._end_limit_bytes: int | None = None
+        self._trimmed_end_reached = False
 
     def feed_mono(self, chunk: bytes) -> None:
         if self._closed or not chunk:
@@ -253,9 +451,11 @@ class StreamingMonoPCMToStereo(discord.AudioSource):
         self._last_feed_at = time.monotonic()
         self._chunks.put(bytes(chunk))
 
-    def finish(self) -> None:
+    def finish(self, *, end_limit_bytes: int | None = None) -> None:
         if self._closed:
             return
+        if end_limit_bytes is not None:
+            self._end_limit_bytes = max(0, end_limit_bytes)
         self._last_feed_at = time.monotonic()
         self._chunks.put(_STREAM_END)
 
@@ -309,13 +509,52 @@ class StreamingMonoPCMToStereo(discord.AudioSource):
         return None
 
     def read(self) -> bytes:
-        if self._closed or self._aborted:
+        if self._closed or self._aborted or self._trimmed_end_reached:
             return b""
 
-        mono = self._take_mono_frame()
-        if mono is not None:
-            self._pre_roll_frames = 0
-            return _mono_frame_to_stereo(mono)
+        while True:
+            if self._ready_frames:
+                mono = self._ready_frames.popleft()
+                self._pre_roll_frames = 0
+                return _mono_frame_to_stereo(mono)
+
+            if (
+                self._end_limit_bytes is not None
+                and self._mono_bytes_consumed >= self._end_limit_bytes
+            ):
+                self._trimmed_end_reached = True
+                return b""
+
+            mono = self._take_mono_frame()
+            if mono is None:
+                break
+
+            frame_start = self._mono_bytes_consumed
+            self._mono_bytes_consumed += MONO_PCM_FRAME_BYTES
+            if (
+                self._end_limit_bytes is not None
+                and frame_start >= self._end_limit_bytes
+            ):
+                self._trimmed_end_reached = True
+                return b""
+
+            if self._speech_started:
+                self._pre_roll_frames = 0
+                return _mono_frame_to_stereo(mono)
+
+            if not _pcm_frame_is_active(
+                mono,
+                threshold=self._silence_threshold,
+            ):
+                if self._leading_pad_frames > 0:
+                    self._leading_frames.append(mono)
+                continue
+
+            self._speech_started = True
+            self._ready_frames.extend(self._leading_frames)
+            self._leading_frames.clear()
+            self._ready_frames.append(mono)
+
         if self._finished:
             return b""
 
@@ -335,6 +574,8 @@ class StreamingMonoPCMToStereo(discord.AudioSource):
         self._current_chunk = None
         self._current_offset = 0
         self._partial_frame.clear()
+        self._leading_frames.clear()
+        self._ready_frames.clear()
 
 
 class CachedOpusSource(discord.AudioSource):
@@ -444,6 +685,21 @@ class AudioQueue:
                         return
                     continue
 
+                queued_ms = (time.perf_counter() - req.enqueued_at) * 1000
+                if (
+                    MAX_QUEUE_AGE_SEC > 0
+                    and queued_ms > MAX_QUEUE_AGE_SEC * 1000
+                ):
+                    queue.task_done()
+                    log.warning(
+                        "audio queue stale, dropped: guild_id=%s "
+                        "queued=%.1fms text=%r",
+                        guild.id,
+                        queued_ms,
+                        req.text[:40],
+                    )
+                    continue
+
                 # 이전 iter 에서 본 req 에 대한 prefetch 가 있으면 캐시 적재가 끝날 때까지 대기.
                 # _play_streaming 이 이후 캐시 히트로 즉시 재생을 시작할 수 있다.
                 if prefetch_task is not None:
@@ -460,7 +716,6 @@ class AudioQueue:
                     )
 
                 try:
-                    queued_ms = (time.perf_counter() - req.enqueued_at) * 1000
                     for playback_attempt in range(1, VOICE_PLAYBACK_ATTEMPTS + 1):
                         trace_start = time.perf_counter()
                         vc = await self._ensure_voice(guild, req.voice_channel_id)
@@ -526,18 +781,21 @@ class AudioQueue:
             return
         await self._store_synthesis(req.text, req.voice, pcm_audio)
 
-    async def _store_synthesis(self, text: str, voice: str, pcm_audio: bytes) -> None:
+    async def _store_synthesis(self, text: str, voice: str, pcm_audio: bytes) -> int:
         """합성 결과를 캐시에 적재한다.
 
-        PCM 적재는 이벤트 루프에서 즉시 수행하고, CPU 비용이 큰 Opus 인코딩은
-        `asyncio.to_thread` 로 오프로드한다. 인코딩은 발화 전체 프레임을 도는
-        루프라, 이벤트 루프에서 돌리면 그동안 다른 guild 의 오디오 송출 예약과
-        네트워크 콜백이 밀린다.
+        무음 트리밍과 Opus 인코딩은 발화 전체 프레임을 도는 CPU 작업이므로 함께
+        `asyncio.to_thread` 로 오프로드한다. 라이브 스트림도 같은 트리밍 경계를
+        사용하므로 최초 재생과 이후 캐시 재생 길이가 일치한다.
         """
-        self._cache.put(text, voice, pcm_audio)
-        opus_stream = await asyncio.to_thread(_mono_pcm_to_opus_stream, pcm_audio)
+        trimmed_pcm, opus_stream = await asyncio.to_thread(
+            _prepare_cached_audio,
+            pcm_audio,
+        )
+        self._cache.put(text, voice, trimmed_pcm)
         if opus_stream is not None:
             self._opus_cache.put(text, voice, opus_stream)
+        return len(trimmed_pcm)
 
     async def _ensure_voice(
         self, guild: discord.Guild, channel_id: int
@@ -892,33 +1150,47 @@ class AudioQueue:
         cache_kind = "pcm" if cached_audio is not None else "miss"
         play_called_at = 0.0
         first_chunk_at: float | None = None
-        cached_bytes = len(cached_audio) if cached_audio is not None else 0
+        raw_bytes = len(cached_audio) if cached_audio is not None else 0
+        played_pcm_bytes = len(cached_audio) if cached_audio is not None else 0
 
         async def _produce() -> None:
-            nonlocal first_chunk_at, cached_bytes
+            nonlocal first_chunk_at, raw_bytes, played_pcm_bytes
             if cached_audio is not None:
                 first_chunk_at = time.perf_counter()
                 source.feed_mono(cached_audio)
-                source.finish()
+                source.finish(end_limit_bytes=len(cached_audio))
                 return
 
             collected = bytearray()
             should_cache = True
+            activity = PCMActivityTracker() if TRIM_SILENCE else None
             try:
                 async for chunk in stream_synthesize(text, voice):
                     if first_chunk_at is None:
                         first_chunk_at = time.perf_counter()
+                    raw_bytes += len(chunk)
+                    if activity is not None:
+                        activity.feed(chunk)
                     source.feed_mono(chunk)
                     if should_cache and len(collected) + len(chunk) <= CACHE_MAX_ITEM_BYTES:
                         collected.extend(chunk)
                     else:
                         should_cache = False
                         collected.clear()
-                source.finish()
+                if activity is not None:
+                    trim_start, trim_end = activity.finish()
+                    played_pcm_bytes = max(0, trim_end - trim_start)
+                    source.finish(end_limit_bytes=trim_end)
+                else:
+                    played_pcm_bytes = raw_bytes
+                    source.finish()
                 if should_cache and len(collected) <= CACHE_MAX_ITEM_BYTES:
                     pcm_audio = bytes(collected)
-                    cached_bytes = len(pcm_audio)
-                    await self._store_synthesis(text, voice, pcm_audio)
+                    played_pcm_bytes = await self._store_synthesis(
+                        text,
+                        voice,
+                        pcm_audio,
+                    )
             except Exception:
                 source.abort()
                 raise
@@ -962,14 +1234,16 @@ class AudioQueue:
             raise
         log.info(
             "tts latency: guild_id=%s cache=%s queued=%.1fms ensure=%.1fms "
-            "play_start=%.1fms first_chunk=%.1fms bytes=%d",
+            "play_start=%.1fms first_chunk=%.1fms raw_bytes=%d "
+            "played_pcm_bytes=%d",
             guild_id,
             cache_kind,
             queued_ms,
             ensure_ms,
             (play_called_at - trace_start) * 1000,
             ((first_chunk_at - trace_start) * 1000) if first_chunk_at is not None else -1.0,
-            cached_bytes,
+            raw_bytes,
+            played_pcm_bytes,
         )
 
     async def _disconnect(self, guild: discord.Guild, *, reason: str = "idle") -> None:

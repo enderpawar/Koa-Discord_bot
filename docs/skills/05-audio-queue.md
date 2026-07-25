@@ -72,6 +72,27 @@ blocking wait 하면 안 된다.
 이 구조는 긴 청크의 프레임 변환이 asyncio 이벤트 루프를 점유하는 문제와, 청크
 언더플로 때 Discord 음성 연결에 `!` 경고가 나타나는 문제를 함께 방지한다.
 
+## 연속 메시지 지연 상한
+
+Azure PCM은 짧은 발화에도 1초가 넘는 후행 무음을 붙일 수 있다. 이를 그대로
+직렬 재생하면 합성이 캐시되어도 메시지마다 무음 길이만큼 큐가 증가한다.
+
+- 20ms mono PCM 프레임의 RMS로 첫·마지막 실제 발화 위치를 추적한다.
+- 내부 쉼은 그대로 보존하고, 앞 20ms·뒤 160ms의 자연스러운 여백만 남긴다.
+- 라이브 스트림에는 마지막 발화 경계를 전달해 첫 재생부터 후행 무음을 건너뛴다.
+- PCM과 Opus 캐시도 같은 경계로 잘라 최초/반복 재생 길이를 일치시킨다.
+- 청크 경계와 무관하게 동작하며 tracker는 최대 한 프레임만 보관한다.
+- `TTS_MAX_QUEUE_AGE_SEC`(기본 3초)를 넘은 오래된 요청은 폐기해 입력 속도가
+  발화 속도를 계속 초과하더라도 지연이 무한히 증가하지 않게 한다.
+
+조정 환경변수:
+
+- `TTS_TRIM_SILENCE=1`
+- `TTS_SILENCE_RMS_THRESHOLD=40`
+- `TTS_SILENCE_LEADING_PAD_MS=20`
+- `TTS_SILENCE_TRAILING_PAD_MS=160`
+- `TTS_MAX_QUEUE_AGE_SEC=3`
+
 ## `_ensure_voice` — 연결/이동
 ```python
 async def _ensure_voice(self, guild, channel_id) -> discord.VoiceClient:
@@ -97,5 +118,7 @@ async def _ensure_voice(self, guild, channel_id) -> discord.VoiceClient:
 ## Validation
 - 봇이 채널 입장 후 enqueue 3건 → 순서대로 재생되며 겹치지 않음
 - 긴 문장 재생 중 Azure 청크가 잠시 비어도 무음 RTP가 이어지고 연결 경고가 없음
+- 짧은 문장 뒤 1초 이상의 Azure 무음이 제거되고 내부 쉼·조용한 어미는 보존
+- 입력 폭주로 3초 이상 밀린 문장은 폐기되어 최신 메시지 지연이 계속 증가하지 않음
 - 5분 이상 idle 후에도 연결 유지 → 다음 문장이 cold start 없이 재생
 - 합성 실패 시뮬레이션 → worker는 다음 요청 정상 처리

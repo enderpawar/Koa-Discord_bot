@@ -323,10 +323,11 @@ async def test_wait_for_playback_stops_on_voice_disconnect():
 
 
 async def test_play_streaming_uses_pcm_cache():
-    from cogs.audio_queue import AudioQueue
+    from cogs.audio_queue import AudioQueue, MONO_PCM_FRAME_BYTES
 
     q = AudioQueue()
-    q._cache.put("cached", "voice", b"\x01\x02")
+    active_frame = b"\x00\x10" * (MONO_PCM_FRAME_BYTES // 2)
+    q._cache.put("cached", "voice", active_frame)
     frames: list[bytes] = []
     vc = MagicMock()
 
@@ -349,7 +350,7 @@ async def test_play_streaming_uses_pcm_cache():
     with patch("cogs.audio_queue.stream_synthesize", fail_stream):
         await q._play_streaming(vc, "cached", "voice")
 
-    assert any(frame[:4] == b"\x01\x02\x01\x02" for frame in frames)
+    assert any(frame[:4] == b"\x00\x10\x00\x10" for frame in frames)
 
 
 async def test_play_streaming_uses_opus_cache():
@@ -374,6 +375,43 @@ async def test_play_streaming_uses_opus_cache():
         await q._play_streaming(vc, "cached", "voice")
 
     assert frames == [b"abc"]
+
+
+async def test_play_streaming_cache_miss_stops_at_trailing_speech_boundary():
+    from cogs.audio_queue import AudioQueue, MONO_PCM_FRAME_BYTES
+
+    q = AudioQueue()
+    audio = _mono_frame(0) * 5 + _mono_frame(2000) * 2 + _mono_frame(0) * 64
+    frames: list[bytes] = []
+    vc = MagicMock()
+
+    def fake_play(source, after):
+        def _drain():
+            while True:
+                frame = source.read()
+                if not frame:
+                    break
+                frames.append(frame)
+                time.sleep(0.001)
+            after(None)
+
+        threading.Thread(target=_drain, daemon=True).start()
+
+    async def fake_stream(*_a, **_kw):
+        yield audio
+
+    vc.play = MagicMock(side_effect=fake_play)
+    with patch("cogs.audio_queue.stream_synthesize", fake_stream), \
+         patch.object(
+             q,
+             "_store_synthesis",
+             new=AsyncMock(return_value=11 * MONO_PCM_FRAME_BYTES),
+         ):
+        await q._play_streaming(vc, "live", "voice")
+
+    # At most one initial RTP underflow frame plus the 11 trimmed PCM frames.
+    # The 71-frame raw Azure response must never be drained in full.
+    assert 11 <= len(frames) <= 12
 
 
 def test_cached_opus_source_reads_length_prefixed_frames():
@@ -408,7 +446,11 @@ def test_mono_pcm_to_stereo_source(tmp_path: Path):
 def test_streaming_mono_pcm_to_stereo_source():
     from cogs.audio_queue import StreamingMonoPCMToStereo
 
-    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1, pre_roll_ms=0)
+    source = StreamingMonoPCMToStereo(
+        read_timeout_sec=0.1,
+        pre_roll_ms=0,
+        trim_silence=False,
+    )
     try:
         source.feed_mono(b"\x01\x02\x03\x04")
         source.finish()
@@ -424,7 +466,11 @@ def test_streaming_mono_pcm_to_stereo_source():
 def test_streaming_underflow_returns_silence_without_blocking():
     from cogs.audio_queue import STEREO_PCM_FRAME_BYTES, StreamingMonoPCMToStereo
 
-    source = StreamingMonoPCMToStereo(read_timeout_sec=1.0, pre_roll_ms=0)
+    source = StreamingMonoPCMToStereo(
+        read_timeout_sec=1.0,
+        pre_roll_ms=0,
+        trim_silence=False,
+    )
     try:
         started = time.perf_counter()
         frame = source.read()
@@ -443,7 +489,11 @@ def test_streaming_underflow_returns_silence_without_blocking():
 def test_streaming_feed_defers_stereo_conversion_to_audio_read():
     import cogs.audio_queue as audio_queue
 
-    source = audio_queue.StreamingMonoPCMToStereo(read_timeout_sec=1.0, pre_roll_ms=0)
+    source = audio_queue.StreamingMonoPCMToStereo(
+        read_timeout_sec=1.0,
+        pre_roll_ms=0,
+        trim_silence=False,
+    )
     mono = b"\x01\x02" * (audio_queue.MONO_PCM_FRAME_BYTES * 10 // 2)
     with patch(
         "cogs.audio_queue._mono_frame_to_stereo",
@@ -465,7 +515,11 @@ def test_streaming_long_chunk_preserves_all_frames():
 
     first = b"\x01\x02" * (MONO_PCM_FRAME_BYTES // 2)
     second = b"\x03\x04" * (MONO_PCM_FRAME_BYTES // 2)
-    source = StreamingMonoPCMToStereo(read_timeout_sec=1.0, pre_roll_ms=0)
+    source = StreamingMonoPCMToStereo(
+        read_timeout_sec=1.0,
+        pre_roll_ms=0,
+        trim_silence=False,
+    )
     try:
         source.feed_mono(first + second)
         source.finish()
@@ -482,7 +536,11 @@ def test_streaming_underflow_timeout_eventually_ends(monkeypatch):
 
     now = [100.0]
     monkeypatch.setattr(audio_queue.time, "monotonic", lambda: now[0])
-    source = audio_queue.StreamingMonoPCMToStereo(read_timeout_sec=0.5, pre_roll_ms=0)
+    source = audio_queue.StreamingMonoPCMToStereo(
+        read_timeout_sec=0.5,
+        pre_roll_ms=0,
+        trim_silence=False,
+    )
     try:
         assert source.read() == b"\x00" * audio_queue.STEREO_PCM_FRAME_BYTES
         now[0] += 0.6
@@ -494,7 +552,11 @@ def test_streaming_underflow_timeout_eventually_ends(monkeypatch):
 def test_streaming_source_returns_silence_during_pre_roll():
     from cogs.audio_queue import STEREO_PCM_FRAME_BYTES, StreamingMonoPCMToStereo
 
-    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1, pre_roll_ms=40)
+    source = StreamingMonoPCMToStereo(
+        read_timeout_sec=0.1,
+        pre_roll_ms=40,
+        trim_silence=False,
+    )
     try:
         assert source.read() == b"\x00" * STEREO_PCM_FRAME_BYTES
         assert source.read() == b"\x00" * STEREO_PCM_FRAME_BYTES
@@ -511,7 +573,11 @@ def test_streaming_source_returns_silence_during_pre_roll():
 def test_streaming_source_does_not_delay_ready_audio():
     from cogs.audio_queue import StreamingMonoPCMToStereo
 
-    source = StreamingMonoPCMToStereo(read_timeout_sec=0.1, pre_roll_ms=120)
+    source = StreamingMonoPCMToStereo(
+        read_timeout_sec=0.1,
+        pre_roll_ms=120,
+        trim_silence=False,
+    )
     try:
         source.feed_mono(b"\x01\x02")
         source.finish()
@@ -520,6 +586,91 @@ def test_streaming_source_does_not_delay_ready_audio():
         assert frame[:4] == b"\x01\x02\x01\x02"
     finally:
         source.cleanup()
+
+
+def _mono_frame(amplitude: int) -> bytes:
+    return int(amplitude).to_bytes(2, "little", signed=True) * 960
+
+
+def test_trim_pcm_silence_keeps_quiet_ending_and_internal_pause():
+    from cogs.audio_queue import MONO_PCM_FRAME_BYTES, _trim_pcm_silence
+
+    audio = b"".join(
+        [
+            _mono_frame(0) * 5,
+            _mono_frame(2000) * 2,
+            _mono_frame(0) * 10,
+            _mono_frame(50),
+            _mono_frame(0) * 64,
+        ]
+    )
+
+    trimmed = _trim_pcm_silence(audio)
+
+    # 20ms lead + 40ms speech + 200ms internal pause + 20ms quiet ending
+    # + 160ms natural tail.  The quiet ending (RMS 50) must not be clipped.
+    assert len(trimmed) == 22 * MONO_PCM_FRAME_BYTES
+    assert trimmed[:MONO_PCM_FRAME_BYTES] == _mono_frame(0)
+    assert _mono_frame(0) * 10 in trimmed
+    assert _mono_frame(50) in trimmed
+
+
+def test_pcm_activity_tracker_handles_split_chunk_boundaries():
+    from cogs.audio_queue import PCMActivityTracker
+
+    audio = _mono_frame(0) * 3 + _mono_frame(1500) + _mono_frame(0) * 20
+    whole = PCMActivityTracker()
+    whole.feed(audio)
+
+    split = PCMActivityTracker()
+    split.feed(audio[:13])
+    split.feed(audio[13:2001])
+    split.feed(audio[2001:-7])
+    split.feed(audio[-7:])
+
+    assert split.finish() == whole.finish()
+
+
+def test_trim_pcm_silence_drops_all_silent_audio():
+    from cogs.audio_queue import _trim_pcm_silence
+
+    assert _trim_pcm_silence(_mono_frame(0) * 20) == b""
+
+
+def test_streaming_source_honors_tracked_trailing_boundary():
+    from cogs.audio_queue import (
+        MONO_PCM_FRAME_BYTES,
+        PCMActivityTracker,
+        StreamingMonoPCMToStereo,
+    )
+
+    audio = _mono_frame(0) * 5 + _mono_frame(2000) * 2 + _mono_frame(0) * 64
+    tracker = PCMActivityTracker()
+    # Exercise tracker and source with different chunk boundaries.
+    tracker.feed(audio[:2345])
+    tracker.feed(audio[2345:])
+    start, end = tracker.finish()
+
+    source = StreamingMonoPCMToStereo(read_timeout_sec=1.0, pre_roll_ms=0)
+    frames: list[bytes] = []
+    try:
+        source.feed_mono(audio[:1111])
+        source.feed_mono(audio[1111:])
+        source.finish(end_limit_bytes=end)
+        while True:
+            frame = source.read()
+            if not frame:
+                break
+            frames.append(frame)
+    finally:
+        source.cleanup()
+
+    assert start == 4 * MONO_PCM_FRAME_BYTES
+    assert end == 15 * MONO_PCM_FRAME_BYTES
+    assert len(frames) == 11
+    assert frames[0] == b"\x00" * 3840
+    assert frames[1][:4] == b"\xd0\x07\xd0\x07"
+    assert frames[2][:4] == b"\xd0\x07\xd0\x07"
 
 
 def test_to_stereo_matches_reference():
@@ -610,6 +761,58 @@ async def test_prefetch_skips_when_cache_already_warm():
         await q._prefetch(AudioRequest("ready", "v", 1))
 
     assert called is False
+
+
+async def test_store_synthesis_trims_before_pcm_and_opus_cache():
+    from cogs.audio_queue import AudioQueue, MONO_PCM_FRAME_BYTES
+
+    q = AudioQueue()
+    audio = _mono_frame(0) * 5 + _mono_frame(2000) * 2 + _mono_frame(0) * 64
+    encoded_inputs: list[bytes] = []
+
+    def fake_encode(pcm: bytes) -> bytes:
+        encoded_inputs.append(pcm)
+        return b"\x00\x03abc"
+
+    with patch("cogs.audio_queue._mono_pcm_to_opus_stream", fake_encode):
+        stored_bytes = await q._store_synthesis("trim", "voice", audio)
+
+    cached = q._cache.get("trim", "voice")
+    assert cached is not None
+    assert len(cached) == 11 * MONO_PCM_FRAME_BYTES
+    assert stored_bytes == len(cached)
+    assert encoded_inputs == [cached]
+    assert q._opus_cache.get("trim", "voice") == b"\x00\x03abc"
+
+
+async def test_worker_drops_requests_older_than_latency_budget(monkeypatch):
+    from cogs.audio_queue import AudioQueue, AudioRequest
+
+    monkeypatch.setattr("cogs.audio_queue.MAX_QUEUE_AGE_SEC", 0.05)
+    q = AudioQueue()
+    guild = _make_guild()
+    played: list[str] = []
+
+    async def fake_ensure(*_a, **_kw):
+        return MagicMock()
+
+    async def fake_play(self, vc, text, voice, **_kwargs):
+        played.append(text)
+
+    stale = AudioRequest("stale", "voice", 1)
+    stale.enqueued_at = time.perf_counter() - 1
+    with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
+         patch.object(AudioQueue, "_play_streaming", new=fake_play), \
+         patch.object(AudioQueue, "_prefetch", new=_noop_prefetch):
+        await q.enqueue(guild, stale)
+        await q.enqueue(guild, AudioRequest("fresh", "voice", 1))
+        for _ in range(20):
+            if played:
+                break
+            await asyncio.sleep(0.01)
+
+    assert played == ["fresh"]
+    await q.shutdown()
 
 
 async def test_enqueue_drops_oldest_on_overflow():
