@@ -30,9 +30,18 @@ log = logging.getLogger(__name__)
 
 VOICE_CHOICES = [
     app_commands.Choice(name="여성-차분 (SunHi)", value="ko-KR-SunHiNeural"),
+    app_commands.Choice(name="여성-또렷 (JiMin)", value="ko-KR-JiMinNeural"),
+    app_commands.Choice(name="여성-부드러움 (SeoHyeon)", value="ko-KR-SeoHyeonNeural"),
+    app_commands.Choice(name="여성-편안함 (SoonBok)", value="ko-KR-SoonBokNeural"),
+    app_commands.Choice(name="여성-경쾌 (YuJin)", value="ko-KR-YuJinNeural"),
     app_commands.Choice(name="남성-자연 (InJoon)", value="ko-KR-InJoonNeural"),
     app_commands.Choice(name="남성-무게감 (BongJin)", value="ko-KR-BongJinNeural"),
     app_commands.Choice(name="남성-친근 (GookMin)", value="ko-KR-GookMinNeural"),
+    app_commands.Choice(name="남성-담백 (Hyunsu)", value="ko-KR-HyunsuNeural"),
+    app_commands.Choice(
+        name="남성-다국어 (Hyunsu Multi)",
+        value="ko-KR-HyunsuMultilingualNeural",
+    ),
 ]
 
 PANEL_COOLDOWN_SEC = 300  # unused — kept for reference

@@ -7,11 +7,35 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from cogs.tts_cog import TTSCog, _tts_status_embed, _voice_label
+from cogs.tts_cog import TTSCog, VOICE_CHOICES, _tts_status_embed, _voice_label
+
+
+def test_voice_choices_include_all_available_korean_voices() -> None:
+    values = [choice.value for choice in VOICE_CHOICES]
+
+    assert len(values) == 10
+    assert len(set(values)) == 10
+    assert values == [
+        "ko-KR-SunHiNeural",
+        "ko-KR-JiMinNeural",
+        "ko-KR-SeoHyeonNeural",
+        "ko-KR-SoonBokNeural",
+        "ko-KR-YuJinNeural",
+        "ko-KR-InJoonNeural",
+        "ko-KR-BongJinNeural",
+        "ko-KR-GookMinNeural",
+        "ko-KR-HyunsuNeural",
+        "ko-KR-HyunsuMultilingualNeural",
+    ]
 
 
 def test_voice_label_uses_choice_name() -> None:
     assert _voice_label("ko-KR-SunHiNeural") == "여성-차분 (SunHi)"
+    assert _voice_label("ko-KR-YuJinNeural") == "여성-경쾌 (YuJin)"
+    assert (
+        _voice_label("ko-KR-HyunsuMultilingualNeural")
+        == "남성-다국어 (Hyunsu Multi)"
+    )
     assert _voice_label("custom") == "custom"
 
 

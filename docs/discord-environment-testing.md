@@ -159,7 +159,7 @@ RUN_LIVE=1 python -m pytest tests/unit/test_tts_engine.py -m live -v
 |------|------------|
 | `/settts` | 권한 없는 사용자에게 차단됨 |
 | `/setvc` | 음성 채널만 선택 가능 (UI 필터링) |
-| `/setvoice` | dropdown에 4개 한국어 보이스 |
+| `/setvoice` | dropdown에 여성 5개·남성 5개, 총 10개 한국어 보이스 |
 | `/join` | 사전 `/setvc` 없으면 안내 |
 | `/leave` | 미입장 상태에서도 안전 |
 | `/status` | 모든 설정 + 현재 voice 표시 |

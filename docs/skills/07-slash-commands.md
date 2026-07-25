@@ -9,7 +9,7 @@
 |--------|------|---------|------|
 | `/settts` | Manage Channels | `channel: TextChannel` | TTS 읽기 대상 텍스트 채널 설정 |
 | `/setvc` | Manage Channels | `channel: VoiceChannel` | 봇이 음성 출력할 채널 설정 |
-| `/setvoice` | Manage Channels | `voice: Choice[str]` | TTS 보이스 변경 (4개 선택지) |
+| `/setvoice` | Manage Channels | `voice: Choice[str]` | TTS 보이스 변경 (한국어 10개 선택지) |
 | `/join` | 일반 | – | 설정된 음성 채널로 즉시 입장 |
 | `/leave` | 일반 | – | 음성 채널에서 퇴장 |
 | `/status` | 일반 | – | 현재 설정(채널 ID, voice) 확인 |
