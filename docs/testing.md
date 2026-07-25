@@ -79,7 +79,9 @@ tests/
 │   ├── test_preprocess.py         Phase 3
 │   ├── test_tts_engine.py         Phase 4 (mocked + live opt-in)
 │   ├── test_audio_queue.py        Phase 5
-│   └── test_tts_cog.py            Phase 6 (선택, 없으면 ·)
+│   ├── test_tts_cog.py            Phase 6 (선택, 없으면 ·)
+│   ├── test_lol.py                롤 전적 API/저장/표시
+│   └── test_valorant.py           발로란트 전적 API/저장/표시
 ├── integration/               ← 수동
 │   ├── test_phase6_commands.md
 │   └── test_phase7_events.md
@@ -101,6 +103,10 @@ cogs/preprocess.py        →  tests/unit/test_preprocess.py
 cogs/tts_engine.py        →  tests/unit/test_tts_engine.py
 cogs/audio_queue.py       →  tests/unit/test_audio_queue.py
 cogs/tts_cog.py           →  tests/unit/test_tts_cog.py
+cogs/lol_{api,store,cog}.py
+                          →  tests/unit/test_lol.py
+cogs/valorant_{api,store,cog}.py
+                          →  tests/unit/test_valorant.py
 tests/unit/test_X.py      →  자기 자신
 ```
 
@@ -116,6 +122,8 @@ tests/unit/test_X.py      →  자기 자신
 | 6 Slash Commands | `test_tts_cog.py` (선택) | `test_phase6_commands.md` 모두 ✅ | 자동 + 체크리스트 |
 | 7 Event Handlers | – | `test_phase7_events.md` 모두 ✅ | 체크리스트 |
 | 8 Polish | – | `phase8_release_checklist.md` 모두 ✅ | 체크리스트 |
+| LoL Stats | `test_lol.py` | 실제 키가 있을 때 Discord에서 `/lol lookup` | 자동 + 선택 라이브 |
+| VALORANT Stats | `test_valorant.py` | 실제 키가 있을 때 Discord에서 `/valorant lookup` | 자동 + 선택 라이브 |
 
 `check_phase_status.py` 가 자동 단위 테스트의 ✅/❌/·를 출력하므로,
 세션 시작 시 즉시 "지금까지 어디까지 이상 없는지" 파악 가능.

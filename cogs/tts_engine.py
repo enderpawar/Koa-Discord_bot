@@ -40,11 +40,14 @@ _WS_RECEIVE_TIMEOUT_SEC = 15.0
 _TOKEN_TTL_SEC = 600
 _TOKEN_REFRESH_MARGIN_SEC = 60
 _BACKEND = os.getenv("TTS_BACKEND", "ws").lower()
-_KEEPALIVE_INTERVAL_SEC = int(os.getenv("TTS_KEEPALIVE_INTERVAL_SEC", "15"))
-_KEEPALIVE_CHECK_INTERVAL_SEC = 5
-_KEEPALIVE_TEXT = os.getenv("TTS_KEEPALIVE_TEXT", ".")
+_KEEPALIVE_INTERVAL_SEC = float(os.getenv("TTS_KEEPALIVE_INTERVAL_SEC", "8"))
+_KEEPALIVE_CHECK_INTERVAL_SEC = float(
+    os.getenv("TTS_KEEPALIVE_CHECK_INTERVAL_SEC", "1")
+)
+_KEEPALIVE_TEXT = os.getenv("TTS_KEEPALIVE_TEXT", "\uac00")
 _WS_POOL_SIZE = max(1, int(os.getenv("TTS_WS_POOL_SIZE", "2")))
-_WS_POOL_WARM_ALL = os.getenv("TTS_WS_POOL_WARM_ALL", "0") == "1"
+_WS_POOL_WARM_ALL = os.getenv("TTS_WS_POOL_WARM_ALL", "1") == "1"
+_WS_HEARTBEAT_SEC = float(os.getenv("TTS_WS_HEARTBEAT_SEC", "5"))
 
 _RETRYABLE: tuple[type[BaseException], ...] = (
     aiohttp.ClientError,
@@ -70,6 +73,8 @@ class _WSSlot:
     ws: aiohttp.ClientWebSocketResponse | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     speech_config_sent: bool = False
+    index: int = 0
+    last_activity_at: float = 0.0
 
 
 _pool: list[_WSSlot] = []
@@ -81,7 +86,7 @@ async def _get_pool() -> list[_WSSlot]:
     if not _pool:
         async with _pool_init_lock:
             if not _pool:
-                _pool = [_WSSlot() for _ in range(_WS_POOL_SIZE)]
+                _pool = [_WSSlot(index=index) for index in range(_WS_POOL_SIZE)]
     return _pool
 
 
@@ -98,6 +103,15 @@ async def _acquire_slot() -> AsyncIterator[_WSSlot]:
                 slot.lock.release()
             return
     slot = pool[0]
+    await slot.lock.acquire()
+    try:
+        yield slot
+    finally:
+        slot.lock.release()
+
+
+@asynccontextmanager
+async def _acquire_specific_slot(slot: _WSSlot) -> AsyncIterator[_WSSlot]:
     await slot.lock.acquire()
     try:
         yield slot
@@ -267,6 +281,7 @@ async def _close_slot(slot: _WSSlot) -> None:
         await slot.ws.close()
     slot.ws = None
     slot.speech_config_sent = False
+    slot.last_activity_at = 0.0
 
 
 async def _ensure_slot_ws(slot: _WSSlot) -> aiohttp.ClientWebSocketResponse:
@@ -285,12 +300,12 @@ async def _ensure_slot_ws(slot: _WSSlot) -> aiohttp.ClientWebSocketResponse:
     slot.ws = await session.ws_connect(
         url,
         headers={"Ocp-Apim-Subscription-Key": key},
-        heartbeat=30.0,
+        heartbeat=_WS_HEARTBEAT_SEC if _WS_HEARTBEAT_SEC > 0 else None,
         autoping=True,
         max_msg_size=0,
     )
     slot.speech_config_sent = False
-    log.info("azure tts websocket connected (slot)")
+    log.info("azure tts websocket connected: slot=%d", slot.index)
     return slot.ws
 
 
@@ -330,8 +345,19 @@ async def _stream_rest_once(text: str, voice: str) -> AsyncIterator[bytes]:
                 yield chunk
 
 
-async def _request_ws_once(text: str, voice: str, path: Path) -> None:
-    async with _acquire_slot() as slot:
+async def _request_ws_once(
+    text: str,
+    voice: str,
+    path: Path,
+    *,
+    preferred_slot: _WSSlot | None = None,
+) -> None:
+    slot_context = (
+        _acquire_specific_slot(preferred_slot)
+        if preferred_slot is not None
+        else _acquire_slot()
+    )
+    async with slot_context as slot:
         try:
             ws = await _ensure_slot_ws(slot)
             request_id = uuid.uuid4().hex
@@ -373,6 +399,7 @@ async def _request_ws_once(text: str, voice: str, path: Path) -> None:
                         if path_name == "turn.end":
                             if not audio_received:
                                 raise RuntimeError("azure tts websocket returned no audio")
+                            slot.last_activity_at = time.monotonic()
                             return
                         if path_name in {"turn.start", "response", "audio.metadata"}:
                             continue
@@ -394,6 +421,9 @@ async def _request_ws_once(text: str, voice: str, path: Path) -> None:
                         aiohttp.WSMsgType.ERROR,
                     }:
                         raise RuntimeError(f"azure tts websocket closed: {msg.type}")
+        except asyncio.CancelledError:
+            await _close_slot(slot)
+            raise
         except _RETRYABLE:
             await _close_slot(slot)
             raise
@@ -401,6 +431,7 @@ async def _request_ws_once(text: str, voice: str, path: Path) -> None:
 
 async def _stream_ws_once(text: str, voice: str) -> AsyncIterator[bytes]:
     async with _acquire_slot() as slot:
+        turn_completed = False
         try:
             ws = await _ensure_slot_ws(slot)
             request_id = uuid.uuid4().hex
@@ -441,6 +472,8 @@ async def _stream_ws_once(text: str, voice: str) -> AsyncIterator[bytes]:
                     if path_name == "turn.end":
                         if not audio_received:
                             raise RuntimeError("azure tts websocket returned no audio")
+                        slot.last_activity_at = time.monotonic()
+                        turn_completed = True
                         return
                     if path_name in {"turn.start", "response", "audio.metadata"}:
                         continue
@@ -462,9 +495,18 @@ async def _stream_ws_once(text: str, voice: str) -> AsyncIterator[bytes]:
                     aiohttp.WSMsgType.ERROR,
                 }:
                     raise RuntimeError(f"azure tts websocket closed: {msg.type}")
+        except asyncio.CancelledError:
+            await _close_slot(slot)
+            raise
         except _RETRYABLE:
             await _close_slot(slot)
             raise
+        finally:
+            # Closing an async generator injects GeneratorExit, not
+            # CancelledError.  Never return a socket with unread frames from
+            # the abandoned turn to the reusable pool.
+            if not turn_completed:
+                await _close_slot(slot)
 
 
 async def _request_once(text: str, voice: str, path: Path) -> None:
@@ -552,19 +594,37 @@ async def _warm_one(voice: str) -> None:
     path.unlink(missing_ok=True)
 
 
-async def _warm_up_keepalive(voice: str = DEFAULT_VOICE) -> None:
+async def _warm_up_keepalive(
+    voice: str = DEFAULT_VOICE,
+    *,
+    slot: _WSSlot | None = None,
+) -> bool:
     """Warm the Azure path without competing with user-triggered synthesis.
 
-    풀의 모든 슬롯이 사용자 합성으로 busy 면 스킵 — 빈 슬롯이 하나라도 있으면 진행.
+    A slot is only marked warm after a successful synthesis.  A failed probe
+    therefore remains immediately eligible for the next keepalive cycle.
     """
     global _last_keepalive_at
-    pool = await _get_pool()
-    if all(slot.lock.locked() for slot in pool):
-        return
-    _last_keepalive_at = time.monotonic()
+    if slot is not None and slot.lock.locked():
+        return False
+    if slot is None:
+        pool = await _get_pool()
+        if all(candidate.lock.locked() for candidate in pool):
+            return False
+
     path = _make_temp_audio()
     try:
-        await _request_once(_KEEPALIVE_TEXT, voice, path)
+        if _BACKEND == "ws":
+            await _request_ws_once(
+                _KEEPALIVE_TEXT,
+                voice,
+                path,
+                preferred_slot=slot,
+            )
+        else:
+            await _request_once(_KEEPALIVE_TEXT, voice, path)
+        _last_keepalive_at = time.monotonic()
+        return True
     finally:
         path.unlink(missing_ok=True)
 
@@ -585,11 +645,39 @@ async def _keepalive_loop(voice: str) -> None:
     while True:
         await asyncio.sleep(_KEEPALIVE_CHECK_INTERVAL_SEC)
         try:
-            last_activity_at = max(_last_user_synthesis_at, _last_keepalive_at)
-            if time.monotonic() - last_activity_at < _KEEPALIVE_INTERVAL_SEC:
-                continue
-            await _warm_up_keepalive(voice)
+            await _run_keepalive_cycle(voice)
         except asyncio.CancelledError:
             raise
         except Exception:
             log.debug("tts keepalive failed", exc_info=True)
+
+
+async def _run_keepalive_cycle(voice: str = DEFAULT_VOICE) -> None:
+    if _BACKEND != "ws":
+        last_activity_at = max(_last_user_synthesis_at, _last_keepalive_at)
+        if time.monotonic() - last_activity_at >= _KEEPALIVE_INTERVAL_SEC:
+            await _warm_up_keepalive(voice)
+        return
+
+    # Warm slots sequentially.  With a pool larger than one this keeps another
+    # slot available for a user request throughout the cycle.
+    pool = await _get_pool()
+    for slot in pool:
+        if slot.lock.locked():
+            continue
+        if (
+            slot.last_activity_at > 0
+            and time.monotonic() - slot.last_activity_at
+            < _KEEPALIVE_INTERVAL_SEC
+        ):
+            continue
+        try:
+            await _warm_up_keepalive(voice, slot=slot)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.debug(
+                "tts keepalive failed: slot=%d",
+                slot.index,
+                exc_info=True,
+            )

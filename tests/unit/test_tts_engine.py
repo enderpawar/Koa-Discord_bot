@@ -7,6 +7,7 @@ import asyncio
 import importlib.util
 from pathlib import Path
 from contextlib import ExitStack, contextmanager
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -135,11 +136,13 @@ async def test_stream_synthesize_yields_chunks():
 async def test_synthesize_live_smoke():
     """실제 Azure Speech 도달 — RUN_LIVE=1 일 때만."""
     from cogs.tts_engine import synthesize, close_session
-    p = await synthesize("테스트")
+    p = None
     try:
+        p = await synthesize("테스트")
         assert p.exists() and p.stat().st_size > 1024
     finally:
-        p.unlink(missing_ok=True)
+        if p is not None:
+            p.unlink(missing_ok=True)
         await close_session()
 
 
@@ -223,3 +226,113 @@ async def test_ws_pool_close_session_clears_all(monkeypatch):
     await engine.close_session()
     assert closed_flags == [True, True]
     assert engine._pool == []
+
+
+async def test_keepalive_failure_does_not_mark_slot_warm(monkeypatch):
+    import cogs.tts_engine as engine
+
+    slot = engine._WSSlot(index=0)
+    monkeypatch.setattr(engine, "_BACKEND", "ws")
+    monkeypatch.setattr(engine, "_last_keepalive_at", 123.0)
+
+    async def fail_request(*_args, **_kwargs):
+        raise RuntimeError("closed")
+
+    monkeypatch.setattr(engine, "_request_ws_once", fail_request)
+
+    with pytest.raises(RuntimeError):
+        await engine._warm_up_keepalive(slot=slot)
+
+    assert engine._last_keepalive_at == 123.0
+
+
+async def test_keepalive_cycle_visits_every_cold_slot_and_survives_one_failure(
+    monkeypatch,
+):
+    import cogs.tts_engine as engine
+
+    slots = [engine._WSSlot(index=0), engine._WSSlot(index=1)]
+    monkeypatch.setattr(engine, "_BACKEND", "ws")
+    monkeypatch.setattr(engine, "_pool", slots)
+    monkeypatch.setattr(engine.time, "monotonic", lambda: 100.0)
+    visited: list[int] = []
+
+    async def fake_warm(_voice=engine.DEFAULT_VOICE, *, slot=None):
+        visited.append(slot.index)
+        if slot.index == 0:
+            raise RuntimeError("first slot failed")
+        slot.last_activity_at = 100.0
+        return True
+
+    monkeypatch.setattr(engine, "_warm_up_keepalive", fake_warm)
+
+    await engine._run_keepalive_cycle()
+
+    assert visited == [0, 1]
+
+
+async def test_cancelled_ws_stream_discards_slot(monkeypatch):
+    import cogs.tts_engine as engine
+
+    class BlockingWS:
+        def __init__(self):
+            self.closed = False
+
+        async def send_str(self, _data):
+            return None
+
+        async def receive(self, *, timeout):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            self.closed = True
+
+    ws = BlockingWS()
+    slot = engine._WSSlot(index=0, ws=ws)
+    monkeypatch.setattr(engine, "_pool", [slot])
+
+    stream = engine._stream_ws_once("테스트", engine.DEFAULT_VOICE)
+    pending = asyncio.create_task(stream.__anext__())
+    await asyncio.sleep(0)
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+
+    assert ws.closed is True
+    assert slot.ws is None
+
+
+async def test_early_closed_ws_stream_discards_unread_turn(monkeypatch):
+    import cogs.tts_engine as engine
+
+    class PartialWS:
+        def __init__(self):
+            self.closed = False
+            self.receive_count = 0
+
+        async def send_str(self, _data):
+            return None
+
+        async def receive(self, *, timeout):
+            self.receive_count += 1
+            if self.receive_count == 1:
+                header = b"Path:audio\r\nX-RequestId:test\r\n"
+                return SimpleNamespace(
+                    type=engine.aiohttp.WSMsgType.BINARY,
+                    data=len(header).to_bytes(2, "big") + header + b"pcm",
+                )
+            await asyncio.Event().wait()
+
+        async def close(self):
+            self.closed = True
+
+    ws = PartialWS()
+    slot = engine._WSSlot(index=0, ws=ws)
+    monkeypatch.setattr(engine, "_pool", [slot])
+
+    stream = engine._stream_ws_once("긴 문구", engine.DEFAULT_VOICE)
+    assert await stream.__anext__() == b"pcm"
+    await stream.aclose()
+
+    assert ws.closed is True
+    assert slot.ws is None

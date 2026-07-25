@@ -116,12 +116,22 @@ class TTSCog(commands.Cog):
         self.queue = AudioQueue()
         self._panel_view = TTSControlView(self)
         self._panel_sent: set[int] = set()  # channel IDs that already received the panel
+        self._panel_connect_tasks: dict[int, asyncio.Task] = {}
         self._warmup_task = asyncio.create_task(
             self._warm_start(), name="tts-warm-start"
         )
         self.bot.add_view(self._panel_view)
 
     async def cog_unload(self) -> None:
+        panel_tasks = list(self._panel_connect_tasks.values())
+        for task in panel_tasks:
+            task.cancel()
+        for task in panel_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._panel_connect_tasks.clear()
         self._warmup_task.cancel()
         try:
             await self._warmup_task
@@ -175,40 +185,75 @@ class TTSCog(commands.Cog):
             )
             return
 
+        await interaction.response.defer(thinking=True, ephemeral=True)
         await self.store.set(
             interaction.guild.id,
             tts_channel_id=channel.id,
             voice_channel_id=channel.id,
         )
-        try:
-            vc = interaction.guild.voice_client
-            if vc is not None and vc.is_connected():
-                if vc.channel.id != channel.id:
-                    await vc.move_to(channel)
-            else:
-                await channel.connect(reconnect=True, self_deaf=True)
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                embed=notice_embed("권한 부족", "음성 채널 접속 권한이 없습니다.", tone="error"),
-                ephemeral=True,
-            )
+        await interaction.edit_original_response(
+            embed=notice_embed(
+                "TTS 연결 준비 중",
+                "음성 연결을 백그라운드에서 준비합니다. 지금 입력한 문장은 "
+                "큐에 보관했다가 연결이 안정되면 재생합니다.",
+                tone="info",
+            ),
+        )
+        self._start_panel_connect(interaction, channel)
+
+    def _start_panel_connect(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.VoiceChannel,
+    ) -> None:
+        guild_id = interaction.guild.id
+        current = self._panel_connect_tasks.get(guild_id)
+        if current is not None and not current.done():
             return
+        task = asyncio.create_task(
+            self._connect_from_panel(interaction, channel),
+            name=f"tts-panel-connect-{guild_id}",
+        )
+        self._panel_connect_tasks[guild_id] = task
+
+    async def _connect_from_panel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.VoiceChannel,
+    ) -> None:
+        guild_id = interaction.guild.id
+        try:
+            await self.queue.ensure_voice(interaction.guild, channel.id)
+        except discord.Forbidden:
+            embed = notice_embed(
+                "권한 부족",
+                "음성 채널 접속 권한이 없습니다.",
+                tone="error",
+            )
         except Exception:
             log.exception("panel join failed: guild_id=%s", interaction.guild.id)
-            await interaction.response.send_message(
-                embed=notice_embed("입장 실패", "TTS 입장 중 오류가 발생했습니다.", tone="error"),
-                ephemeral=True,
+            embed = notice_embed(
+                "입장 실패",
+                "TTS 입장 중 오류가 발생했습니다.",
+                tone="error",
             )
-            return
-
-        await interaction.response.send_message(
-            embed=notice_embed(
+        else:
+            embed = notice_embed(
                 "TTS 활성화",
                 f"{channel.mention} 채널 채팅을 TTS 입력으로 사용합니다.",
                 tone="ok",
-            ),
-            ephemeral=True,
-        )
+            )
+        try:
+            await interaction.edit_original_response(embed=embed)
+        except discord.HTTPException:
+            log.debug(
+                "panel connection result response expired: guild_id=%s",
+                guild_id,
+            )
+        finally:
+            current = asyncio.current_task()
+            if self._panel_connect_tasks.get(guild_id) is current:
+                self._panel_connect_tasks.pop(guild_id, None)
 
     async def disable_from_panel(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
@@ -217,6 +262,15 @@ class TTSCog(commands.Cog):
                 ephemeral=True,
             )
             return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        connect_task = self._panel_connect_tasks.pop(interaction.guild.id, None)
+        if connect_task is not None and not connect_task.done():
+            connect_task.cancel()
+            try:
+                await connect_task
+            except asyncio.CancelledError:
+                pass
 
         cfg = await self.store.get(interaction.guild.id)
         channel_id = interaction.channel.id if interaction.channel else None
@@ -228,12 +282,9 @@ class TTSCog(commands.Cog):
         if updates:
             await self.store.set(interaction.guild.id, **updates)
 
-        vc = interaction.guild.voice_client
-        if vc is not None and vc.is_connected() and vc.channel.id == channel_id:
-            await vc.disconnect()
-        await interaction.response.send_message(
+        await self.queue.disconnect_voice(interaction.guild)
+        await interaction.edit_original_response(
             embed=notice_embed("TTS 비활성화", "이 채널의 TTS를 껐습니다.", tone="ok"),
-            ephemeral=True,
         )
 
     @app_commands.command(name="settts", description="TTS 로 읽을 텍스트 채널 설정")
@@ -309,29 +360,22 @@ class TTSCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            vc = interaction.guild.voice_client
-            if vc is not None and vc.is_connected():
-                if vc.channel.id != channel.id:
-                    await vc.move_to(channel)
-            else:
-                await channel.connect(reconnect=True, self_deaf=True)
+            await self.queue.ensure_voice(interaction.guild, channel.id)
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.edit_original_response(
                 embed=notice_embed("권한 부족", "음성 채널 접속 권한이 없습니다.", tone="error"),
-                ephemeral=True,
             )
             return
         except Exception:
             log.exception("join failed: guild_id=%s", interaction.guild_id)
-            await interaction.response.send_message(
+            await interaction.edit_original_response(
                 embed=notice_embed("입장 실패", "입장 중 오류가 발생했습니다.", tone="error"),
-                ephemeral=True,
             )
             return
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=notice_embed("음성 채널 입장", f"{channel.mention} 에 입장했습니다.", tone="ok"),
-            ephemeral=True,
         )
 
     @app_commands.command(name="leave", description="음성 채널에서 퇴장")
@@ -343,13 +387,20 @@ class TTSCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        connect_task = self._panel_connect_tasks.pop(interaction.guild.id, None)
+        if connect_task is not None and not connect_task.done():
+            connect_task.cancel()
+            try:
+                await connect_task
+            except asyncio.CancelledError:
+                pass
         try:
-            await vc.disconnect()
+            await self.queue.disconnect_voice(interaction.guild)
         except Exception:
             log.exception("leave failed: guild_id=%s", interaction.guild_id)
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=notice_embed("음성 채널 퇴장", "퇴장했습니다.", tone="ok"),
-            ephemeral=True,
         )
 
     @app_commands.command(name="status", description="현재 설정 확인")

@@ -9,7 +9,7 @@ discord.py `VoiceClient`의 라이프사이클(연결/이동/끊김 복구/idle 
 | 봇이 음성 채널에 미연결 | `channel.connect(reconnect=True, self_deaf=True)` |
 | 다른 음성 채널에 연결됨 | `voice_client.move_to(target)` |
 | 같은 채널에 이미 연결 | 그대로 사용 |
-| 5분간 큐가 비어 있음 | `voice_client.disconnect()` (다음 요청 시 재연결) |
+| 큐가 오래 비어 있음 | 기본값은 연결 유지 (`TTS_IDLE_DISCONNECT_SEC>0`일 때만 자동 종료) |
 | 네트워크 끊김 | `reconnect=True`로 자동 복구; 실패 시 `_ensure_voice`가 재연결 |
 | 봇이 음성 권한 없음 | `discord.Forbidden` → 텍스트 채널에 안내 |
 
@@ -20,10 +20,10 @@ discord.py `VoiceClient`의 라이프사이클(연결/이동/끊김 복구/idle 
 - 봇이 자기 음성을 다시 받지 않아 대역폭 절감
 - TTS 봇이 다른 사람의 음성을 들을 필요 없음
 
-## disconnect 정책 (5분 idle)
-- 큐 worker의 `wait_for(timeout=300)`이 트리거
-- 사용자가 다시 메시지를 보내면 새로운 worker가 즉시 재연결
-- 봇이 항상 음성 채널에 머물러 있어 "X명 접속" 표시가 늘어나는 UX 이슈 방지
+## disconnect 정책
+- 기본값 `TTS_IDLE_DISCONNECT_SEC=0`: TTS 끄기 또는 `/leave` 전까지 연결 유지
+- 양수로 설정한 경우에만 해당 초만큼 idle 후 자동 종료
+- 기본 연결 유지로 첫 문장의 Discord voice cold start를 제거
 
 ## 입/퇴장 알림과의 관계
 - 입/퇴장 알림은 본 큐를 그대로 사용 → 동일한 직렬화 적용

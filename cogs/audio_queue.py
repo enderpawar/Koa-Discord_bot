@@ -2,7 +2,7 @@
 
 각 guild 는 자기만의 asyncio.Queue 와 worker task 를 가지며 (Rule 02), worker 는
 `_ensure_voice → _play_streaming` 을 직렬로 수행한다. 단일 요청 실패는 log.exception 후
-다음 요청으로 진행 (Rule 03). 큐가 5분간 비어 있으면 자동 disconnect.
+다음 요청으로 진행 (Rule 03). 기본값은 명시적으로 TTS를 끌 때까지 연결을 유지한다.
 """
 from __future__ import annotations
 
@@ -19,13 +19,17 @@ from pathlib import Path
 from typing import Final
 
 import discord
+import aiohttp
 from discord import opus
 
 from cogs.tts_engine import stream_synthesize
 
 log = logging.getLogger(__name__)
 
-IDLE_TIMEOUT_SEC = 300
+# 0 means "stay connected until TTS is explicitly disabled".  A commercial
+# chat TTS bot should not pay a fresh Discord voice handshake merely because
+# the chat was quiet for five minutes.
+IDLE_TIMEOUT_SEC = float(os.getenv("TTS_IDLE_DISCONNECT_SEC", "0"))
 MONO_PCM_FRAME_BYTES = 1920  # 20ms * 48kHz * 16-bit * mono
 STEREO_PCM_FRAME_BYTES = 3840  # 20ms * 48kHz * 16-bit * stereo
 PRE_ROLL_MS = int(os.getenv("TTS_PRE_ROLL_MS", "120"))
@@ -34,8 +38,31 @@ CACHE_MAX_BYTES = int(os.getenv("TTS_CACHE_MAX_BYTES", str(32 * 1024 * 1024)))
 CACHE_MAX_ITEM_BYTES = int(os.getenv("TTS_CACHE_MAX_ITEM_BYTES", str(512 * 1024)))
 OPUS_CACHE_MAX_BYTES = int(os.getenv("TTS_OPUS_CACHE_MAX_BYTES", str(16 * 1024 * 1024)))
 MAX_QUEUE_SIZE = int(os.getenv("TTS_MAX_QUEUE_SIZE", "20"))
+VOICE_CONNECT_TIMEOUT_SEC = float(os.getenv("TTS_VOICE_CONNECT_TIMEOUT_SEC", "10"))
+VOICE_RECONNECT_GRACE_SEC = float(os.getenv("TTS_VOICE_RECONNECT_GRACE_SEC", "8"))
+VOICE_CONNECT_ATTEMPTS = max(1, int(os.getenv("TTS_VOICE_CONNECT_ATTEMPTS", "3")))
+VOICE_CONNECT_RETRY_DELAY_SEC = float(
+    os.getenv("TTS_VOICE_CONNECT_RETRY_DELAY_SEC", "0.5")
+)
+VOICE_SILENCE_KEEPALIVE_SEC = float(
+    os.getenv("TTS_VOICE_SILENCE_KEEPALIVE_SEC", "0")
+)
+VOICE_MEDIA_STABILIZE_SEC = float(
+    os.getenv("TTS_VOICE_MEDIA_STABILIZE_SEC", "0.25")
+)
+VOICE_MEDIA_READY_TIMEOUT_SEC = float(
+    os.getenv("TTS_VOICE_MEDIA_READY_TIMEOUT_SEC", "8")
+)
+VOICE_PLAYBACK_ATTEMPTS = max(
+    1,
+    int(os.getenv("TTS_VOICE_PLAYBACK_ATTEMPTS", "2")),
+)
 _STREAM_END: Final = object()
 _SILENCE_STEREO_FRAME: Final = b"\x00" * STEREO_PCM_FRAME_BYTES
+
+
+class VoicePlaybackDisconnected(RuntimeError):
+    """Raised when Discord voice disconnects while an audio source is playing."""
 
 
 def _to_stereo_purepy(mono: bytes) -> bytes:
@@ -198,68 +225,116 @@ def _mono_pcm_to_opus_stream(audio: bytes) -> bytes | None:
 
 
 class StreamingMonoPCMToStereo(discord.AudioSource):
-    """Thread-safe streaming source for Azure mono PCM chunks."""
+    """Thread-safe streaming source for Azure mono PCM chunks.
+
+    ``AudioPlayer`` 스레드의 ``read`` 는 절대 네트워크 청크를 기다리지 않는다.
+    Azure 청크가 잠시 비면 20ms 무음을 반환해 Discord RTP 송출을 유지한다.
+    mono → stereo 변환도 이 오디오 스레드에서 프레임 하나씩 수행하므로, 긴
+    Azure 청크가 이벤트 루프를 오래 점유하지 않는다.
+    """
 
     def __init__(
         self, *, read_timeout_sec: float = 15.0, pre_roll_ms: int = PRE_ROLL_MS
     ) -> None:
-        self._frames: queue.Queue[bytes | object] = queue.Queue()
-        self._mono_buffer = bytearray()
+        self._chunks: queue.Queue[bytes | object] = queue.Queue()
+        self._current_chunk: memoryview | None = None
+        self._current_offset = 0
+        self._partial_frame = bytearray()
         self._read_timeout_sec = read_timeout_sec
         self._pre_roll_frames = max(0, pre_roll_ms // 20)
+        self._last_feed_at = time.monotonic()
+        self._finished = False
+        self._aborted = False
         self._closed = False
 
     def feed_mono(self, chunk: bytes) -> None:
         if self._closed or not chunk:
             return
-        self._mono_buffer.extend(chunk)
-        while len(self._mono_buffer) >= MONO_PCM_FRAME_BYTES:
-            frame = bytes(self._mono_buffer[:MONO_PCM_FRAME_BYTES])
-            del self._mono_buffer[:MONO_PCM_FRAME_BYTES]
-            self._frames.put(_mono_frame_to_stereo(frame))
+        self._last_feed_at = time.monotonic()
+        self._chunks.put(bytes(chunk))
 
     def finish(self) -> None:
         if self._closed:
             return
-        if self._mono_buffer:
-            remainder = bytes(self._mono_buffer)
-            self._mono_buffer.clear()
-            if len(remainder) % 2:
-                remainder += b"\x00"
-            remainder += b"\x00" * (MONO_PCM_FRAME_BYTES - len(remainder))
-            self._frames.put(_mono_frame_to_stereo(remainder))
-        self._frames.put(_STREAM_END)
+        self._last_feed_at = time.monotonic()
+        self._chunks.put(_STREAM_END)
 
     def abort(self) -> None:
         if self._closed:
             return
-        self._frames.put(_STREAM_END)
+        self._aborted = True
+        self._chunks.put(_STREAM_END)
 
-    def read(self) -> bytes:
-        if self._pre_roll_frames > 0:
-            try:
-                frame = self._frames.get_nowait()
-            except queue.Empty:
-                self._pre_roll_frames -= 1
-                return _SILENCE_STEREO_FRAME
-            if frame is _STREAM_END:
-                return b""
+    def _take_mono_frame(self) -> bytes | None:
+        """현재 도착한 청크에서 mono 20ms 프레임 하나를 만든다.
+
+        ``None`` 은 아직 데이터가 부족하다는 뜻이며 스트림 종료와 구분된다.
+        """
+        while len(self._partial_frame) < MONO_PCM_FRAME_BYTES and not self._finished:
+            if self._current_chunk is None:
+                try:
+                    item = self._chunks.get_nowait()
+                except queue.Empty:
+                    break
+                if item is _STREAM_END:
+                    self._finished = True
+                    break
+                self._current_chunk = memoryview(item)
+                self._current_offset = 0
+
+            remaining = len(self._current_chunk) - self._current_offset
+            needed = MONO_PCM_FRAME_BYTES - len(self._partial_frame)
+            take = min(remaining, needed)
+            start = self._current_offset
+            self._partial_frame.extend(self._current_chunk[start : start + take])
+            self._current_offset += take
+            if self._current_offset >= len(self._current_chunk):
+                self._current_chunk = None
+                self._current_offset = 0
+
+        if len(self._partial_frame) >= MONO_PCM_FRAME_BYTES:
+            frame = bytes(self._partial_frame)
+            self._partial_frame.clear()
             return frame
 
-        try:
-            frame = self._frames.get(timeout=self._read_timeout_sec)
-        except queue.Empty:
+        if self._finished and self._partial_frame:
+            if len(self._partial_frame) % 2:
+                self._partial_frame.append(0)
+            self._partial_frame.extend(
+                b"\x00" * (MONO_PCM_FRAME_BYTES - len(self._partial_frame))
+            )
+            frame = bytes(self._partial_frame)
+            self._partial_frame.clear()
+            return frame
+        return None
+
+    def read(self) -> bytes:
+        if self._closed or self._aborted:
             return b""
-        if frame is _STREAM_END:
+
+        mono = self._take_mono_frame()
+        if mono is not None:
+            self._pre_roll_frames = 0
+            return _mono_frame_to_stereo(mono)
+        if self._finished:
             return b""
-        return frame
+
+        # Azure의 첫 청크/중간 청크를 기다리는 동안에도 AudioPlayer 스레드를
+        # 막지 않는다. 무음 RTP를 계속 보내 Discord 연결 상태를 정상 유지한다.
+        if time.monotonic() - self._last_feed_at >= self._read_timeout_sec:
+            return b""
+        if self._pre_roll_frames > 0:
+            self._pre_roll_frames -= 1
+        return _SILENCE_STEREO_FRAME
 
     def is_opus(self) -> bool:
         return False
 
     def cleanup(self) -> None:
         self._closed = True
-        self._mono_buffer.clear()
+        self._current_chunk = None
+        self._current_offset = 0
+        self._partial_frame.clear()
 
 
 class CachedOpusSource(discord.AudioSource):
@@ -292,6 +367,10 @@ class AudioQueue:
     def __init__(self) -> None:
         self._queues: dict[int, asyncio.Queue[AudioRequest]] = {}
         self._workers: dict[int, asyncio.Task] = {}
+        self._voice_locks: dict[int, asyncio.Lock] = {}
+        self._voice_keepalives: dict[int, asyncio.Task] = {}
+        self._voice_keepalive_clients: dict[int, discord.VoiceClient] = {}
+        self._voice_stable_clients: dict[int, discord.VoiceClient] = {}
         self._cache = PCMCache(
             max_entries=CACHE_MAX_ENTRIES,
             max_bytes=CACHE_MAX_BYTES,
@@ -334,6 +413,16 @@ class AudioQueue:
                 pass
         self._workers.clear()
         self._queues.clear()
+        self._voice_locks.clear()
+        keepalives = list(self._voice_keepalives.values())
+        for task in keepalives:
+            task.cancel()
+        for task in keepalives:
+            with suppress(asyncio.CancelledError):
+                await task
+        self._voice_keepalives.clear()
+        self._voice_keepalive_clients.clear()
+        self._voice_stable_clients.clear()
 
     async def _worker(self, guild: discord.Guild) -> None:
         queue = self._queues[guild.id]
@@ -341,7 +430,12 @@ class AudioQueue:
         try:
             while True:
                 try:
-                    req = await asyncio.wait_for(queue.get(), timeout=IDLE_TIMEOUT_SEC)
+                    if IDLE_TIMEOUT_SEC > 0:
+                        req = await asyncio.wait_for(
+                            queue.get(), timeout=IDLE_TIMEOUT_SEC
+                        )
+                    else:
+                        req = await queue.get()
                 except asyncio.TimeoutError:
                     await self._disconnect(guild)
                     # disconnect 도중 enqueue 가 들어왔다면 worker 를 살려둔다
@@ -366,19 +460,33 @@ class AudioQueue:
                     )
 
                 try:
-                    trace_start = time.perf_counter()
-                    queued_ms = (trace_start - req.enqueued_at) * 1000
-                    vc = await self._ensure_voice(guild, req.voice_channel_id)
-                    ensure_ms = (time.perf_counter() - trace_start) * 1000
-                    await self._play_streaming(
-                        vc,
-                        req.text,
-                        req.voice,
-                        guild_id=guild.id,
-                        queued_ms=queued_ms,
-                        ensure_ms=ensure_ms,
-                        trace_start=trace_start,
-                    )
+                    queued_ms = (time.perf_counter() - req.enqueued_at) * 1000
+                    for playback_attempt in range(1, VOICE_PLAYBACK_ATTEMPTS + 1):
+                        trace_start = time.perf_counter()
+                        vc = await self._ensure_voice(guild, req.voice_channel_id)
+                        ensure_ms = (time.perf_counter() - trace_start) * 1000
+                        try:
+                            await self._play_streaming(
+                                vc,
+                                req.text,
+                                req.voice,
+                                guild_id=guild.id,
+                                queued_ms=queued_ms,
+                                ensure_ms=ensure_ms,
+                                trace_start=trace_start,
+                            )
+                            break
+                        except VoicePlaybackDisconnected:
+                            self._voice_stable_clients.pop(guild.id, None)
+                            if playback_attempt == VOICE_PLAYBACK_ATTEMPTS:
+                                raise
+                            log.warning(
+                                "voice playback interrupted, retrying: guild_id=%s "
+                                "attempt=%d/%d",
+                                guild.id,
+                                playback_attempt,
+                                VOICE_PLAYBACK_ATTEMPTS,
+                            )
                 except Exception:
                     log.exception("audio worker failed: guild_id=%s", guild.id)
                 finally:
@@ -437,12 +545,246 @@ class AudioQueue:
         target = guild.get_channel(channel_id)
         if target is None:
             raise RuntimeError(f"voice channel missing: id={channel_id}")
-        vc = guild.voice_client
-        if vc is not None and vc.is_connected():
-            if vc.channel.id != channel_id:
-                await vc.move_to(target)
-            return vc
-        return await target.connect(reconnect=True, self_deaf=True)
+        lock = self._voice_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            for attempt in range(1, VOICE_CONNECT_ATTEMPTS + 1):
+                attempt_started = time.perf_counter()
+                vc = guild.voice_client
+                if vc is not None and vc.is_connected():
+                    if vc.channel.id != channel_id:
+                        await vc.move_to(target)
+                        self._voice_stable_clients.pop(guild.id, None)
+                    if self._voice_stable_clients.get(guild.id) is not vc:
+                        if not await self._wait_for_voice_media_ready(guild, vc):
+                            await self._cleanup_stale_voice(guild, vc)
+                            continue
+                    self._start_voice_keepalive(guild, vc)
+                    log.info(
+                        "voice ready: guild_id=%s mode=reuse channel_id=%s "
+                        "elapsed=%.1fms",
+                        guild.id,
+                        channel_id,
+                        (time.perf_counter() - attempt_started) * 1000,
+                    )
+                    return vc
+
+                if vc is not None:
+                    # Discord 화면에는 봇이 먼저 입장한 것처럼 보여도 voice
+                    # WebSocket/UDP handshake 또는 자동 재연결은 아직 진행 중일 수
+                    # 있다. 이때 force-disconnect 하면 4006 재연결 루프가 생긴다.
+                    if await self._wait_for_voice_reconnect(guild, vc):
+                        if vc.channel.id != channel_id:
+                            await vc.move_to(target)
+                        if not await self._wait_for_voice_media_ready(guild, vc):
+                            await self._cleanup_stale_voice(guild, vc)
+                            continue
+                        self._start_voice_keepalive(guild, vc)
+                        log.info(
+                            "voice ready: guild_id=%s mode=reconnect "
+                            "channel_id=%s elapsed=%.1fms",
+                            guild.id,
+                            channel_id,
+                            (time.perf_counter() - attempt_started) * 1000,
+                        )
+                        return vc
+                    await self._cleanup_stale_voice(guild, vc)
+
+                try:
+                    connected = await target.connect(
+                        timeout=VOICE_CONNECT_TIMEOUT_SEC,
+                        reconnect=True,
+                        self_deaf=True,
+                    )
+                    if not await self._wait_for_voice_media_ready(guild, connected):
+                        await self._cleanup_stale_voice(guild, connected)
+                        raise asyncio.TimeoutError(
+                            "voice media path did not become stable"
+                        )
+                    self._start_voice_keepalive(guild, connected)
+                    log.info(
+                        "voice ready: guild_id=%s mode=new channel_id=%s "
+                        "attempt=%d elapsed=%.1fms",
+                        guild.id,
+                        channel_id,
+                        attempt,
+                        (time.perf_counter() - attempt_started) * 1000,
+                    )
+                    return connected
+                except (
+                    asyncio.TimeoutError,
+                    aiohttp.ClientError,
+                    discord.ConnectionClosed,
+                    OSError,
+                ) as exc:
+                    if attempt == VOICE_CONNECT_ATTEMPTS:
+                        raise
+                    log.warning(
+                        "voice connect failed, retrying: guild_id=%s "
+                        "attempt=%d/%d error=%s",
+                        guild.id,
+                        attempt,
+                        VOICE_CONNECT_ATTEMPTS,
+                        exc.__class__.__name__,
+                    )
+                    stale = guild.voice_client
+                    if stale is not None:
+                        await self._cleanup_stale_voice(guild, stale)
+                    await asyncio.sleep(
+                        VOICE_CONNECT_RETRY_DELAY_SEC * attempt
+                    )
+
+            raise RuntimeError("voice connection attempts exhausted")
+
+    async def _wait_for_voice_reconnect(
+        self,
+        guild: discord.Guild, vc: discord.VoiceClient
+    ) -> bool:
+        if VOICE_RECONNECT_GRACE_SEC <= 0:
+            return False
+        deadline = asyncio.get_running_loop().time() + VOICE_RECONNECT_GRACE_SEC
+        while guild.voice_client is vc:
+            if vc.is_connected():
+                return True
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.1, remaining))
+        return False
+
+    async def _wait_for_voice_media_ready(
+        self, guild: discord.Guild, vc: discord.VoiceClient
+    ) -> bool:
+        if VOICE_MEDIA_STABILIZE_SEC <= 0:
+            self._voice_stable_clients[guild.id] = vc
+            return vc.is_connected()
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + VOICE_MEDIA_READY_TIMEOUT_SEC
+        stable_since: float | None = None
+        while guild.voice_client is vc and loop.time() < deadline:
+            if not vc.is_connected():
+                stable_since = None
+                await asyncio.sleep(0.1)
+                continue
+
+            now = loop.time()
+            if stable_since is None:
+                stable_since = now
+            if now - stable_since >= VOICE_MEDIA_STABILIZE_SEC:
+                self._voice_stable_clients[guild.id] = vc
+                connection = getattr(vc, "_connection", None)
+                dave_version = int(
+                    getattr(connection, "dave_protocol_version", 0) or 0
+                )
+                dave_ready = dave_version == 0 or bool(
+                    getattr(connection, "can_encrypt", False)
+                )
+                log.info(
+                    "voice media ready: guild_id=%s dave_version=%d "
+                    "dave_ready=%s",
+                    guild.id,
+                    dave_version,
+                    dave_ready,
+                )
+                return True
+            await asyncio.sleep(0.1)
+        return False
+
+    async def _cleanup_stale_voice(
+        self, guild: discord.Guild, vc: discord.VoiceClient
+    ) -> None:
+        self._stop_voice_keepalive(guild.id, vc)
+        self._voice_stable_clients.pop(guild.id, None)
+        log.warning("cleaning stale voice client: guild_id=%s", guild.id)
+        try:
+            await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
+        except asyncio.TimeoutError:
+            log.warning(
+                "stale voice disconnect timed out: guild_id=%s",
+                guild.id,
+            )
+
+    def _start_voice_keepalive(
+        self, guild: discord.Guild, vc: discord.VoiceClient
+    ) -> None:
+        if VOICE_SILENCE_KEEPALIVE_SEC <= 0:
+            return
+        current = self._voice_keepalives.get(guild.id)
+        if (
+            current is not None
+            and not current.done()
+            and self._voice_keepalive_clients.get(guild.id) is vc
+        ):
+            return
+        self._stop_voice_keepalive(guild.id)
+        self._voice_keepalive_clients[guild.id] = vc
+        self._voice_keepalives[guild.id] = asyncio.create_task(
+            self._voice_keepalive_loop(guild, vc),
+            name=f"voice-silence-keepalive-{guild.id}",
+        )
+
+    def _stop_voice_keepalive(
+        self, guild_id: int, vc: discord.VoiceClient | None = None
+    ) -> None:
+        if vc is not None and self._voice_keepalive_clients.get(guild_id) is not vc:
+            return
+        task = self._voice_keepalives.pop(guild_id, None)
+        self._voice_keepalive_clients.pop(guild_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _voice_keepalive_loop(
+        self, guild: discord.Guild, vc: discord.VoiceClient
+    ) -> None:
+        next_send = (
+            asyncio.get_running_loop().time()
+            + VOICE_SILENCE_KEEPALIVE_SEC
+        )
+        try:
+            while guild.voice_client is vc:
+                await asyncio.sleep(
+                    min(0.25, VOICE_SILENCE_KEEPALIVE_SEC)
+                )
+                if not vc.is_connected():
+                    self._voice_stable_clients.pop(guild.id, None)
+                    continue
+                if vc.is_playing() or vc.is_paused():
+                    continue
+                now = asyncio.get_running_loop().time()
+                if now < next_send:
+                    continue
+                try:
+                    vc.send_audio_packet(opus.OPUS_SILENCE, encode=False)
+                    next_send = now + VOICE_SILENCE_KEEPALIVE_SEC
+                    log.debug(
+                        "voice silence keepalive sent: guild_id=%s",
+                        guild.id,
+                    )
+                except Exception:
+                    log.debug(
+                        "voice silence keepalive failed: guild_id=%s",
+                        guild.id,
+                        exc_info=True,
+                    )
+        except asyncio.CancelledError:
+            raise
+        finally:
+            current = asyncio.current_task()
+            if self._voice_keepalives.get(guild.id) is current:
+                self._voice_keepalives.pop(guild.id, None)
+                self._voice_keepalive_clients.pop(guild.id, None)
+            if self._voice_stable_clients.get(guild.id) is vc:
+                self._voice_stable_clients.pop(guild.id, None)
+
+    async def ensure_voice(
+        self, guild: discord.Guild, channel_id: int
+    ) -> discord.VoiceClient:
+        """명령/UI와 worker가 같은 연결 직렬화 경로를 사용하게 하는 공개 API."""
+        return await self._ensure_voice(guild, channel_id)
+
+    async def disconnect_voice(self, guild: discord.Guild) -> None:
+        """Explicitly stop a guild voice session and clear all local state."""
+        await self._disconnect(guild, reason="explicit")
 
     async def _play_blocking(self, vc: discord.VoiceClient, audio: Path) -> None:
         # vc.play 의 after 콜백은 다른 스레드에서 실행되므로 loop.call_soon_threadsafe 필수
@@ -478,7 +820,23 @@ class AudioQueue:
         except Exception:
             source.cleanup()
             raise
-        await done.wait()
+        await self._wait_for_playback(vc, done)
+
+    @staticmethod
+    async def _wait_for_playback(
+        vc: discord.VoiceClient, done: asyncio.Event
+    ) -> None:
+        while not done.is_set():
+            try:
+                await asyncio.wait_for(done.wait(), timeout=0.1)
+            except asyncio.TimeoutError:
+                if vc.is_connected():
+                    continue
+                vc.stop()
+                await done.wait()
+                raise VoicePlaybackDisconnected(
+                    "Discord voice disconnected during playback"
+                )
 
     async def _play_streaming(
         self,
@@ -561,7 +919,14 @@ class AudioQueue:
             source.cleanup()
             raise
 
-        await done.wait()
+        try:
+            await self._wait_for_playback(vc, done)
+        except VoicePlaybackDisconnected:
+            if not producer.done():
+                producer.cancel()
+                with suppress(asyncio.CancelledError):
+                    await producer
+            raise
         if not producer.done():
             producer.cancel()
             with suppress(asyncio.CancelledError):
@@ -587,13 +952,29 @@ class AudioQueue:
             cached_bytes,
         )
 
-    async def _disconnect(self, guild: discord.Guild) -> None:
-        vc = guild.voice_client
-        if vc is None:
-            return
+    async def _disconnect(self, guild: discord.Guild, *, reason: str = "idle") -> None:
+        lock = self._voice_locks.setdefault(guild.id, asyncio.Lock())
         try:
-            if vc.is_connected():
-                await vc.disconnect()
-                log.info("idle disconnect: guild_id=%s", guild.id)
+            async with lock:
+                vc = guild.voice_client
+                if vc is None:
+                    self._stop_voice_keepalive(guild.id)
+                    self._voice_stable_clients.pop(guild.id, None)
+                    return
+                self._stop_voice_keepalive(guild.id, vc)
+                self._voice_stable_clients.pop(guild.id, None)
+                await asyncio.wait_for(
+                    vc.disconnect(force=True),
+                    timeout=VOICE_CONNECT_TIMEOUT_SEC,
+                )
+                log.info(
+                    "voice disconnected: guild_id=%s reason=%s",
+                    guild.id,
+                    reason,
+                )
         except Exception:
-            log.exception("disconnect failed: guild_id=%s", guild.id)
+            log.exception(
+                "disconnect failed: guild_id=%s reason=%s",
+                guild.id,
+                reason,
+            )

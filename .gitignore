@@ -3,6 +3,10 @@
 .deploy/
 config.json
 rank_stats.json
+lol_ids.json
+lol_ids.json.corrupt
+valorant_ids.json
+valorant_ids.json.corrupt
 
 # Python
 __pycache__/
@@ -19,6 +23,7 @@ venv/
 
 # Test / tooling caches
 .pytest_cache/
+.pytest-tmp/
 .ruff_cache/
 rank_test_tmp/
 tmp/

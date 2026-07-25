@@ -7,13 +7,27 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import threading
+import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 
 _HAS = importlib.util.find_spec("cogs.audio_queue") is not None
 pytestmark = pytest.mark.skipif(_HAS is False, reason="Phase 5 not yet implemented")
+
+
+@pytest.fixture(autouse=True)
+def _disable_voice_keepalive(monkeypatch):
+    monkeypatch.setattr(
+        "cogs.audio_queue.VOICE_SILENCE_KEEPALIVE_SEC",
+        0,
+    )
+    monkeypatch.setattr(
+        "cogs.audio_queue.VOICE_MEDIA_STABILIZE_SEC",
+        0,
+    )
 
 
 def _make_guild(guild_id: int = 1):
@@ -85,6 +99,204 @@ async def test_failed_request_does_not_block_next():
         await asyncio.sleep(0.5)
 
     assert "boom" in calls and "ok" in calls
+
+
+async def test_ensure_voice_cleans_stale_client_before_reconnect(monkeypatch):
+    from cogs.audio_queue import AudioQueue
+
+    monkeypatch.setattr("cogs.audio_queue.VOICE_RECONNECT_GRACE_SEC", 0)
+    q = AudioQueue()
+    guild = _make_guild()
+    target = guild.get_channel.return_value
+    connected = MagicMock()
+    target.connect = AsyncMock(return_value=connected)
+
+    stale = MagicMock()
+    stale.is_connected.return_value = False
+    stale.disconnect = AsyncMock()
+    guild.voice_client = stale
+
+    result = await q.ensure_voice(guild, target.id)
+
+    assert result is connected
+    stale.disconnect.assert_awaited_once_with(force=True)
+    target.connect.assert_awaited_once_with(
+        timeout=10.0,
+        reconnect=True,
+        self_deaf=True,
+    )
+
+
+async def test_ensure_voice_waits_for_discord_reconnect(monkeypatch):
+    from cogs.audio_queue import AudioQueue
+
+    monkeypatch.setattr("cogs.audio_queue.VOICE_RECONNECT_GRACE_SEC", 0.2)
+    q = AudioQueue()
+    guild = _make_guild()
+    target = guild.get_channel.return_value
+
+    connected = False
+    vc = MagicMock()
+    vc.channel = target
+    vc.is_connected.side_effect = lambda: connected
+
+    async def finish_reconnect():
+        nonlocal connected
+        await asyncio.sleep(0.02)
+        connected = True
+
+    vc.disconnect = AsyncMock()
+    guild.voice_client = vc
+    reconnect = asyncio.create_task(finish_reconnect())
+
+    result = await q.ensure_voice(guild, target.id)
+    await reconnect
+
+    assert result is vc
+    vc.disconnect.assert_not_awaited()
+    target.connect.assert_not_called()
+
+
+async def test_ensure_voice_retries_initial_connect_timeout(monkeypatch):
+    from cogs.audio_queue import AudioQueue
+
+    monkeypatch.setattr("cogs.audio_queue.VOICE_CONNECT_RETRY_DELAY_SEC", 0)
+    q = AudioQueue()
+    guild = _make_guild()
+    target = guild.get_channel.return_value
+    connected = MagicMock()
+    target.connect = AsyncMock(
+        side_effect=[asyncio.TimeoutError(), connected],
+    )
+
+    result = await q.ensure_voice(guild, target.id)
+
+    assert result is connected
+    assert target.connect.await_count == 2
+
+
+async def test_ensure_voice_retries_websocket_transport_reset(monkeypatch):
+    from cogs.audio_queue import AudioQueue
+
+    monkeypatch.setattr("cogs.audio_queue.VOICE_CONNECT_RETRY_DELAY_SEC", 0)
+    q = AudioQueue()
+    guild = _make_guild()
+    target = guild.get_channel.return_value
+    connected = MagicMock()
+    target.connect = AsyncMock(
+        side_effect=[
+            aiohttp.ClientConnectionResetError(
+                "Cannot write to closing transport"
+            ),
+            connected,
+        ],
+    )
+
+    result = await q.ensure_voice(guild, target.id)
+
+    assert result is connected
+    assert target.connect.await_count == 2
+
+
+async def test_disconnect_voice_cleans_disconnected_client_state():
+    from cogs.audio_queue import AudioQueue
+
+    q = AudioQueue()
+    guild = _make_guild()
+    vc = MagicMock()
+    vc.is_connected.return_value = False
+    vc.disconnect = AsyncMock()
+    guild.voice_client = vc
+    q._voice_stable_clients[guild.id] = vc
+
+    await q.disconnect_voice(guild)
+
+    vc.disconnect.assert_awaited_once_with(force=True)
+    assert guild.id not in q._voice_stable_clients
+
+
+async def test_worker_stays_alive_when_idle_disconnect_is_disabled(monkeypatch):
+    from cogs.audio_queue import AudioQueue, AudioRequest
+
+    monkeypatch.setattr("cogs.audio_queue.IDLE_TIMEOUT_SEC", 0)
+    q = AudioQueue()
+    guild = _make_guild()
+    played = asyncio.Event()
+
+    async def fake_ensure(*_a, **_kw):
+        vc = MagicMock()
+        vc.is_connected.return_value = True
+        return vc
+
+    async def fake_play(self, vc, text, voice, **_kwargs):
+        played.set()
+
+    with patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
+         patch.object(AudioQueue, "_play_streaming", new=fake_play), \
+         patch.object(AudioQueue, "_prefetch", new=_noop_prefetch):
+        await q.enqueue(guild, AudioRequest("hello", "voice", 1))
+        await asyncio.wait_for(played.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert q._workers[guild.id].done() is False
+        await q.shutdown()
+
+
+async def test_voice_silence_keepalive_sends_when_idle(monkeypatch):
+    from discord import opus
+    from cogs.audio_queue import AudioQueue
+
+    monkeypatch.setattr(
+        "cogs.audio_queue.VOICE_SILENCE_KEEPALIVE_SEC",
+        0.01,
+    )
+    q = AudioQueue()
+    guild = _make_guild()
+    vc = MagicMock()
+    vc.is_connected.return_value = True
+    vc.is_playing.return_value = False
+    vc.is_paused.return_value = False
+    guild.voice_client = vc
+
+    q._start_voice_keepalive(guild, vc)
+    await asyncio.sleep(0.035)
+
+    vc.send_audio_packet.assert_called_with(opus.OPUS_SILENCE, encode=False)
+    await q.shutdown()
+
+
+async def test_voice_media_ready_does_not_block_on_dave(monkeypatch):
+    from cogs.audio_queue import AudioQueue
+
+    monkeypatch.setattr("cogs.audio_queue.VOICE_MEDIA_STABILIZE_SEC", 0.02)
+    monkeypatch.setattr("cogs.audio_queue.VOICE_MEDIA_READY_TIMEOUT_SEC", 0.4)
+    q = AudioQueue()
+    guild = _make_guild()
+    vc = MagicMock()
+    vc.is_connected.return_value = True
+    vc._connection.dave_protocol_version = 1
+    vc._connection.can_encrypt = False
+    guild.voice_client = vc
+
+    result = await q._wait_for_voice_media_ready(guild, vc)
+
+    assert result is True
+    assert vc._connection.can_encrypt is False
+    assert q._voice_stable_clients[guild.id] is vc
+
+
+async def test_wait_for_playback_stops_on_voice_disconnect():
+    from cogs.audio_queue import AudioQueue, VoicePlaybackDisconnected
+
+    done = asyncio.Event()
+    vc = MagicMock()
+    vc.is_connected.return_value = False
+    vc.stop.side_effect = done.set
+
+    with pytest.raises(VoicePlaybackDisconnected):
+        await AudioQueue._wait_for_playback(vc, done)
+
+    vc.stop.assert_called_once()
 
 
 async def test_play_streaming_uses_pcm_cache():
@@ -181,6 +393,76 @@ def test_streaming_mono_pcm_to_stereo_source():
         frame = source.read()
         assert frame[:8] == b"\x01\x02\x01\x02\x03\x04\x03\x04"
         assert len(frame) == 3840
+        assert source.read() == b""
+    finally:
+        source.cleanup()
+
+
+def test_streaming_underflow_returns_silence_without_blocking():
+    from cogs.audio_queue import STEREO_PCM_FRAME_BYTES, StreamingMonoPCMToStereo
+
+    source = StreamingMonoPCMToStereo(read_timeout_sec=1.0, pre_roll_ms=0)
+    try:
+        started = time.perf_counter()
+        frame = source.read()
+        elapsed = time.perf_counter() - started
+
+        assert frame == b"\x00" * STEREO_PCM_FRAME_BYTES
+        assert elapsed < 0.1
+
+        source.feed_mono(b"\x01\x02")
+        source.finish()
+        assert source.read()[:4] == b"\x01\x02\x01\x02"
+    finally:
+        source.cleanup()
+
+
+def test_streaming_feed_defers_stereo_conversion_to_audio_read():
+    import cogs.audio_queue as audio_queue
+
+    source = audio_queue.StreamingMonoPCMToStereo(read_timeout_sec=1.0, pre_roll_ms=0)
+    mono = b"\x01\x02" * (audio_queue.MONO_PCM_FRAME_BYTES * 10 // 2)
+    with patch(
+        "cogs.audio_queue._mono_frame_to_stereo",
+        wraps=audio_queue._mono_frame_to_stereo,
+    ) as convert:
+        try:
+            source.feed_mono(mono)
+            assert convert.call_count == 0
+            assert source._chunks.qsize() == 1
+
+            source.read()
+            assert convert.call_count == 1
+        finally:
+            source.cleanup()
+
+
+def test_streaming_long_chunk_preserves_all_frames():
+    from cogs.audio_queue import MONO_PCM_FRAME_BYTES, StreamingMonoPCMToStereo
+
+    first = b"\x01\x02" * (MONO_PCM_FRAME_BYTES // 2)
+    second = b"\x03\x04" * (MONO_PCM_FRAME_BYTES // 2)
+    source = StreamingMonoPCMToStereo(read_timeout_sec=1.0, pre_roll_ms=0)
+    try:
+        source.feed_mono(first + second)
+        source.finish()
+
+        assert source.read()[:4] == b"\x01\x02\x01\x02"
+        assert source.read()[:4] == b"\x03\x04\x03\x04"
+        assert source.read() == b""
+    finally:
+        source.cleanup()
+
+
+def test_streaming_underflow_timeout_eventually_ends(monkeypatch):
+    import cogs.audio_queue as audio_queue
+
+    now = [100.0]
+    monkeypatch.setattr(audio_queue.time, "monotonic", lambda: now[0])
+    source = audio_queue.StreamingMonoPCMToStereo(read_timeout_sec=0.5, pre_roll_ms=0)
+    try:
+        assert source.read() == b"\x00" * audio_queue.STEREO_PCM_FRAME_BYTES
+        now[0] += 0.6
         assert source.read() == b""
     finally:
         source.cleanup()

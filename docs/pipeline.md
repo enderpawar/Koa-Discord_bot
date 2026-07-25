@@ -54,7 +54,7 @@
 | 적용 Skill | [`05-audio-queue`](skills/05-audio-queue.md), [`06-voice-management`](skills/06-voice-management.md) |
 | 적용 Rule | [`02-guild-isolation`](rules/02-guild-isolation.md), [`05-async-correctness`](rules/05-async-correctness.md), [`03-error-resilience`](rules/03-error-resilience.md) |
 | 산출물 | `cogs/audio_queue.py` |
-| 핵심 작업 | guild별 `asyncio.Queue` + worker task. `voice_client.play()` 콜백 → `asyncio.Event`로 sequential 보장. 5분 idle 시 자동 disconnect |
+| 핵심 작업 | guild별 `asyncio.Queue` + worker task. `voice_client.play()` 콜백 → `asyncio.Event`로 sequential 보장. 기본값은 명시적 종료까지 voice 연결 유지 |
 | 검증 | 봇이 음성 채널에 입장한 상태에서 enqueue 3건 → 순서대로 재생 |
 
 ## Phase 6 — Slash Commands
@@ -81,10 +81,20 @@
 | 적용 Skill | 전체 |
 | 적용 Rule | [`03-error-resilience`](rules/03-error-resilience.md), [`06-logging-standards`](rules/06-logging-standards.md) |
 | 산출물 | `README.md`, 다듬어진 에러 메시지, 정돈된 로그 |
-| 핵심 작업 | OAuth 초대 URL 가이드, FFmpeg 설치 가이드, 트러블슈팅, 5분 idle 정책 명문화 |
+| 핵심 작업 | OAuth 초대 URL 가이드, FFmpeg 설치 가이드, 트러블슈팅, persistent voice 정책 명문화 |
 | 검증 | 신규 사용자가 README만 보고 봇 실행 가능 |
 
 ---
+
+## Phase 이후 기능 — 게임 전적 조회
+
+| 기능 | 산출물 | 외부 API | 검증 |
+|------|--------|----------|------|
+| LoL 전적 | `cogs/lol_api.py`, `cogs/lol_store.py`, `cogs/lol_cog.py` | Riot Games 공식 API | `tests/unit/test_lol.py` |
+| VALORANT 전적 | `cogs/valorant_api.py`, `cogs/valorant_store.py`, `cogs/valorant_cog.py` | HenrikDev API | `tests/unit/test_valorant.py` |
+
+두 기능 모두 API 세션을 재사용하고 Cog 언로드 시 닫는다. 외부 장애나 최근 경기 조회
+실패는 랭크 프로필 전체를 막지 않으며, API 키와 등록 데이터는 저장소에 커밋하지 않는다.
 
 ## 의존 그래프
 
@@ -114,6 +124,7 @@ Phase 1 (foundation)
 |------|------|------|
 | FFmpeg 미설치 | 음성 재생 전 크래시 | Phase 1에서 시작 시 `shutil.which("ffmpeg")` 체크 후 명확한 에러 |
 | Azure Speech 일시 장애 / rate limit | 합성 실패 | Phase 4에서 1회 retry + 실패 로그, 큐는 다음 항목으로 진행 |
+| 긴 TTS의 스트리밍 청크 지연 | Discord 음성 `!` 경고·끊김 | Phase 5 소스가 blocking wait 대신 20ms 무음 RTP를 송출 |
 | Discord API rate limit | 슬래시 명령 sync 실패 | Phase 1의 `setup_hook`에서 1회만 sync |
 | 봇 토큰 노출 | 보안 사고 | Phase 1에서 `.gitignore`에 `.env` 등록, `.env.example`만 배포 |
 | voice client 끊김 | TTS 재생 중단 | Phase 5에서 재연결 로직 + 큐 보존 |

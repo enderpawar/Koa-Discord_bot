@@ -28,6 +28,16 @@ PHASES = [
     ("Phase 6 Slash Commands",      ["cogs/tts_cog.py"],                    "tests/unit/test_tts_cog.py"),
     ("Phase 7 Event Handlers",      ["cogs/tts_cog.py"],                    None),
     ("Phase 8 Polish & Docs",       ["README.md", ".env.example"],          None),
+    (
+        "Feature VALORANT Stats",
+        ["cogs/valorant_api.py", "cogs/valorant_store.py", "cogs/valorant_cog.py"],
+        "tests/unit/test_valorant.py",
+    ),
+    (
+        "Feature LoL Stats",
+        ["cogs/lol_api.py", "cogs/lol_store.py", "cogs/lol_cog.py"],
+        "tests/unit/test_lol.py",
+    ),
 ]
 
 
@@ -46,7 +56,16 @@ def _run_pytest(test_rel: str) -> str:
         return "·"
     try:
         r = subprocess.run(
-            [sys.executable, "-m", "pytest", str(p), "-q", "--tb=no", "--no-header"],
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                str(p),
+                "-q",
+                "--tb=no",
+                "--no-header",
+                f"--basetemp={PROJECT_ROOT / '.pytest-tmp' / p.stem}",
+            ],
             cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=20,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):

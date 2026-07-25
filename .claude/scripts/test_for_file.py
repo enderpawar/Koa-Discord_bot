@@ -39,6 +39,12 @@ MAPPING: list[tuple[str, str]] = [
     (r"cogs/tts_engine\.py$",         "tests/unit/test_tts_engine.py"),
     (r"cogs/audio_queue\.py$",        "tests/unit/test_audio_queue.py"),
     (r"cogs/tts_cog\.py$",            "tests/unit/test_tts_cog.py"),
+    (r"cogs/valorant_api\.py$",       "tests/unit/test_valorant.py"),
+    (r"cogs/valorant_store\.py$",     "tests/unit/test_valorant.py"),
+    (r"cogs/valorant_cog\.py$",       "tests/unit/test_valorant.py"),
+    (r"cogs/lol_api\.py$",            "tests/unit/test_lol.py"),
+    (r"cogs/lol_store\.py$",          "tests/unit/test_lol.py"),
+    (r"cogs/lol_cog\.py$",            "tests/unit/test_lol.py"),
     # 테스트 파일 자체를 편집한 경우 → 그 테스트 다시 실행
     (r"tests/unit/(test_[a-z_]+)\.py$", r"tests/unit/\1.py"),
 ]

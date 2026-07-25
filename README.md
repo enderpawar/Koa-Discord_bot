@@ -8,9 +8,10 @@
 
 - 지정한 텍스트 채널 메시지를 한국어 TTS로 읽기
 - 지정한 음성 채널 입장/퇴장 안내
-- 5분 동안 읽을 메시지가 없으면 자동 퇴장
-- 새 메시지가 오면 다시 입장해서 재생
+- TTS를 끄거나 `/leave` 하기 전까지 연결 유지(첫 문장 cold start 방지)
+- 일시적인 Discord 음성 연결 끊김은 자동 복구
 - 이번 주 활동 점수, 개인 랭크, TOP 10 리더보드 제공
+- 리그 오브 레전드와 발로란트 계정 등록·랭크·최근 경기 조회
 - 관리자 웹 대시보드로 TTS/리더보드 설정 관리
 
 ## 빠른 사용법
@@ -39,9 +40,23 @@
 | `/status` | 누구나 | 현재 TTS 설정을 확인합니다. |
 | `/rank` | 누구나 | 내 활동 점수 또는 멤버 활동 점수를 봅니다. |
 | `/leaderboard` | 누구나 | 이번 주 서버 활동 TOP 10을 봅니다. |
+| `/lol register·profile·lookup·unregister` | 누구나 | 라이엇ID를 등록하거나 롤 랭크와 최근 경기를 조회합니다. |
+| `/valorant register·profile·lookup·unregister` | 누구나 | 라이엇ID를 등록하거나 발로란트 랭크와 최근 경기를 조회합니다. |
 | `/admin panel` | 관리자 | 웹 관리자 대시보드 링크를 엽니다. |
 
 선택 가능한 목소리는 `여성-차분`, `남성-자연`, `남성-무게감`, `남성-친근`입니다.
+
+### 게임 전적 API
+
+- 롤은 Riot Games 공식 API를 사용합니다. `RIOT_API_KEY`를
+  [Riot Developer Portal](https://developer.riotgames.com/)에서 발급하세요. 로그인 시
+  개발 키가 생성되지만 24시간마다 만료되므로, 계속 운영할 봇은 프로젝트를 등록해
+  Personal 또는 Production 키 승인을 받아야 합니다.
+- 발로란트는 개인용 공식 API 키가 제공되지 않아 HenrikDev API를 사용합니다.
+  `VALORANT_API_KEY`는 [HenrikDev Discord](https://discord.com/invite/X3GaVkX2YN)에
+  가입·인증한 뒤 `#get-a-key`에서 `VALORANT (Basic Key)`를 선택해 발급하세요.
+- API 키가 없거나 만료된 경우에도 봇의 다른 기능은 정상적으로 로드되고, 전적 명령만
+  설정 안내를 표시합니다.
 
 ## 설치하기
 
@@ -94,6 +109,12 @@ DISCORD_TOKEN=디스코드_봇_토큰
 AZURE_SPEECH_KEY=Azure_Speech_키
 AZURE_SPEECH_REGION=koreacentral
 LOG_LEVEL=INFO
+
+# 선택: 게임 전적 조회
+# RIOT_API_KEY=RGAPI-...
+# VALORANT_API_KEY=...
+# LOL_DEFAULT_PLATFORM=kr
+# VALORANT_DEFAULT_REGION=kr
 
 # 선택: 개발 서버에 슬래시 명령을 바로 반영하고 싶을 때
 # TEST_GUILD_ID=123456789012345678

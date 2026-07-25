@@ -14,7 +14,7 @@ Skill은 본 봇에서 **재사용 가능한 단위 능력**을 정의합니다.
 | 03 | [message-preprocessing](03-message-preprocessing.md) | TTS 전 메시지 정제 (멘션/URL/마크다운/길이) | `cogs/preprocess.py` |
 | 04 | [tts-engine](04-tts-engine.md) | Azure Speech REST로 한국어 텍스트 → mp3 합성 | `cogs/tts_engine.py` |
 | 05 | [audio-queue](05-audio-queue.md) | guild별 비동기 직렬 재생 큐 | `cogs/audio_queue.py` |
-| 06 | [voice-management](06-voice-management.md) | VoiceClient 연결/이동/idle disconnect | `cogs/audio_queue.py` 내부 |
+| 06 | [voice-management](06-voice-management.md) | VoiceClient 연결/이동/연결 유지/복구 | `cogs/audio_queue.py` 내부 |
 | 07 | [slash-commands](07-slash-commands.md) | 슬래시 명령어 정의·sync·권한 체크 | `cogs/tts_cog.py` |
 
 ## 적용 매핑

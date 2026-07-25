@@ -17,6 +17,8 @@ COPY . .
 # CONFIG_PATH/RANK_PATH 둘 다 지정해야 재배포 후에도 설정과 랭킹이 보존된다.
 ENV CONFIG_PATH=/data/config.json \
     RANK_PATH=/data/rank_stats.json \
+    VALORANT_STORE_PATH=/data/valorant_ids.json \
+    LOL_STORE_PATH=/data/lol_ids.json \
     PYTHONUNBUFFERED=1
 
 CMD ["python", "bot.py"]

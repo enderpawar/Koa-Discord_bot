@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -39,14 +40,77 @@ def _make_cog(cfg: dict | None = None) -> TTSCog:
     cog.bot = bot
     cog.store = MagicMock()
     cog.store.get = AsyncMock(return_value=dict(cfg))
+    cog.store.set = AsyncMock()
     # ConfigStore 가 path-singleton 이라 cached 와 async 결과는 항상 동일하다.
     cog.store.get_cached_sync = MagicMock(return_value=dict(cfg))
     cog.queue = MagicMock()
     cog.queue.enqueue = AsyncMock()
+    cog.queue.ensure_voice = AsyncMock()
+    cog.queue.disconnect_voice = AsyncMock()
     cog._panel_view = MagicMock()
     cog._panel_last_sent = {}
+    cog._panel_connect_tasks = {}
     cog._send_voice_panel = AsyncMock()
     return cog
+
+
+@pytest.mark.asyncio
+async def test_enable_panel_defers_before_voice_connection() -> None:
+    cog = _make_cog()
+    channel = _voice_channel(100)
+    guild = MagicMock()
+    guild.id = 1
+
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.user.voice = SimpleNamespace(channel=channel)
+    interaction.channel = channel
+    interaction.response.defer = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    await cog.enable_from_panel(interaction)
+    await asyncio.sleep(0)
+
+    interaction.response.defer.assert_awaited_once_with(
+        thinking=True,
+        ephemeral=True,
+    )
+    cog.store.set.assert_awaited_once_with(
+        guild.id,
+        tts_channel_id=channel.id,
+        voice_channel_id=channel.id,
+    )
+    cog.queue.ensure_voice.assert_awaited_once_with(guild, channel.id)
+    assert interaction.edit_original_response.await_count == 2
+    interaction.response.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disable_panel_cancels_connect_and_disconnects_voice() -> None:
+    cog = _make_cog({"tts_channel_id": 100, "voice_channel_id": 100})
+    channel = _voice_channel(100)
+    guild = MagicMock()
+    guild.id = 1
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.channel = channel
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    never = asyncio.Event()
+    connect_task = asyncio.create_task(never.wait())
+    cog._panel_connect_tasks[guild.id] = connect_task
+
+    await cog.disable_from_panel(interaction)
+
+    assert connect_task.cancelled()
+    cog.queue.disconnect_voice.assert_awaited_once_with(guild)
+    interaction.response.defer.assert_awaited_once_with(
+        thinking=True,
+        ephemeral=True,
+    )
+    interaction.edit_original_response.assert_awaited_once()
 
 
 def _voice_channel(channel_id: int) -> MagicMock:

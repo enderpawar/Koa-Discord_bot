@@ -143,13 +143,13 @@ RUN_LIVE=1 python -m pytest tests/unit/test_tts_engine.py -m live -v
 3. `/join` → 봇이 음성 채널 입장 확인
 4. **사용자가 직접** 큐를 인큐하기 위해 임시 명령(`/say <text>`) 또는 텍스트 채널 메시지 입력 (Phase 7 의존이지만 5에선 임시 helper로 검증)
 5. 5건 빠르게 입력 → 순서대로 끊김 없이 재생되는지 청취
-6. 5분간 입력 없이 대기 → 봇이 자동 disconnect 되는지 확인
-7. 그 후 메시지 입력 → 자동 재입장 후 재생
+6. 5분간 입력 없이 대기 → 봇이 연결을 유지하는지 확인
+7. 그 후 메시지 입력 → 재입장 지연 없이 즉시 재생
 
 기록:
 - 첫 메시지 입력 ~ 음성 시작까지 latency: ____ s
 - 5건 연속 재생 중 끊김/중복: ____ 건
-- idle disconnect 동작: ✅/❌
+- persistent voice 동작: ✅/❌
 
 ### 4.3 Slash Commands (Phase 6)
 
@@ -301,6 +301,6 @@ python bot.py
 - run_live unit: 4 passed, 0 failed
 - phase6 checklist: 18/18 pass
 - phase7 checklist: 14/14 pass
-- notes: idle disconnect tested at 5min mark; reconnect verified
+- notes: persistent voice tested past 5min; next-message cold start absent
 - audio quality: 자연스러움 ☑, 끊김 없음 ☑
 ```
