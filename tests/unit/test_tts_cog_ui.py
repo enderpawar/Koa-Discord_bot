@@ -140,7 +140,22 @@ async def test_disable_panel_cancels_connect_and_disconnects_voice() -> None:
 def _voice_channel(channel_id: int) -> MagicMock:
     ch = MagicMock(spec=discord.VoiceChannel)
     ch.id = channel_id
+    ch.members = []
     return ch
+
+
+def _human(member_id: int) -> MagicMock:
+    member = MagicMock(spec=discord.Member)
+    member.id = member_id
+    member.bot = False
+    return member
+
+
+def _bot_member(member_id: int) -> MagicMock:
+    member = MagicMock(spec=discord.Member)
+    member.id = member_id
+    member.bot = True
+    return member
 
 
 @pytest.mark.asyncio
@@ -174,8 +189,10 @@ async def test_voice_state_announces_when_bot_already_connected() -> None:
     vc = MagicMock()
     vc.is_connected.return_value = True
     vc.channel = _voice_channel(100)
+    vc.channel.members = [_human(10), _human(11)]
 
     member = MagicMock()
+    member.id = 10
     member.bot = False
     member.display_name = "tester"
     member.guild = MagicMock()
@@ -218,6 +235,62 @@ async def test_voice_state_no_announcement_when_bot_in_other_channel() -> None:
 
 
 @pytest.mark.asyncio
+async def test_voice_state_disconnects_when_last_human_leaves() -> None:
+    cog = _make_cog({
+        "voice_channel_id": 100, "voice": "ko-KR-SunHiNeural",
+    })
+    channel = _voice_channel(100)
+    channel.members = [_bot_member(999)]
+    vc = MagicMock()
+    vc.is_connected.return_value = True
+    vc.channel = channel
+
+    member = _human(10)
+    member.display_name = "tester"
+    member.guild = MagicMock()
+    member.guild.id = 1
+    member.guild.voice_client = vc
+
+    await cog._handle_voice_state(
+        member,
+        SimpleNamespace(channel=channel),
+        SimpleNamespace(channel=None),
+    )
+
+    cog.queue.disconnect_voice.assert_awaited_once_with(member.guild)
+    cog.queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_voice_state_stays_when_another_human_remains() -> None:
+    cog = _make_cog({
+        "voice_channel_id": 100, "voice": "ko-KR-SunHiNeural",
+    })
+    channel = _voice_channel(100)
+    channel.members = [_human(11), _bot_member(999)]
+    vc = MagicMock()
+    vc.is_connected.return_value = True
+    vc.channel = channel
+
+    member = _human(10)
+    member.display_name = "tester"
+    member.guild = MagicMock()
+    member.guild.id = 1
+    member.guild.voice_client = vc
+
+    await cog._handle_voice_state(
+        member,
+        SimpleNamespace(channel=channel),
+        SimpleNamespace(channel=None),
+    )
+
+    cog.queue.disconnect_voice.assert_not_awaited()
+    cog.queue.enqueue.assert_awaited_once()
+    args, _ = cog.queue.enqueue.call_args
+    assert args[1].text == "tester님 퇴장"
+
+
+@pytest.mark.asyncio
 async def test_handle_tts_message_fast_path_skips_async_get() -> None:
     """무관 채널 메시지는 cached 만 보고 즉시 reject — async store.get 미호출."""
     cog = _make_cog({"tts_channel_id": 100, "voice_channel_id": 100})
@@ -245,6 +318,9 @@ async def test_handle_tts_message_enqueues_when_channel_matches() -> None:
     message.author.bot = False
     message.webhook_id = None
     message.guild = MagicMock(); message.guild.id = 1
+    voice_channel = _voice_channel(200)
+    voice_channel.members = [_human(10)]
+    message.guild.get_channel.return_value = voice_channel
     message.channel = MagicMock(); message.channel.id = 100
     message.clean_content = "hello"
 
@@ -252,6 +328,25 @@ async def test_handle_tts_message_enqueues_when_channel_matches() -> None:
 
     cog.store.get.assert_awaited_once()
     cog.queue.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_does_not_rejoin_empty_voice_channel() -> None:
+    cog = _make_cog({
+        "tts_channel_id": 100, "voice_channel_id": 200,
+    })
+
+    message = MagicMock()
+    message.author.bot = False
+    message.webhook_id = None
+    message.guild = MagicMock(); message.guild.id = 1
+    message.guild.get_channel.return_value = _voice_channel(200)
+    message.channel = MagicMock(); message.channel.id = 100
+    message.clean_content = "아무도 없어요"
+
+    await cog._handle_tts_message(message)
+
+    cog.queue.enqueue.assert_not_awaited()
 
 
 @pytest.mark.asyncio

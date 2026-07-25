@@ -215,6 +215,29 @@ async def test_disconnect_voice_cleans_disconnected_client_state():
     assert guild.id not in q._voice_stable_clients
 
 
+async def test_disconnect_voice_cancels_worker_and_discards_pending_queue():
+    from cogs.audio_queue import AudioQueue, AudioRequest
+
+    q = AudioQueue()
+    guild = _make_guild()
+    vc = MagicMock()
+    vc.disconnect = AsyncMock()
+    guild.voice_client = vc
+
+    queue = asyncio.Queue()
+    await queue.put(AudioRequest("pending", "voice", 1))
+    q._queues[guild.id] = queue
+    worker = asyncio.create_task(asyncio.Event().wait())
+    q._workers[guild.id] = worker
+
+    await q.disconnect_voice(guild)
+
+    assert worker.cancelled()
+    assert guild.id not in q._workers
+    assert guild.id not in q._queues
+    vc.disconnect.assert_awaited_once_with(force=True)
+
+
 async def test_worker_stays_alive_when_idle_disconnect_is_disabled(monkeypatch):
     from cogs.audio_queue import AudioQueue, AudioRequest
 

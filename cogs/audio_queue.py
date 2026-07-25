@@ -784,7 +784,27 @@ class AudioQueue:
 
     async def disconnect_voice(self, guild: discord.Guild) -> None:
         """Explicitly stop a guild voice session and clear all local state."""
+        worker = self._workers.pop(guild.id, None)
+        if (
+            worker is not None
+            and worker is not asyncio.current_task()
+            and not worker.done()
+        ):
+            worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker
+
+        queue = self._queues.pop(guild.id, None)
+        if queue is not None:
+            while True:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                queue.task_done()
+
         await self._disconnect(guild, reason="explicit")
+        self._voice_locks.pop(guild.id, None)
 
     async def _play_blocking(self, vc: discord.VoiceClient, audio: Path) -> None:
         # vc.play 의 after 콜백은 다른 스레드에서 실행되므로 loop.call_soon_threadsafe 필수

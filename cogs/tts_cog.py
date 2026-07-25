@@ -54,6 +54,21 @@ def _voice_label(voice: str) -> str:
     return voice
 
 
+def _has_human_members(
+    channel: discord.VoiceChannel,
+    *,
+    excluding_member_id: int | None = None,
+) -> bool:
+    return any(
+        not candidate.bot
+        and (
+            excluding_member_id is None
+            or candidate.id != excluding_member_id
+        )
+        for candidate in channel.members
+    )
+
+
 def _tts_status_embed(cfg: dict) -> discord.Embed:
     tts_ch = cfg.get("tts_channel_id")
     vc_ch = cfg.get("voice_channel_id")
@@ -494,6 +509,13 @@ class TTSCog(commands.Cog):
         if message.channel.id != tts_channel_id:
             return
 
+        voice_channel = message.guild.get_channel(voice_channel_id)
+        if (
+            not isinstance(voice_channel, discord.VoiceChannel)
+            or not _has_human_members(voice_channel)
+        ):
+            return
+
         text = clean_message(message)
         if not text:
             return
@@ -588,6 +610,26 @@ class TTSCog(commands.Cog):
         # 으로 이어지는 것을 막는다.
         vc = member.guild.voice_client
         if vc is None or not vc.is_connected() or vc.channel.id != watched_id:
+            return
+
+        left_connected_channel = (
+            before.channel is not None
+            and before.channel.id == vc.channel.id
+            and (
+                after.channel is None
+                or after.channel.id != vc.channel.id
+            )
+        )
+        if left_connected_channel and not _has_human_members(
+            vc.channel,
+            excluding_member_id=member.id,
+        ):
+            log.info(
+                "voice channel empty, disconnecting: guild_id=%s channel_id=%s",
+                member.guild.id,
+                vc.channel.id,
+            )
+            await self.queue.disconnect_voice(member.guild)
             return
 
         announcements: list[str] = []
