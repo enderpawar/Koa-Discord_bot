@@ -51,6 +51,8 @@ jobs:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+          RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+          VALORANT_API_KEY: ${{ secrets.VALORANT_API_KEY }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           TEST_GUILD_ID: ${{ secrets.TEST_GUILD_ID }}
           ADMIN_WEB_TOKEN: ${{ secrets.ADMIN_WEB_TOKEN }}
@@ -99,6 +101,8 @@ jobs:
               "ADMIN_WEB_GUILD_IDS",
               "MEM_ANCHOR_BYTES",
               "MEM_ANCHOR_INTERVAL_SEC",
+              "RIOT_API_KEY",
+              "VALORANT_API_KEY",
               # 마인크래프트 전원 제어(/mc on|off|status). 여기서 빠지면 재배포 때
               # .env 가 통째로 새로 써지면서 설정이 사라지고 명령이 죽는다.
               "GCP_PROJECT_ID",
