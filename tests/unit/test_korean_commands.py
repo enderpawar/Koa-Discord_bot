@@ -61,7 +61,10 @@ def test_command_groups_and_subcommands_are_korean() -> None:
         "켜기",
         "끄기",
         "상태",
+        "서버",
     }
+    mc_server = next(command for command in MCControlCog.mc.commands if command.name == "서버")
+    assert {command.name for command in mc_server.commands} == {"공지"}
     assert LolCog.lol.name == "롤"
     assert {command.name for command in LolCog.lol.commands} == {
         "등록",

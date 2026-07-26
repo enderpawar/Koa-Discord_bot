@@ -9,6 +9,8 @@ import asyncio
 import base64
 import json
 import struct
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -88,6 +90,22 @@ def test_power_commands_require_no_discord_member_permissions():
     for name in ("켜기", "끄기"):
         assert commands[name].default_permissions is None
         assert commands[name].checks == []
+
+
+# ---- 공지 링크 -------------------------------------------------------------
+
+
+async def test_server_notice_links_deployed_page():
+    response = SimpleNamespace(send_message=AsyncMock())
+    interaction = SimpleNamespace(response=response)
+    cog = object.__new__(mc_cog.MCControlCog)
+
+    await mc_cog.MCControlCog.server_notice.callback(cog, interaction)
+
+    response.send_message.assert_awaited_once()
+    embed = response.send_message.await_args.kwargs["embed"]
+    assert embed.url == mc_cog._SERVER_NOTICE_URL
+    assert f"]({mc_cog._SERVER_NOTICE_URL})" in embed.description
 
 
 # ---- 주소 표기 -------------------------------------------------------------

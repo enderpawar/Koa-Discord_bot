@@ -5,6 +5,7 @@
 평문으로 남지만 모달 입력은 채팅에 전혀 표시되지 않기 때문이다.
 
 `/마크 상태`는 상태 조회일 뿐 아무것도 바꾸지 않으므로 암호를 받지 않는다.
+`/마크 서버 공지`는 서버 공지 게시판 링크를 공개 응답으로 보여준다.
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ _SHUTDOWN_TIMEOUT_SEC = 180
 _MAX_FAILS = 5
 _LOCKOUT_SEC = 600
 _FAIL_WINDOW_SEC = 600
+
+_SERVER_NOTICE_URL = "https://enderpawar.github.io/cobblemon-notes/"
 
 
 def _password() -> str:
@@ -201,6 +204,11 @@ class MCControlCog(commands.Cog):
         description="서버 구성원 누구나 암호로 사용하는 마인크래프트 전원 제어",
         default_permissions=None,
     )
+    server = app_commands.Group(
+        name="서버",
+        description="마인크래프트 서버 안내",
+        parent=mc,
+    )
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -247,6 +255,18 @@ class MCControlCog(commands.Cog):
             await interaction.edit_original_response(embed=embed, view=None)
         except discord.HTTPException:
             log.exception("failed to edit mc control response")
+
+    # ---- /마크 서버 공지 -------------------------------------------------
+
+    @server.command(name="공지", description="마인크래프트 서버 공지 게시판 링크를 표시합니다")
+    async def server_notice(self, interaction: discord.Interaction) -> None:
+        embed = discord.Embed(
+            title="마인크래프트 서버 공지",
+            url=_SERVER_NOTICE_URL,
+            description=f"[접속 안내와 최신 공지 보기]({_SERVER_NOTICE_URL})",
+            color=BRAND_COLOR,
+        )
+        await interaction.response.send_message(embed=embed)
 
     # ---- /마크 켜기 ------------------------------------------------------
 
