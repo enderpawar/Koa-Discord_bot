@@ -9,29 +9,29 @@
 
 ## 명령어 동작
 
-### `/settts <channel>`
+### `/읽기채널 <채널>`
 - [ ] `Manage Channels` 권한자가 실행 → ephemeral 응답 "TTS 채널을 #X으로 설정"
 - [ ] 일반 사용자가 실행 → 권한 부족 안내
 - [ ] `config.json` 에 `tts_channel_ids` 또는 `tts_channel_id` 반영됨
 
-### `/setvc <channel>`
+### `/음성채널 <채널>`
 - [ ] 음성 채널 선택만 가능 (텍스트 채널 선택 불가)
 - [ ] ephemeral 응답 정상
 - [ ] `config.json`에 `voice_channel_id` 반영
 
-### `/setvoice <voice>`
-- [ ] 4개 보이스가 dropdown으로 표시
+### `/목소리 <종류>`
+- [ ] 10개 보이스가 dropdown으로 표시
 - [ ] 선택 시 `config.json`에 `voice` 반영
 
-### `/join`
-- [ ] `voice_channel_id` 미설정이면 "먼저 /setvc..." 안내
+### `/입장`
+- [ ] `voice_channel_id` 미설정이면 "먼저 /음성채널..." 안내
 - [ ] 설정된 경우 봇이 음성 채널에 입장 (Discord UI 좌측에서 확인)
 
-### `/leave`
+### `/퇴장`
 - [ ] 봇이 음성 채널 미입장이면 "음성 채널에 없습니다"
 - [ ] 입장 중이면 정상 퇴장
 
-### `/status`
+### `/상태`
 - [ ] 현재 TTS 채널, 음성 채널, voice가 mention/식별자로 표시됨
 
 ## 회귀

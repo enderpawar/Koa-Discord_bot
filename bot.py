@@ -55,6 +55,8 @@ KNOWN_EXTENSIONS = (
     "cogs.mc_cog",
     "cogs.valorant_cog",
     "cogs.lol_cog",
+    "cogs.party_cog",
+    "cogs.fortune_cog",
 )
 
 

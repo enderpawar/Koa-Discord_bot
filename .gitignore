@@ -3,6 +3,9 @@
 .deploy/
 config.json
 rank_stats.json
+party.db
+party.db-shm
+party.db-wal
 lol_ids.json
 lol_ids.json.corrupt
 valorant_ids.json

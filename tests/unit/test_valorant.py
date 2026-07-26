@@ -16,11 +16,12 @@ from cogs.valorant_store import ValorantStore
 
 
 def test_slash_group_exposes_complete_command_set():
+    assert vc.ValorantCog.valorant.name == "발로란트"
     assert {command.name for command in vc.ValorantCog.valorant.commands} == {
-        "register",
-        "profile",
-        "lookup",
-        "unregister",
+        "등록",
+        "전적",
+        "검색",
+        "등록해제",
     }
 
 

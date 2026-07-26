@@ -16,11 +16,12 @@ from cogs.lol_store import LolStore
 
 
 def test_slash_group_exposes_complete_command_set():
+    assert lc.LolCog.lol.name == "롤"
     assert {command.name for command in lc.LolCog.lol.commands} == {
-        "register",
-        "profile",
-        "lookup",
-        "unregister",
+        "등록",
+        "전적",
+        "검색",
+        "등록해제",
     }
 
 

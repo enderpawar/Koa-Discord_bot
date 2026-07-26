@@ -55,7 +55,7 @@ Cog (각각 = Phase 산출물 1개):
 - `cogs/preprocess.py` — 순수 함수 `clean_message(message) -> str`. 멘션/URL/마크다운 제거, 200자 truncate.
 - `cogs/tts_engine.py` — `synthesize(text, voice) -> Path`. Azure Speech REST (`{region}.tts.speech.microsoft.com/cognitiveservices/v1`) + module-level `aiohttp.ClientSession` 재사용.
 - `cogs/audio_queue.py` — guild별 `asyncio.Queue` + worker task. `voice_client.play()` 콜백을 `asyncio.Event` 로 직렬화. 5분 idle 시 자동 disconnect.
-- `cogs/tts_cog.py` — 슬래시 명령 (`/settts /setvc /setvoice /join /leave /status`) + 이벤트 핸들러 (`on_message`, `on_voice_state_update`).
+- `cogs/tts_cog.py` — 슬래시 명령 (`/읽기채널 /음성채널 /목소리 /입장 /퇴장 /상태`) + 이벤트 핸들러 (`on_message`, `on_voice_state_update`).
 
 모든 변경 가능 상태는 `guild_id` 로 격리 (Rule 02). 메시지/voice 핸들러는 첫 줄에 봇/자기-자신 가드 배치 (Rule 01).
 

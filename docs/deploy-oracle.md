@@ -142,7 +142,8 @@ ADMIN_WEB_PUBLIC_URL=http://<공인IP>:8080
 
 ## 7. 백업 — 반드시 설정할 것
 
-`data/` 에 `config.json` 과 `rank_stats.json` 이 들어 있습니다. 계정 정지나 인스턴스 손실에 대비해 주기적으로 서버 밖으로 빼내세요.
+`data/` 에 `config.json`, `rank_stats.json`, 파티 모집 상태를 담은 `party.db`가
+들어 있습니다. 계정 정지나 인스턴스 손실에 대비해 주기적으로 서버 밖으로 빼내세요.
 
 간단한 cron 예시 (매일 04:00, 최근 14개 보관):
 
@@ -250,7 +251,7 @@ docker compose up -d --build
 docker compose restart
 docker compose down
 ```
-`data/` 는 bind mount 이므로 컨테이너를 지워도 설정과 랭킹은 남습니다.
+`data/` 는 bind mount 이므로 컨테이너를 지워도 설정, 랭킹, 파티 모집 상태는 남습니다.
 
 ### 로그
 ```bash
@@ -288,5 +289,5 @@ docker compose logs -f --tail 100
 - [ ] `.env` 에 `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` 포함 (Railway Variables 에서 확인)
 - [ ] 웹 어드민을 썼다면 `ADMIN_WEB_HOST=0.0.0.0` 과 `ADMIN_WEB_PUBLIC_URL` 추가 (§6)
 - [ ] `data/config.json` 복원 후 `docker compose up -d --build`
-- [ ] Discord 에서 `/status` 로 길드 설정이 살아있는지 확인
+- [ ] Discord 에서 `/상태`로 길드 설정이 살아있는지 확인
 - [ ] 백업 cron 설정 (§7)

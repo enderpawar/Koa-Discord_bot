@@ -14,9 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 영구 볼륨이 /data 에 마운트된다고 가정. 미마운트여도 충돌 없음(컨테이너 FS 에 기록).
-# CONFIG_PATH/RANK_PATH 둘 다 지정해야 재배포 후에도 설정과 랭킹이 보존된다.
+# 데이터 경로를 모두 /data 로 지정해 재배포 후에도 설정과 사용자 데이터가 보존된다.
 ENV CONFIG_PATH=/data/config.json \
     RANK_PATH=/data/rank_stats.json \
+    PARTY_DB_PATH=/data/party.db \
     VALORANT_STORE_PATH=/data/valorant_ids.json \
     LOL_STORE_PATH=/data/lol_ids.json \
     PYTHONUNBUFFERED=1

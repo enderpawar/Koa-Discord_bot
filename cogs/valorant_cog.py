@@ -1,8 +1,8 @@
 """발로란트 전적 조회 명령 (op.gg 형태).
 
 HenrikDev(비공식) API 로 라이엇ID → 현재/최고 랭크 + 최근 경기를 임베드로 보여준다.
-`/valorant register` 로 디스코드 계정에 라이엇ID 를 한 번 묶어두면 이후
-`/valorant profile` 만으로 조회된다.
+`/발로란트 등록`으로 디스코드 계정에 라이엇ID를 한 번 묶어두면 이후
+`/발로란트 전적`만으로 조회된다.
 
 키(VALORANT_API_KEY) 미설정이면 mc_cog 와 동일하게 명령이 '설정 필요'로 응답한다.
 """
@@ -26,14 +26,14 @@ log = logging.getLogger(__name__)
 _COOLDOWN_SEC = 6.0
 
 _REGION_CHOICES = [
-    app_commands.Choice(name="한국 (KR)", value="kr"),
-    app_commands.Choice(name="아시아 태평양 (AP)", value="ap"),
-    app_commands.Choice(name="북미 (NA)", value="na"),
-    app_commands.Choice(name="유럽 (EU)", value="eu"),
+    app_commands.Choice(name="한국", value="kr"),
+    app_commands.Choice(name="아시아 태평양", value="ap"),
+    app_commands.Choice(name="북미", value="na"),
+    app_commands.Choice(name="유럽", value="eu"),
 ]
 
 _PLATFORM_CHOICES = [
-    app_commands.Choice(name="PC", value="pc"),
+    app_commands.Choice(name="컴퓨터", value="pc"),
     app_commands.Choice(name="콘솔", value="console"),
 ]
 
@@ -237,7 +237,7 @@ class ValorantCog(commands.Cog):
     async def cog_unload(self) -> None:
         await api.close_session()
 
-    valorant = app_commands.Group(name="valorant", description="발로란트 전적 조회")
+    valorant = app_commands.Group(name="발로란트", description="발로란트 전적 조회")
 
     # ---- 공통 --------------------------------------------------------------
 
@@ -290,9 +290,14 @@ class ValorantCog(commands.Cog):
             embed=_profile_embed(name, tag, region, account, mmr, matches)
         )
 
-    # ---- /valorant register ------------------------------------------------
+    # ---- /발로란트 등록 ----------------------------------------------------
 
-    @valorant.command(name="register", description="내 디스코드 계정에 라이엇ID 등록")
+    @valorant.command(name="등록", description="내 디스코드 계정에 라이엇ID를 등록합니다")
+    @app_commands.rename(
+        riot_id="라이엇아이디",
+        region="지역",
+        platform="플랫폼",
+    )
     @app_commands.describe(
         riot_id="닉네임#태그 (예: Hide on bush#KR1)",
         region="계정 리전 (생략 시 API 자동 감지)",
@@ -347,15 +352,16 @@ class ValorantCog(commands.Cog):
                 "등록 완료",
                 f"`{name}#{tag}` ({_REGION_LABELS.get(region_value, region_value.upper())}, "
                 f"{platform_value.upper()}) 계정을 등록했습니다. "
-                "이제 `/valorant profile` 로 바로 조회할 수 있어요.",
+                "이제 `/발로란트 전적`으로 바로 조회할 수 있어요.",
                 tone="ok",
             ),
             ephemeral=True,
         )
 
-    # ---- /valorant profile -------------------------------------------------
+    # ---- /발로란트 전적 ----------------------------------------------------
 
-    @valorant.command(name="profile", description="등록된 라이엇ID로 전적 조회")
+    @valorant.command(name="전적", description="등록된 라이엇ID로 전적을 조회합니다")
+    @app_commands.rename(member="멤버")
     @app_commands.describe(member="조회할 멤버 (생략 시 본인)")
     async def profile(
         self,
@@ -371,7 +377,7 @@ class ValorantCog(commands.Cog):
             await interaction.response.send_message(
                 embed=notice_embed(
                     "등록이 필요합니다",
-                    f"{who} `/valorant register` 로 라이엇ID를 등록해야 합니다.",
+                    f"{who} `/발로란트 등록`으로 라이엇ID를 등록해야 합니다.",
                     tone="warn",
                 ),
                 ephemeral=True,
@@ -386,9 +392,14 @@ class ValorantCog(commands.Cog):
             reg.get("platform", api.DEFAULT_PLATFORM),
         )
 
-    # ---- /valorant lookup --------------------------------------------------
+    # ---- /발로란트 검색 ----------------------------------------------------
 
-    @valorant.command(name="lookup", description="라이엇ID로 즉석 전적 조회 (등록 없이)")
+    @valorant.command(name="검색", description="등록하지 않고 라이엇ID로 전적을 조회합니다")
+    @app_commands.rename(
+        riot_id="라이엇아이디",
+        region="지역",
+        platform="플랫폼",
+    )
     @app_commands.describe(
         riot_id="닉네임#태그",
         region="계정 리전 (생략 시 API 자동 감지)",
@@ -422,9 +433,9 @@ class ValorantCog(commands.Cog):
         await interaction.response.defer(thinking=True)
         await self._send_profile(interaction, name, tag, region_value, platform_value)
 
-    # ---- /valorant unregister ----------------------------------------------
+    # ---- /발로란트 등록해제 ------------------------------------------------
 
-    @valorant.command(name="unregister", description="등록한 라이엇ID 삭제")
+    @valorant.command(name="등록해제", description="내 계정에 등록한 라이엇ID를 삭제합니다")
     async def unregister(self, interaction: discord.Interaction) -> None:
         removed = await self.store.remove(interaction.user.id)
         if removed:

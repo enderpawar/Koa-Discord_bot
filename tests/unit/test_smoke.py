@@ -59,3 +59,11 @@ def test_bot_activity_does_not_immediately_repeat(monkeypatch) -> None:
 
     assert isinstance(activity, discord.Game)
     assert activity.name != "🛋️ 뒹굴거리는 중"
+
+
+def test_bot_loads_community_content_extensions(monkeypatch) -> None:
+    monkeypatch.setenv("DISCORD_TOKEN", "dummy_for_import")
+    namespace = runpy.run_path(str(BOT_PY), run_name="bot_test")
+
+    assert "cogs.party_cog" in namespace["KNOWN_EXTENSIONS"]
+    assert "cogs.fortune_cog" in namespace["KNOWN_EXTENSIONS"]

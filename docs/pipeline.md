@@ -63,7 +63,7 @@
 | 적용 Skill | [`07-slash-commands`](skills/07-slash-commands.md) |
 | 적용 Rule | [`04-secrets-and-security`](rules/04-secrets-and-security.md), [`02-guild-isolation`](rules/02-guild-isolation.md) |
 | 산출물 | `cogs/tts_cog.py` (명령어 부분) |
-| 핵심 작업 | `/settts`, `/setvc`, `/setvoice`, `/join`, `/leave`, `/status` 6개. `Manage Channels` 권한 체크 |
+| 핵심 작업 | `/읽기채널`, `/음성채널`, `/목소리`, `/입장`, `/퇴장`, `/상태` 6개. `Manage Channels` 권한 체크 |
 | 검증 | 테스트 서버에서 6개 명령어 실행 → 응답·설정 반영 확인 |
 
 ## Phase 7 — Event Handlers
@@ -95,6 +95,18 @@
 
 두 기능 모두 API 세션을 재사용하고 Cog 언로드 시 닫는다. 외부 장애나 최근 경기 조회
 실패는 랭크 프로필 전체를 막지 않으며, API 키와 등록 데이터는 저장소에 커밋하지 않는다.
+
+## Phase 이후 기능 — 커뮤니티 콘텐츠
+
+| 기능 | 산출물 | 상태 저장 | 검증 |
+|------|--------|-----------|------|
+| 파티 모집 | `cogs/party_store.py`, `cogs/party_cog.py` | guild 격리 SQLite (`party.db`) | `tests/unit/test_party.py` |
+| 오늘의 운세 | `cogs/fortune_cog.py` | 없음(사용자 ID + KST 날짜 결정론) | `tests/unit/test_fortune.py` |
+
+파티 모집은 메시지별 잠금과 SQLite 트랜잭션으로 참가·대기열 경쟁을 직렬화한다.
+30초 공용 스케줄러 하나가 시작 전 알림과 자동 마감을 처리하며, 파티별 타이머를
+생성하지 않는다. 오늘의 운세는 외부 API를 사용하지 않고 기본 응답을 ephemeral로
+보내 TTS 채널과 일반 채팅을 불필요하게 채우지 않는다.
 
 ## 의존 그래프
 

@@ -235,7 +235,7 @@ class RankCog(commands.Cog):
         except Exception:
             log.exception("rank voice tracking failed: guild_id=%s", member.guild.id)
 
-    @app_commands.command(name="leaderboard", description="이번 주 서버 활동 순위 확인")
+    @app_commands.command(name="활동순위", description="이번 주 서버 활동 순위를 확인합니다")
     async def leaderboard(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None or interaction.guild_id is None:
             await interaction.response.send_message(
@@ -289,7 +289,9 @@ class RankCog(commands.Cog):
         embed.set_footer(text="매주 금요일 00:00(KST) 초기화")
         return embed
 
-    @app_commands.command(name="rank", description="멤버별 활동 내역 확인")
+    @app_commands.command(name="활동점수", description="나 또는 다른 멤버의 활동 점수를 확인합니다")
+    @app_commands.rename(member="멤버")
+    @app_commands.describe(member="조회할 멤버(생략하면 본인)")
     async def rank(
         self,
         interaction: discord.Interaction,

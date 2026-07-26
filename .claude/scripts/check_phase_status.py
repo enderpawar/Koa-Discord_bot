@@ -38,6 +38,16 @@ PHASES = [
         ["cogs/lol_api.py", "cogs/lol_store.py", "cogs/lol_cog.py"],
         "tests/unit/test_lol.py",
     ),
+    (
+        "Feature Party Recruitment",
+        ["cogs/party_store.py", "cogs/party_cog.py"],
+        "tests/unit/test_party.py",
+    ),
+    (
+        "Feature Daily Fortune",
+        ["cogs/fortune_cog.py"],
+        "tests/unit/test_fortune.py",
+    ),
 ]
 
 

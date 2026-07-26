@@ -1,10 +1,10 @@
 """마인크래프트 서버 전원 제어 명령.
 
-`/mc on` / `/mc off` 는 실행 시마다 모달로 암호를 받는다. 슬래시 명령 옵션이
+`/마크 켜기` / `/마크 끄기`는 실행 시마다 모달로 암호를 받는다. 슬래시 명령 옵션이
 아니라 모달을 쓰는 이유는, 옵션값은 클라이언트 UI와 상호작용 페이로드에
 평문으로 남지만 모달 입력은 채팅에 전혀 표시되지 않기 때문이다.
 
-`/mc status` 는 상태 조회일 뿐 아무것도 바꾸지 않으므로 암호를 받지 않는다.
+`/마크 상태`는 상태 조회일 뿐 아무것도 바꾸지 않으므로 암호를 받지 않는다.
 """
 from __future__ import annotations
 
@@ -197,7 +197,7 @@ class MCControlCog(commands.Cog):
     # 객체는 값이 0이어서 오히려 관리자만 사용할 수 있으므로 쓰면 안 된다.
     # on/off의 권한 경계는 Discord 역할이 아니라 아래 PasswordModal이다.
     mc = app_commands.Group(
-        name="mc",
+        name="마크",
         description="서버 구성원 누구나 암호로 사용하는 마인크래프트 전원 제어",
         default_permissions=None,
     )
@@ -248,9 +248,9 @@ class MCControlCog(commands.Cog):
         except discord.HTTPException:
             log.exception("failed to edit mc control response")
 
-    # ---- /mc on ----------------------------------------------------------
+    # ---- /마크 켜기 ------------------------------------------------------
 
-    @mc.command(name="on", description="마인크래프트 서버를 켭니다 (암호 필요)")
+    @mc.command(name="켜기", description="마인크래프트 서버를 켭니다 (암호 필요)")
     async def power_on(self, interaction: discord.Interaction) -> None:
         if not await self._guard(interaction, needs_password=True):
             return
@@ -339,7 +339,7 @@ class MCControlCog(commands.Cog):
             notice_embed(
                 "기동 확인 실패",
                 f"`{_BOOT_TIMEOUT_SEC // 60}분` 안에 응답이 없었습니다. VM은 켜졌을 수 있으니 "
-                "`/mc status` 로 다시 확인해 주세요.",
+                "`/마크 상태`로 다시 확인해 주세요.",
                 tone="warn",
             ),
         )
@@ -355,9 +355,9 @@ class MCControlCog(commands.Cog):
         embed.add_field(name="접속자", value=f"{online}명", inline=False)
         return embed
 
-    # ---- /mc off ---------------------------------------------------------
+    # ---- /마크 끄기 ------------------------------------------------------
 
-    @mc.command(name="off", description="마인크래프트 서버를 끕니다 (암호 필요)")
+    @mc.command(name="끄기", description="마인크래프트 서버를 끕니다 (암호 필요)")
     async def power_off(self, interaction: discord.Interaction) -> None:
         if not await self._guard(interaction, needs_password=True):
             return
@@ -456,7 +456,7 @@ class MCControlCog(commands.Cog):
                 interaction,
                 notice_embed(
                     "종료 확인 실패",
-                    "종료 명령은 보냈지만 완료를 확인하지 못했습니다. `/mc status` 로 확인해 주세요.",
+                    "종료 명령은 보냈지만 완료를 확인하지 못했습니다. `/마크 상태`로 확인해 주세요.",
                     tone="warn",
                 ),
             )
@@ -470,9 +470,9 @@ class MCControlCog(commands.Cog):
         except discord.HTTPException:
             log.exception("failed to edit mc control response with view")
 
-    # ---- /mc status ------------------------------------------------------
+    # ---- /마크 상태 ------------------------------------------------------
 
-    @mc.command(name="status", description="마인크래프트 서버 상태를 확인합니다")
+    @mc.command(name="상태", description="마인크래프트 서버 상태를 확인합니다")
     async def status(self, interaction: discord.Interaction) -> None:
         if not await self._guard(interaction, needs_password=False):
             return
@@ -492,7 +492,7 @@ class MCControlCog(commands.Cog):
                 interaction,
                 notice_embed(
                     "서버가 꺼져 있습니다",
-                    f"VM 상태: `{vm_status}`\n`/mc on` 으로 켤 수 있습니다.",
+                    f"VM 상태: `{vm_status}`\n`/마크 켜기`로 켤 수 있습니다.",
                     tone="info",
                 ),
             )

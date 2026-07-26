@@ -22,7 +22,7 @@ discord.py `VoiceClient`의 라이프사이클(연결/이동/끊김 복구/idle 
 - TTS 봇이 다른 사람의 음성을 들을 필요 없음
 
 ## disconnect 정책
-- 기본값 `TTS_IDLE_DISCONNECT_SEC=0`: TTS 끄기 또는 `/leave` 전까지 연결 유지
+- 기본값 `TTS_IDLE_DISCONNECT_SEC=0`: TTS 끄기 또는 `/퇴장` 전까지 연결 유지
 - 양수로 설정한 경우에만 해당 초만큼 idle 후 자동 종료
 - 기본 연결 유지로 첫 문장의 Discord voice cold start를 제거
 - 단, 음성 채널에 사람이 한 명도 남지 않으면 봇만 대기하지 않고 즉시 퇴장
@@ -42,6 +42,6 @@ discord.py `VoiceClient`의 라이프사이클(연결/이동/끊김 복구/idle 
 - PyNaCl (음성 암호화)
 
 ## Validation
-- 봇이 채널 A에 있을 때 `/setvc B` + 메시지 입력 → 채널 B로 이동 후 재생
+- 봇이 채널 A에 있을 때 `/음성채널 B` + 메시지 입력 → 채널 B로 이동 후 재생
 - 봇 강제 disconnect (관리자가 강제 추방) → 다음 enqueue에서 재연결
 - 권한 박탈 시 텍스트 채널 안내 메시지 표시

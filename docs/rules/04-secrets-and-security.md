@@ -6,7 +6,7 @@
 ## Why
 - Discord 봇 토큰이 유출되면 봇 계정이 도용되어 spam·abuse·계정 정지 위험
 - 누군가 `cat .env` 한 줄로 끝나면 안 됨; 깃에 실수로 커밋되어 push되면 그 자체로 사고
-- 슬래시 명령어 권한이 부실하면 임의 사용자가 `/settts`로 다른 채널로 변경하여 원치 않는 음성 송출 가능
+- 슬래시 명령어 권한이 부실하면 임의 사용자가 `/읽기채널`로 다른 채널로 변경하여 원치 않는 음성 송출 가능
 
 ## How to Apply
 
@@ -38,7 +38,7 @@ __pycache__/
 또한 예외 traceback에 토큰이 들어가는 일이 없도록, `bot.run(os.environ["DISCORD_TOKEN"])`만 사용하고 토큰을 변수로 보관하지 않음.
 
 ### 4. 슬래시 명령어 권한
-- `/settts`, `/setvc`, `/setvoice` → `manage_channels=True` 권한 필요
+- `/읽기채널`, `/음성채널`, `/목소리` → `manage_channels=True` 권한 필요
 - 데코레이터 `@app_commands.checks.has_permissions(manage_channels=True)`
 - 권한 부족 시 `MissingPermissions` → 한국어 안내
 

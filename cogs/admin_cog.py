@@ -102,7 +102,7 @@ class AdminPanelView(discord.ui.View):
 
 class AdminCog(commands.Cog):
     admin = app_commands.Group(
-        name="admin",
+        name="관리자",
         description="봇 관리자 설정",
         default_permissions=discord.Permissions(administrator=True),
     )
@@ -111,7 +111,7 @@ class AdminCog(commands.Cog):
         self.bot = bot
         self.store = ConfigStore()
 
-    @admin.command(name="panel", description="버튼/선택 메뉴로 관리자 설정 편집")
+    @admin.command(name="대시보드", description="웹 관리자 대시보드 링크를 엽니다")
     @app_commands.checks.has_permissions(administrator=True)
     async def panel(self, interaction: discord.Interaction) -> None:
         if interaction.guild_id is None:

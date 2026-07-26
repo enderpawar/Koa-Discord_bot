@@ -1,20 +1,19 @@
 """Phase 6 + 7 — 슬래시 명령 + 이벤트 핸들러.
 
 본 cog 는 봇의 사용자 인터페이스 전체를 담당한다.
-- Phase 6: `/settts /setvc /setvoice /join /leave /status` 6개 슬래시 명령
+- Phase 6: `/읽기채널 /음성채널 /목소리 /입장 /퇴장 /상태` 6개 슬래시 명령
 - Phase 7: `on_message` (TTS 합성), `on_voice_state_update` (입/퇴장 알림)
 
 Rule 01 (봇 루프 방지): on_message / on_voice_state_update 첫 줄에 봇 가드.
 Rule 02 (guild 격리): 모든 처리는 interaction.guild_id / message.guild.id 기준.
 Rule 03 (복원력): 핸들러는 `log.exception` 으로 잡고 사용자에겐 무응답 또는 ephemeral 안내.
-Rule 04 (시크릿/권한): 민감 명령(settts/setvc/setvoice) 에 manage_channels 권한 체크.
+Rule 04 (시크릿/권한): 민감 명령(읽기채널/음성채널/목소리)에 manage_channels 권한 체크.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-import time
 
 import discord
 from discord import app_commands
@@ -29,17 +28,17 @@ from cogs.ui import BRAND_COLOR, channel_ref, notice_embed
 log = logging.getLogger(__name__)
 
 VOICE_CHOICES = [
-    app_commands.Choice(name="여성-차분 (SunHi)", value="ko-KR-SunHiNeural"),
-    app_commands.Choice(name="여성-또렷 (JiMin)", value="ko-KR-JiMinNeural"),
-    app_commands.Choice(name="여성-부드러움 (SeoHyeon)", value="ko-KR-SeoHyeonNeural"),
-    app_commands.Choice(name="여성-편안함 (SoonBok)", value="ko-KR-SoonBokNeural"),
-    app_commands.Choice(name="여성-경쾌 (YuJin)", value="ko-KR-YuJinNeural"),
-    app_commands.Choice(name="남성-자연 (InJoon)", value="ko-KR-InJoonNeural"),
-    app_commands.Choice(name="남성-무게감 (BongJin)", value="ko-KR-BongJinNeural"),
-    app_commands.Choice(name="남성-친근 (GookMin)", value="ko-KR-GookMinNeural"),
-    app_commands.Choice(name="남성-담백 (Hyunsu)", value="ko-KR-HyunsuNeural"),
+    app_commands.Choice(name="여성 · 차분", value="ko-KR-SunHiNeural"),
+    app_commands.Choice(name="여성 · 또렷", value="ko-KR-JiMinNeural"),
+    app_commands.Choice(name="여성 · 부드러움", value="ko-KR-SeoHyeonNeural"),
+    app_commands.Choice(name="여성 · 편안함", value="ko-KR-SoonBokNeural"),
+    app_commands.Choice(name="여성 · 경쾌", value="ko-KR-YuJinNeural"),
+    app_commands.Choice(name="남성 · 자연스러움", value="ko-KR-InJoonNeural"),
+    app_commands.Choice(name="남성 · 무게감", value="ko-KR-BongJinNeural"),
+    app_commands.Choice(name="남성 · 친근함", value="ko-KR-GookMinNeural"),
+    app_commands.Choice(name="남성 · 담백", value="ko-KR-HyunsuNeural"),
     app_commands.Choice(
-        name="남성-다국어 (Hyunsu Multi)",
+        name="남성 · 다국어",
         value="ko-KR-HyunsuMultilingualNeural",
     ),
 ]
@@ -311,7 +310,9 @@ class TTSCog(commands.Cog):
             embed=notice_embed("TTS 비활성화", "이 채널의 TTS를 껐습니다.", tone="ok"),
         )
 
-    @app_commands.command(name="settts", description="TTS 로 읽을 텍스트 채널 설정")
+    @app_commands.command(name="읽기채널", description="TTS로 읽을 채팅 채널을 설정합니다")
+    @app_commands.rename(channel="채널")
+    @app_commands.describe(channel="봇이 메시지를 읽을 채팅 채널")
     @app_commands.checks.has_permissions(manage_channels=True)
     async def settts(
         self, interaction: discord.Interaction, channel: discord.TextChannel
@@ -330,7 +331,9 @@ class TTSCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="setvc", description="봇이 음성을 출력할 채널 설정")
+    @app_commands.command(name="음성채널", description="봇이 말할 음성 채널을 설정합니다")
+    @app_commands.rename(channel="채널")
+    @app_commands.describe(channel="봇 음성을 재생할 음성 채널")
     @app_commands.checks.has_permissions(manage_channels=True)
     async def setvc(
         self, interaction: discord.Interaction, channel: discord.VoiceChannel
@@ -349,7 +352,9 @@ class TTSCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="setvoice", description="TTS 보이스 변경")
+    @app_commands.command(name="목소리", description="TTS 목소리를 변경합니다")
+    @app_commands.rename(voice="종류")
+    @app_commands.describe(voice="사용할 한국어 TTS 목소리")
     @app_commands.choices(voice=VOICE_CHOICES)
     @app_commands.checks.has_permissions(manage_channels=True)
     async def setvoice(
@@ -369,7 +374,7 @@ class TTSCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="join", description="설정된 음성 채널로 입장")
+    @app_commands.command(name="입장", description="설정된 음성 채널로 봇을 입장시킵니다")
     async def join(self, interaction: discord.Interaction) -> None:
         cfg = await self.store.get(interaction.guild_id)
         ch_id = cfg.get("voice_channel_id")
@@ -378,7 +383,7 @@ class TTSCog(commands.Cog):
             await interaction.response.send_message(
                 embed=notice_embed(
                     "음성 채널 미설정",
-                    "먼저 `/setvc` 로 음성 채널을 지정하세요.",
+                    "먼저 `/음성채널`로 봇이 말할 채널을 지정하세요.",
                     tone="warn",
                 ),
                 ephemeral=True,
@@ -402,7 +407,7 @@ class TTSCog(commands.Cog):
             embed=notice_embed("음성 채널 입장", f"{channel.mention} 에 입장했습니다.", tone="ok"),
         )
 
-    @app_commands.command(name="leave", description="음성 채널에서 퇴장")
+    @app_commands.command(name="퇴장", description="봇을 음성 채널에서 퇴장시킵니다")
     async def leave(self, interaction: discord.Interaction) -> None:
         vc = interaction.guild.voice_client
         if vc is None or not vc.is_connected():
@@ -427,7 +432,7 @@ class TTSCog(commands.Cog):
             embed=notice_embed("음성 채널 퇴장", "퇴장했습니다.", tone="ok"),
         )
 
-    @app_commands.command(name="status", description="현재 설정 확인")
+    @app_commands.command(name="상태", description="현재 TTS 설정과 연결 상태를 확인합니다")
     async def status(self, interaction: discord.Interaction) -> None:
         cfg = await self.store.get(interaction.guild_id)
         await interaction.response.send_message(embed=_tts_status_embed(cfg), ephemeral=True)

@@ -139,8 +139,8 @@ RUN_LIVE=1 python -m pytest tests/unit/test_tts_engine.py -m live -v
 수동 시나리오:
 
 1. `python bot.py` 실행
-2. Discord에서 `/setvc 🔊 일반음성`, `/settts #tts-입력`
-3. `/join` → 봇이 음성 채널 입장 확인
+2. Discord에서 `/음성채널 🔊 일반음성`, `/읽기채널 #tts-입력`
+3. `/입장` → 봇이 음성 채널 입장 확인
 4. **사용자가 직접** 큐를 인큐하기 위해 임시 명령(`/say <text>`) 또는 텍스트 채널 메시지 입력 (Phase 7 의존이지만 5에선 임시 helper로 검증)
 5. 5건 빠르게 입력 → 순서대로 끊김 없이 재생되는지 청취
 6. 5분간 입력 없이 대기 → 봇이 연결을 유지하는지 확인
@@ -157,12 +157,12 @@ RUN_LIVE=1 python -m pytest tests/unit/test_tts_engine.py -m live -v
 
 | 명령 | 검증 포인트 |
 |------|------------|
-| `/settts` | 권한 없는 사용자에게 차단됨 |
-| `/setvc` | 음성 채널만 선택 가능 (UI 필터링) |
-| `/setvoice` | dropdown에 여성 5개·남성 5개, 총 10개 한국어 보이스 |
-| `/join` | 사전 `/setvc` 없으면 안내 |
-| `/leave` | 미입장 상태에서도 안전 |
-| `/status` | 모든 설정 + 현재 voice 표시 |
+| `/읽기채널` | 권한 없는 사용자에게 차단됨 |
+| `/음성채널` | 음성 채널만 선택 가능 (UI 필터링) |
+| `/목소리` | dropdown에 여성 5개·남성 5개, 총 10개 한국어 보이스 |
+| `/입장` | 사전 `/음성채널` 없으면 안내 |
+| `/퇴장` | 미입장 상태에서도 안전 |
+| `/상태` | 모든 설정 + 현재 voice 표시 |
 
 ### 4.4 Event Handlers (Phase 7)
 

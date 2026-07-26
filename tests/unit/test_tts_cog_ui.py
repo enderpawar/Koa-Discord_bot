@@ -30,12 +30,9 @@ def test_voice_choices_include_all_available_korean_voices() -> None:
 
 
 def test_voice_label_uses_choice_name() -> None:
-    assert _voice_label("ko-KR-SunHiNeural") == "여성-차분 (SunHi)"
-    assert _voice_label("ko-KR-YuJinNeural") == "여성-경쾌 (YuJin)"
-    assert (
-        _voice_label("ko-KR-HyunsuMultilingualNeural")
-        == "남성-다국어 (Hyunsu Multi)"
-    )
+    assert _voice_label("ko-KR-SunHiNeural") == "여성 · 차분"
+    assert _voice_label("ko-KR-YuJinNeural") == "여성 · 경쾌"
+    assert _voice_label("ko-KR-HyunsuMultilingualNeural") == "남성 · 다국어"
     assert _voice_label("custom") == "custom"
 
 
@@ -52,7 +49,7 @@ def test_tts_status_embed_groups_settings() -> None:
     assert [field.name for field in embed.fields] == ["입력 채널", "음성 채널", "보이스", "상태"]
     assert embed.fields[0].value == "<#11>"
     assert embed.fields[1].value == "<#22>"
-    assert "여성-차분" in embed.fields[2].value
+    assert "여성 · 차분" in embed.fields[2].value
     assert embed.fields[3].value == "재생 준비됨"
 
 
@@ -298,8 +295,10 @@ async def test_handle_tts_message_fast_path_skips_async_get() -> None:
     message = MagicMock()
     message.author.bot = False
     message.webhook_id = None
-    message.guild = MagicMock(); message.guild.id = 1
-    message.channel = MagicMock(); message.channel.id = 999
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.channel = MagicMock()
+    message.channel.id = 999
 
     await cog._handle_tts_message(message)
 
@@ -317,11 +316,13 @@ async def test_handle_tts_message_enqueues_when_channel_matches() -> None:
     message = MagicMock()
     message.author.bot = False
     message.webhook_id = None
-    message.guild = MagicMock(); message.guild.id = 1
+    message.guild = MagicMock()
+    message.guild.id = 1
     voice_channel = _voice_channel(200)
     voice_channel.members = [_human(10)]
     message.guild.get_channel.return_value = voice_channel
-    message.channel = MagicMock(); message.channel.id = 100
+    message.channel = MagicMock()
+    message.channel.id = 100
     message.clean_content = "hello"
 
     await cog._handle_tts_message(message)
@@ -339,9 +340,11 @@ async def test_handle_tts_message_does_not_rejoin_empty_voice_channel() -> None:
     message = MagicMock()
     message.author.bot = False
     message.webhook_id = None
-    message.guild = MagicMock(); message.guild.id = 1
+    message.guild = MagicMock()
+    message.guild.id = 1
     message.guild.get_channel.return_value = _voice_channel(200)
-    message.channel = MagicMock(); message.channel.id = 100
+    message.channel = MagicMock()
+    message.channel.id = 100
     message.clean_content = "아무도 없어요"
 
     await cog._handle_tts_message(message)
@@ -357,7 +360,8 @@ async def test_handle_voice_state_fast_path_skips_unrelated_channel() -> None:
     member = MagicMock()
     member.bot = False
     member.display_name = "tester"
-    member.guild = MagicMock(); member.guild.id = 1
+    member.guild = MagicMock()
+    member.guild.id = 1
     member.guild.voice_client = None
 
     before = SimpleNamespace(channel=None)

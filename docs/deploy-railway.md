@@ -34,15 +34,18 @@
 | `DISCORD_TOKEN` | Developer Portal 에서 발급받은 봇 토큰 |
 | `LOG_LEVEL` | `INFO` (기본 권장) |
 | `CONFIG_PATH` | `/data/config.json` |
+| `RANK_PATH` | `/data/rank_stats.json` |
+| `PARTY_DB_PATH` | `/data/party.db` |
 | `TEST_GUILD_ID` *(선택)* | 슬래시 명령 즉시 sync 할 길드 ID. 미설정 시 전역 sync (캐시 1시간) |
 
 > ⚠️ `DISCORD_TOKEN` 은 절대 코드/저장소에 들어가면 안 됨. Railway Variables 안에서만 보관.
 
 ---
 
-## 3. 영구 디스크 (Volume) 마운트 — guild 설정 영속화
+## 3. 영구 디스크 (Volume) 마운트 — guild 데이터 영속화
 
-Railway 컨테이너는 재배포할 때마다 파일 시스템이 초기화됩니다. `config.json` 을 보존하려면 Volume 이 필요합니다.
+Railway 컨테이너는 재배포할 때마다 파일 시스템이 초기화됩니다. 설정, 랭킹,
+파티 모집 상태를 보존하려면 Volume이 필요합니다.
 
 1. 프로젝트 → 서비스 클릭 → **Settings** 탭 → **Volumes** 섹션
 2. **+ Add Volume**:
@@ -50,7 +53,8 @@ Railway 컨테이너는 재배포할 때마다 파일 시스템이 초기화됩�
    - **Size**: `1 GB` (충분)
 3. 저장 후 자동 재배포됨
 
-`CONFIG_PATH=/data/config.json` 환경변수가 이 volume 을 가리키도록 이미 설정되어 있어야 합니다 (§2 참조).
+`CONFIG_PATH`, `RANK_PATH`, `PARTY_DB_PATH`가 모두 이 volume을 가리키도록
+설정되어 있어야 합니다(§2 참조).
 
 ---
 

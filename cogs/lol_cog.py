@@ -1,7 +1,7 @@
 """리그 오브 레전드 전적 조회 명령 (op.gg 형태).
 
 Riot 공식 API 로 라이엇ID → 솔로/자유 랭크 + 최근 경기를 임베드로 보여준다.
-`/lol register` 로 한 번 등록하면 이후 `/lol profile` 로 바로 조회된다.
+`/롤 등록`으로 한 번 등록하면 이후 `/롤 전적`으로 바로 조회된다.
 
 키(RIOT_API_KEY) 미설정이면 명령이 '설정 필요'로 응답한다. 개발 키는 24시간마다
 만료되므로 만료 시 키 거부로 처리해 안내한다.
@@ -31,22 +31,22 @@ _SOLO_QUEUE = "RANKED_SOLO_5x5"
 _FLEX_QUEUE = "RANKED_FLEX_SR"
 
 _PLATFORM_CHOICES = [
-    app_commands.Choice(name="한국 (KR)", value="kr"),
-    app_commands.Choice(name="일본 (JP)", value="jp1"),
-    app_commands.Choice(name="북미 (NA)", value="na1"),
-    app_commands.Choice(name="유럽 서부 (EUW)", value="euw1"),
-    app_commands.Choice(name="유럽 북동부 (EUNE)", value="eun1"),
-    app_commands.Choice(name="브라질 (BR)", value="br1"),
-    app_commands.Choice(name="라틴아메리카 북부 (LAN)", value="la1"),
-    app_commands.Choice(name="라틴아메리카 남부 (LAS)", value="la2"),
-    app_commands.Choice(name="오세아니아 (OCE)", value="oc1"),
-    app_commands.Choice(name="튀르키예 (TR)", value="tr1"),
-    app_commands.Choice(name="러시아 (RU)", value="ru"),
-    app_commands.Choice(name="필리핀 (PH)", value="ph2"),
-    app_commands.Choice(name="싱가포르 (SG)", value="sg2"),
-    app_commands.Choice(name="태국 (TH)", value="th2"),
-    app_commands.Choice(name="대만 (TW)", value="tw2"),
-    app_commands.Choice(name="베트남 (VN)", value="vn2"),
+    app_commands.Choice(name="한국", value="kr"),
+    app_commands.Choice(name="일본", value="jp1"),
+    app_commands.Choice(name="북미", value="na1"),
+    app_commands.Choice(name="유럽 서부", value="euw1"),
+    app_commands.Choice(name="유럽 북동부", value="eun1"),
+    app_commands.Choice(name="브라질", value="br1"),
+    app_commands.Choice(name="라틴아메리카 북부", value="la1"),
+    app_commands.Choice(name="라틴아메리카 남부", value="la2"),
+    app_commands.Choice(name="오세아니아", value="oc1"),
+    app_commands.Choice(name="튀르키예", value="tr1"),
+    app_commands.Choice(name="러시아", value="ru"),
+    app_commands.Choice(name="필리핀", value="ph2"),
+    app_commands.Choice(name="싱가포르", value="sg2"),
+    app_commands.Choice(name="태국", value="th2"),
+    app_commands.Choice(name="대만", value="tw2"),
+    app_commands.Choice(name="베트남", value="vn2"),
 ]
 
 _TIER_EMOJI = {
@@ -216,7 +216,7 @@ class LolCog(commands.Cog):
     async def cog_unload(self) -> None:
         await api.close_session()
 
-    lol = app_commands.Group(name="lol", description="리그 오브 레전드 전적 조회")
+    lol = app_commands.Group(name="롤", description="리그 오브 레전드 전적 조회")
 
     async def _check_cooldown(self, interaction: discord.Interaction) -> bool:
         wait = self.cooldown.retry_after(interaction.user.id)
@@ -292,9 +292,10 @@ class LolCog(commands.Cog):
             )
         )
 
-    # ---- /lol register -----------------------------------------------------
+    # ---- /롤 등록 ----------------------------------------------------------
 
-    @lol.command(name="register", description="내 디스코드 계정에 라이엇ID 등록")
+    @lol.command(name="등록", description="내 디스코드 계정에 라이엇ID를 등록합니다")
+    @app_commands.rename(riot_id="라이엇아이디", region="지역")
     @app_commands.describe(riot_id="닉네임#태그 (예: Hide on bush#KR1)", region="계정 지역")
     @app_commands.choices(region=_PLATFORM_CHOICES)
     async def register(
@@ -334,15 +335,16 @@ class LolCog(commands.Cog):
             embed=notice_embed(
                 "등록 완료",
                 f"`{name}#{tag}` ({region.name}) 계정을 등록했습니다. "
-                "이제 `/lol profile` 로 바로 조회할 수 있어요.",
+                "이제 `/롤 전적`으로 바로 조회할 수 있어요.",
                 tone="ok",
             ),
             ephemeral=True,
         )
 
-    # ---- /lol profile ------------------------------------------------------
+    # ---- /롤 전적 ----------------------------------------------------------
 
-    @lol.command(name="profile", description="등록된 라이엇ID로 전적 조회")
+    @lol.command(name="전적", description="등록된 라이엇ID로 전적을 조회합니다")
+    @app_commands.rename(member="멤버")
     @app_commands.describe(member="조회할 멤버 (생략 시 본인)")
     async def profile(
         self,
@@ -358,7 +360,7 @@ class LolCog(commands.Cog):
             await interaction.response.send_message(
                 embed=notice_embed(
                     "등록이 필요합니다",
-                    f"{who} `/lol register` 로 라이엇ID를 등록해야 합니다.",
+                    f"{who} `/롤 등록`으로 라이엇ID를 등록해야 합니다.",
                     tone="warn",
                 ),
                 ephemeral=True,
@@ -367,9 +369,10 @@ class LolCog(commands.Cog):
         await interaction.response.defer(thinking=True)
         await self._send_profile(interaction, reg["name"], reg["tag"], reg["platform"])
 
-    # ---- /lol lookup -------------------------------------------------------
+    # ---- /롤 검색 ----------------------------------------------------------
 
-    @lol.command(name="lookup", description="라이엇ID로 즉석 전적 조회 (등록 없이)")
+    @lol.command(name="검색", description="등록하지 않고 라이엇ID로 전적을 조회합니다")
+    @app_commands.rename(riot_id="라이엇아이디", region="지역")
     @app_commands.describe(riot_id="닉네임#태그", region="계정 지역")
     @app_commands.choices(region=_PLATFORM_CHOICES)
     async def lookup(
@@ -396,9 +399,9 @@ class LolCog(commands.Cog):
         await interaction.response.defer(thinking=True)
         await self._send_profile(interaction, name, tag, platform)
 
-    # ---- /lol unregister ---------------------------------------------------
+    # ---- /롤 등록해제 ------------------------------------------------------
 
-    @lol.command(name="unregister", description="등록한 라이엇ID 삭제")
+    @lol.command(name="등록해제", description="내 계정에 등록한 라이엇ID를 삭제합니다")
     async def unregister(self, interaction: discord.Interaction) -> None:
         removed = await self.store.remove(interaction.user.id)
         if removed:

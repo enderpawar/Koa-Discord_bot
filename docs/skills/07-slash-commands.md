@@ -7,12 +7,12 @@
 
 | 명령어 | 권한 | 파라미터 | 동작 |
 |--------|------|---------|------|
-| `/settts` | Manage Channels | `channel: TextChannel` | TTS 읽기 대상 텍스트 채널 설정 |
-| `/setvc` | Manage Channels | `channel: VoiceChannel` | 봇이 음성 출력할 채널 설정 |
-| `/setvoice` | Manage Channels | `voice: Choice[str]` | TTS 보이스 변경 (한국어 10개 선택지) |
-| `/join` | 일반 | – | 설정된 음성 채널로 즉시 입장 |
-| `/leave` | 일반 | – | 음성 채널에서 퇴장 |
-| `/status` | 일반 | – | 현재 설정(채널 ID, voice) 확인 |
+| `/읽기채널` | Manage Channels | `채널: TextChannel` | TTS 읽기 대상 텍스트 채널 설정 |
+| `/음성채널` | Manage Channels | `채널: VoiceChannel` | 봇이 음성 출력할 채널 설정 |
+| `/목소리` | Manage Channels | `종류: Choice[str]` | TTS 보이스 변경 (한국어 10개 선택지) |
+| `/입장` | 일반 | – | 설정된 음성 채널로 즉시 입장 |
+| `/퇴장` | 일반 | – | 음성 채널에서 퇴장 |
+| `/상태` | 일반 | – | 현재 설정(채널 ID, voice) 확인 |
 
 ## Implementation Sketch
 ```python
@@ -23,21 +23,24 @@ class TTSCog(commands.Cog):
     def __init__(self, bot, store, queue):
         self.bot, self.store, self.queue = bot, store, queue
 
-    @app_commands.command(name="settts", description="TTS 채팅 채널 지정")
+    @app_commands.command(name="읽기채널", description="TTS 채팅 채널 지정")
+    @app_commands.rename(channel="채널")
     @app_commands.checks.has_permissions(manage_channels=True)
     async def settts(self, itx: discord.Interaction, channel: discord.TextChannel):
         await self.store.set(itx.guild_id, tts_channel_id=channel.id)
         await itx.response.send_message(f"TTS 채널을 {channel.mention}으로 설정", ephemeral=True)
 
-    @app_commands.command(name="setvc", description="음성 출력 채널 지정")
+    @app_commands.command(name="음성채널", description="음성 출력 채널 지정")
+    @app_commands.rename(channel="채널")
     @app_commands.checks.has_permissions(manage_channels=True)
     async def setvc(self, itx, channel: discord.VoiceChannel):
         await self.store.set(itx.guild_id, voice_channel_id=channel.id)
         await itx.response.send_message(f"음성 채널을 {channel.mention}으로 설정", ephemeral=True)
 
-    @app_commands.command(name="setvoice", description="TTS 보이스 변경")
+    @app_commands.command(name="목소리", description="TTS 보이스 변경")
+    @app_commands.rename(voice="종류")
     @app_commands.choices(voice=[
-        app_commands.Choice(name="여성-차분 (SunHi)", value="ko-KR-SunHiNeural"),
+        app_commands.Choice(name="여성 · 차분", value="ko-KR-SunHiNeural"),
         app_commands.Choice(name="남성-자연 (InJoon)", value="ko-KR-InJoonNeural"),
         app_commands.Choice(name="남성-무게감 (BongJin)", value="ko-KR-BongJinNeural"),
         app_commands.Choice(name="남성-친근 (GookMin)", value="ko-KR-GookMinNeural"),
@@ -46,16 +49,16 @@ class TTSCog(commands.Cog):
         await self.store.set(itx.guild_id, voice=voice.value)
         await itx.response.send_message(f"보이스: {voice.name}", ephemeral=True)
 
-    @app_commands.command(name="join", description="음성 채널 입장")
+    @app_commands.command(name="입장", description="음성 채널 입장")
     async def join(self, itx):
         cfg = await self.store.get(itx.guild_id)
         ch = itx.guild.get_channel(cfg.get("voice_channel_id", 0))
         if not ch:
-            return await itx.response.send_message("먼저 /setvc로 음성 채널을 지정하세요", ephemeral=True)
+            return await itx.response.send_message("먼저 /음성채널로 음성 채널을 지정하세요", ephemeral=True)
         await self.queue.connect(itx.guild, ch.id)
         await itx.response.send_message("입장했습니다", ephemeral=True)
 
-    @app_commands.command(name="leave", description="음성 채널 퇴장")
+    @app_commands.command(name="퇴장", description="음성 채널 퇴장")
     async def leave(self, itx):
         if itx.guild.voice_client:
             await itx.guild.voice_client.disconnect()
@@ -63,7 +66,7 @@ class TTSCog(commands.Cog):
         else:
             await itx.response.send_message("음성 채널에 없습니다", ephemeral=True)
 
-    @app_commands.command(name="status", description="현재 설정 확인")
+    @app_commands.command(name="상태", description="현재 설정 확인")
     async def status(self, itx):
         cfg = await self.store.get(itx.guild_id)
         msg = (f"TTS 채널: <#{cfg.get('tts_channel_id', '미설정')}>\n"
@@ -81,11 +84,11 @@ class TTSCog(commands.Cog):
 - 개발 중에는 `await bot.tree.sync(guild=discord.Object(id=GUILD_ID))`로 단일 서버 즉시 반영 가능
 
 ## Applied Rules
-- [04-secrets-and-security](../rules/04-secrets-and-security.md): 민감 명령(`settts`, `setvc`, `setvoice`)에 권한 체크
+- [04-secrets-and-security](../rules/04-secrets-and-security.md): 민감 명령(`읽기채널`, `음성채널`, `목소리`)에 권한 체크
 - [02-guild-isolation](../rules/02-guild-isolation.md): 모든 명령은 `interaction.guild_id` 컨텍스트로 작동
 - [06-logging-standards](../rules/06-logging-standards.md): 명령어 실행을 INFO 레벨로 로깅
 
 ## Validation
-1. 테스트 서버에서 `/settts` `/setvc` `/setvoice` `/join` 순으로 실행 → 응답 정상
-2. `/status` → 설정값 표시
-3. 일반 권한 사용자가 `/settts` → 권한 부족 안내
+1. 테스트 서버에서 `/읽기채널` `/음성채널` `/목소리` `/입장` 순으로 실행 → 응답 정상
+2. `/상태` → 설정값 표시
+3. 일반 권한 사용자가 `/읽기채널` → 권한 부족 안내

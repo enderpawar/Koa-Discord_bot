@@ -11,7 +11,6 @@ exit codes:
 """
 from __future__ import annotations
 import json
-import os
 import re
 import subprocess
 import sys
@@ -45,6 +44,9 @@ MAPPING: list[tuple[str, str]] = [
     (r"cogs/lol_api\.py$",            "tests/unit/test_lol.py"),
     (r"cogs/lol_store\.py$",          "tests/unit/test_lol.py"),
     (r"cogs/lol_cog\.py$",            "tests/unit/test_lol.py"),
+    (r"cogs/party_store\.py$",         "tests/unit/test_party.py"),
+    (r"cogs/party_cog\.py$",           "tests/unit/test_party.py"),
+    (r"cogs/fortune_cog\.py$",         "tests/unit/test_fortune.py"),
     # 테스트 파일 자체를 편집한 경우 → 그 테스트 다시 실행
     (r"tests/unit/(test_[a-z_]+)\.py$", r"tests/unit/\1.py"),
 ]
