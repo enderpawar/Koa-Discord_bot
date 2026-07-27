@@ -157,6 +157,39 @@ async def test_ensure_voice_waits_for_discord_reconnect(monkeypatch):
     target.connect.assert_not_called()
 
 
+async def test_ensure_voice_does_not_connect_for_event_playback():
+    from cogs.audio_queue import AudioQueue, VoiceSessionInactive
+
+    q = AudioQueue()
+    guild = _make_guild()
+    target = guild.get_channel.return_value
+
+    with pytest.raises(VoiceSessionInactive):
+        await q._ensure_voice(guild, target.id, allow_connect=False)
+
+    target.connect.assert_not_called()
+
+
+async def test_ensure_voice_does_not_move_event_playback_to_another_channel():
+    from cogs.audio_queue import AudioQueue, VoiceSessionInactive
+
+    q = AudioQueue()
+    guild = _make_guild()
+    target = guild.get_channel.return_value
+    target.id = 200
+    vc = MagicMock()
+    vc.channel.id = 100
+    vc.is_connected.return_value = True
+    vc.move_to = AsyncMock()
+    guild.voice_client = vc
+
+    with pytest.raises(VoiceSessionInactive):
+        await q._ensure_voice(guild, target.id, allow_connect=False)
+
+    vc.move_to.assert_not_awaited()
+    target.connect.assert_not_called()
+
+
 async def test_ensure_voice_retries_initial_connect_timeout(monkeypatch):
     from cogs.audio_queue import AudioQueue
 

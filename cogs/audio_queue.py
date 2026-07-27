@@ -138,6 +138,10 @@ class AudioRequest:
     enqueued_at: float = field(default_factory=time.perf_counter)
 
 
+class VoiceSessionInactive(RuntimeError):
+    """Raised when event-driven playback has no active matching voice session."""
+
+
 class MonoPCMToStereo(discord.AudioSource):
     """48kHz 16-bit mono PCM file source adapted to Discord stereo PCM."""
 
@@ -718,7 +722,14 @@ class AudioQueue:
                 try:
                     for playback_attempt in range(1, VOICE_PLAYBACK_ATTEMPTS + 1):
                         trace_start = time.perf_counter()
-                        vc = await self._ensure_voice(guild, req.voice_channel_id)
+                        # 연결 생성/채널 이동은 `/입장` 및 UI 버튼만 수행한다.
+                        # 메시지/이벤트 큐는 기존 연결만 재사용하여 텍스트 입력이
+                        # 봇의 자동 입장을 유발하지 않게 한다.
+                        vc = await self._ensure_voice(
+                            guild,
+                            req.voice_channel_id,
+                            allow_connect=False,
+                        )
                         ensure_ms = (time.perf_counter() - trace_start) * 1000
                         try:
                             await self._play_streaming(
@@ -742,6 +753,13 @@ class AudioQueue:
                                 playback_attempt,
                                 VOICE_PLAYBACK_ATTEMPTS,
                             )
+                except VoiceSessionInactive:
+                    log.debug(
+                        "audio request dropped without active voice session: "
+                        "guild_id=%s channel_id=%s",
+                        guild.id,
+                        req.voice_channel_id,
+                    )
                 except Exception:
                     log.exception("audio worker failed: guild_id=%s", guild.id)
                 finally:
@@ -798,7 +816,11 @@ class AudioQueue:
         return len(trimmed_pcm)
 
     async def _ensure_voice(
-        self, guild: discord.Guild, channel_id: int
+        self,
+        guild: discord.Guild,
+        channel_id: int,
+        *,
+        allow_connect: bool = True,
     ) -> discord.VoiceClient:
         target = guild.get_channel(channel_id)
         if target is None:
@@ -810,10 +832,18 @@ class AudioQueue:
                 vc = guild.voice_client
                 if vc is not None and vc.is_connected():
                     if vc.channel.id != channel_id:
+                        if not allow_connect:
+                            raise VoiceSessionInactive(
+                                "bot is connected to a different voice channel"
+                            )
                         await vc.move_to(target)
                         self._voice_stable_clients.pop(guild.id, None)
                     if self._voice_stable_clients.get(guild.id) is not vc:
                         if not await self._wait_for_voice_media_ready(guild, vc):
+                            if not allow_connect:
+                                raise VoiceSessionInactive(
+                                    "voice media path is not ready"
+                                )
                             await self._cleanup_stale_voice(guild, vc)
                             continue
                     self._start_voice_keepalive(guild, vc)
@@ -825,6 +855,9 @@ class AudioQueue:
                         (time.perf_counter() - attempt_started) * 1000,
                     )
                     return vc
+
+                if not allow_connect:
+                    raise VoiceSessionInactive("bot is not connected to voice")
 
                 if vc is not None:
                     # Discord 화면에는 봇이 먼저 입장한 것처럼 보여도 voice

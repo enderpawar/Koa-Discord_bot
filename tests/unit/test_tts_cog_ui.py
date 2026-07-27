@@ -155,6 +155,13 @@ def _bot_member(member_id: int) -> MagicMock:
     return member
 
 
+def _connected_voice(channel: discord.VoiceChannel) -> MagicMock:
+    vc = MagicMock(spec=discord.VoiceClient)
+    vc.channel = channel
+    vc.is_connected.return_value = True
+    return vc
+
+
 @pytest.mark.asyncio
 async def test_join_uses_callers_voice_channel_for_input_and_output() -> None:
     cog = _make_cog({"voice_channel_id": 999, "tts_channel_id": 888})
@@ -393,6 +400,7 @@ async def test_handle_tts_message_enqueues_when_channel_matches() -> None:
     voice_channel = _voice_channel(200)
     voice_channel.members = [_human(10)]
     message.guild.get_channel.return_value = voice_channel
+    message.guild.voice_client = _connected_voice(voice_channel)
     message.channel = MagicMock()
     message.channel.id = 100
     message.clean_content = "hello"
@@ -417,6 +425,7 @@ async def test_handle_tts_message_reads_joined_voice_channel_chat() -> None:
     message.guild = MagicMock()
     message.guild.id = 1
     message.guild.get_channel.return_value = voice_channel
+    message.guild.voice_client = _connected_voice(voice_channel)
     message.channel = voice_channel
     message.clean_content = "음성 채널 채팅"
 
@@ -439,13 +448,61 @@ async def test_handle_tts_message_does_not_rejoin_empty_voice_channel() -> None:
     message.webhook_id = None
     message.guild = MagicMock()
     message.guild.id = 1
-    message.guild.get_channel.return_value = _voice_channel(200)
+    voice_channel = _voice_channel(200)
+    message.guild.get_channel.return_value = voice_channel
+    message.guild.voice_client = _connected_voice(voice_channel)
     message.channel = MagicMock()
     message.channel.id = 100
     message.clean_content = "아무도 없어요"
 
     await cog._handle_tts_message(message)
 
+    cog.queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_does_not_auto_join_when_disconnected() -> None:
+    """사람이 있어도 봇이 미접속이면 채팅 메시지로 자동 입장하지 않는다."""
+    cog = _make_cog({
+        "tts_channel_id": 100,
+        "voice_channel_id": 100,
+    })
+    voice_channel = _voice_channel(100)
+    voice_channel.members = [_human(10)]
+    message = MagicMock()
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.guild.voice_client = None
+    message.guild.get_channel.return_value = voice_channel
+    message.channel = voice_channel
+    message.clean_content = "자동 입장 금지"
+
+    await cog._handle_tts_message(message)
+
+    cog.store.get.assert_not_awaited()
+    cog.queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_ignores_different_bot_voice_channel() -> None:
+    """봇이 다른 음성 채널에 있으면 설정 채널 채팅을 재생하지 않는다."""
+    cog = _make_cog({
+        "tts_channel_id": 100,
+        "voice_channel_id": 100,
+    })
+    voice_channel = _voice_channel(100)
+    voice_channel.members = [_human(10)]
+    message = MagicMock()
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.guild.voice_client = _connected_voice(_voice_channel(200))
+    message.guild.get_channel.return_value = voice_channel
+    message.channel = voice_channel
+    message.clean_content = "다른 채널"
+
+    await cog._handle_tts_message(message)
+
+    cog.store.get.assert_not_awaited()
     cog.queue.enqueue.assert_not_awaited()
 
 

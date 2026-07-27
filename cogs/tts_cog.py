@@ -68,6 +68,20 @@ def _has_human_members(
     )
 
 
+def _connected_voice_client(
+    guild: discord.Guild,
+    channel_id: int,
+) -> discord.VoiceClient | None:
+    """Return the guild voice client only when it is connected to channel_id."""
+    vc = guild.voice_client
+    if vc is None or not vc.is_connected():
+        return None
+    channel = getattr(vc, "channel", None)
+    if channel is None or channel.id != channel_id:
+        return None
+    return vc
+
+
 def _tts_status_embed(cfg: dict) -> discord.Embed:
     tts_ch = cfg.get("tts_channel_id")
     vc_ch = cfg.get("voice_channel_id")
@@ -524,6 +538,15 @@ class TTSCog(commands.Cog):
         tts_channel_id = cached.get("tts_channel_id")
         if not tts_channel_id or message.channel.id != tts_channel_id:
             return
+        voice_channel_id = cached.get("voice_channel_id")
+        # 텍스트 입력이 AudioQueue의 자동 연결 경로를 열지 않도록, 비동기
+        # config 조회보다 먼저 현재 voice 연결을 확인한다. 정상 연결 시에는
+        # 메모리 속성 조회뿐이라 TTS 지연에 영향을 주지 않는다.
+        if (
+            not voice_channel_id
+            or _connected_voice_client(message.guild, voice_channel_id) is None
+        ):
+            return
 
         cfg = await self.store.get(message.guild.id)
         tts_channel_id = cfg.get("tts_channel_id")
@@ -531,6 +554,9 @@ class TTSCog(commands.Cog):
         if not tts_channel_id or not voice_channel_id:
             return
         if message.channel.id != tts_channel_id:
+            return
+        # config 조회 중 퇴장/이동한 경우에도 큐에 넣지 않는다.
+        if _connected_voice_client(message.guild, voice_channel_id) is None:
             return
 
         voice_channel = message.guild.get_channel(voice_channel_id)
