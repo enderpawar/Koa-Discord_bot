@@ -62,9 +62,14 @@ def test_command_groups_and_subcommands_are_korean() -> None:
         "끄기",
         "상태",
         "서버",
+        "화이트리스트",
     }
     mc_server = next(command for command in MCControlCog.mc.commands if command.name == "서버")
     assert {command.name for command in mc_server.commands} == {"공지"}
+    mc_whitelist = next(
+        command for command in MCControlCog.mc.commands if command.name == "화이트리스트"
+    )
+    assert {command.name for command in mc_whitelist.commands} == {"등록"}
     assert LolCog.lol.name == "롤"
     assert {command.name for command in LolCog.lol.commands} == {
         "등록",
@@ -87,6 +92,15 @@ def test_user_facing_option_names_are_korean() -> None:
     assert _option_names(TTSCog.setvoice) == ["종류"]
     assert _option_names(RankCog.rank) == ["멤버"]
     assert _option_names(PartyCog.create_party) == ["게임", "정원", "시작", "메모"]
+
+    mc_payload = _payload(MCControlCog.mc)
+    mc_whitelist = next(
+        option for option in mc_payload["options"] if option["name"] == "화이트리스트"
+    )
+    whitelist_register = next(
+        option for option in mc_whitelist["options"] if option["name"] == "등록"
+    )
+    assert [option["name"] for option in whitelist_register["options"]] == ["닉네임"]
 
     lol_payload = _payload(LolCog.lol)
     lol_options = {

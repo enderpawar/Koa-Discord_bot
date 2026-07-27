@@ -374,16 +374,18 @@ class TTSCog(commands.Cog):
             ephemeral=True,
         )
 
-    @app_commands.command(name="입장", description="설정된 음성 채널로 봇을 입장시킵니다")
+    @app_commands.command(
+        name="입장",
+        description="현재 참여 중인 음성 채널로 봇을 부르고 채널 채팅 TTS를 켭니다",
+    )
     async def join(self, interaction: discord.Interaction) -> None:
-        cfg = await self.store.get(interaction.guild_id)
-        ch_id = cfg.get("voice_channel_id")
-        channel = interaction.guild.get_channel(ch_id) if ch_id else None
-        if channel is None or not isinstance(channel, discord.VoiceChannel):
+        voice_state = getattr(interaction.user, "voice", None)
+        channel = voice_state.channel if voice_state else None
+        if interaction.guild is None or not isinstance(channel, discord.VoiceChannel):
             await interaction.response.send_message(
                 embed=notice_embed(
-                    "음성 채널 미설정",
-                    "먼저 `/음성채널`로 봇이 말할 채널을 지정하세요.",
+                    "음성 채널 필요",
+                    "먼저 사용할 음성 채널에 입장한 뒤 `/입장`을 실행하세요.",
                     tone="warn",
                 ),
                 ephemeral=True,
@@ -403,8 +405,25 @@ class TTSCog(commands.Cog):
                 embed=notice_embed("입장 실패", "입장 중 오류가 발생했습니다.", tone="error"),
             )
             return
+        # 음성 채널 채팅의 ID는 음성 채널 ID와 같다. 명령 실행 시 한 번만
+        # 저장하면 on_message 핫패스는 기존의 메모리 dict 조회 + 정수 비교만 한다.
+        await self.store.set(
+            interaction.guild.id,
+            tts_channel_id=channel.id,
+            voice_channel_id=channel.id,
+        )
+        log.info(
+            "join configured voice chat TTS: guild_id=%s channel_id=%s user_id=%s",
+            interaction.guild.id,
+            channel.id,
+            interaction.user.id,
+        )
         await interaction.edit_original_response(
-            embed=notice_embed("음성 채널 입장", f"{channel.mention} 에 입장했습니다.", tone="ok"),
+            embed=notice_embed(
+                "TTS 활성화",
+                f"{channel.mention} 에 입장했습니다. 이제 이 음성 채널의 채팅을 읽습니다.",
+                tone="ok",
+            ),
         )
 
     @app_commands.command(name="퇴장", description="봇을 음성 채널에서 퇴장시킵니다")

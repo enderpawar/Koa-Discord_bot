@@ -6,15 +6,20 @@
 
 `/마크 상태`는 상태 조회일 뿐 아무것도 바꾸지 않으므로 암호를 받지 않는다.
 `/마크 서버 공지`는 서버 공지 게시판 링크를 공개 응답으로 보여준다.
+`/마크 화이트리스트 등록`은 암호 확인 후 GCP 서버의 제한 SSH 명령을 호출한다.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hmac
 import logging
 import os
+import re
 import time
 
+import asyncssh
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -38,6 +43,10 @@ _LOCKOUT_SEC = 600
 _FAIL_WINDOW_SEC = 600
 
 _SERVER_NOTICE_URL = "https://enderpawar.github.io/cobblemon-notes/"
+_MC_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
+_WHITELIST_SSH_TIMEOUT_SEC = 15
+_WHITELIST_BOOT_TIMEOUT_SEC = 180
+_WHITELIST_BOOT_RETRY_SEC = 5
 
 
 def _password() -> str:
@@ -64,6 +73,120 @@ def _address_label() -> str:
     if not host:
         return "미설정"
     return host if port == 25565 else f"{host}:{port}"
+
+
+def _valid_mc_username(username: str) -> bool:
+    """온라인 모드 Minecraft Java 닉네임 형식인지 확인한다."""
+    return _MC_USERNAME_RE.fullmatch(username) is not None
+
+
+class WhitelistConfigError(RuntimeError):
+    """화이트리스트 SSH 설정이 없거나 잘못됨."""
+
+
+class WhitelistConnectionError(RuntimeError):
+    """화이트리스트 전용 SSH 연결 실패."""
+
+
+class WhitelistCommandError(RuntimeError):
+    """원격 화이트리스트 명령 실패."""
+
+
+class MinecraftWhitelistClient:
+    """제한된 SSH 키로 GCP VM의 화이트리스트 래퍼만 호출한다.
+
+    서버의 authorized_keys에서 이 키에 forced-command와 ``restrict``를
+    설정해야 한다. 클라이언트도 고정 호스트 키를 검증해 중간자 공격을 막는다.
+    """
+
+    def __init__(self) -> None:
+        self.host = os.getenv("MC_WHITELIST_SSH_HOST", "").strip() or _server_host()
+        self.user = os.getenv("MC_WHITELIST_SSH_USER", "").strip()
+        self._private_key_b64 = os.getenv("MC_WHITELIST_SSH_PRIVATE_KEY_B64", "").strip()
+        self._host_key = os.getenv("MC_WHITELIST_SSH_HOST_KEY", "").strip()
+
+    def missing_settings(self) -> list[str]:
+        missing = []
+        if not self.host:
+            missing.append("MC_WHITELIST_SSH_HOST")
+        if not self.user:
+            missing.append("MC_WHITELIST_SSH_USER")
+        if not self._private_key_b64:
+            missing.append("MC_WHITELIST_SSH_PRIVATE_KEY_B64")
+        if not self._host_key:
+            missing.append("MC_WHITELIST_SSH_HOST_KEY")
+        return missing
+
+    @staticmethod
+    def _port() -> int:
+        raw = os.getenv("MC_WHITELIST_SSH_PORT", "22").strip()
+        try:
+            port = int(raw)
+        except ValueError as exc:
+            raise WhitelistConfigError("MC_WHITELIST_SSH_PORT는 숫자여야 합니다") from exc
+        if not 1 <= port <= 65535:
+            raise WhitelistConfigError("MC_WHITELIST_SSH_PORT는 1~65535 범위여야 합니다")
+        return port
+
+    def _private_key(self) -> asyncssh.SSHKey:
+        try:
+            raw = base64.b64decode(self._private_key_b64, validate=True)
+            return asyncssh.import_private_key(raw)
+        except (binascii.Error, ValueError, asyncssh.KeyImportError) as exc:
+            raise WhitelistConfigError(
+                "MC_WHITELIST_SSH_PRIVATE_KEY_B64를 읽을 수 없습니다"
+            ) from exc
+
+    def _known_hosts(self) -> bytes:
+        parts = self._host_key.split()
+        if len(parts) < 2 or not parts[0].startswith("ssh-"):
+            raise WhitelistConfigError(
+                "MC_WHITELIST_SSH_HOST_KEY는 'ssh-ed25519 AAAA...' 형식이어야 합니다"
+            )
+        try:
+            public_key = " ".join(parts[:2])
+            asyncssh.import_public_key(public_key)
+            return f"{self.host} {public_key}\n".encode("ascii")
+        except (UnicodeEncodeError, asyncssh.KeyImportError) as exc:
+            raise WhitelistConfigError(
+                "MC_WHITELIST_SSH_HOST_KEY가 올바른 SSH 공개키가 아닙니다"
+            ) from exc
+
+    async def add(self, username: str) -> str:
+        if not _valid_mc_username(username):
+            raise ValueError("잘못된 Minecraft 닉네임 형식")
+
+        missing = self.missing_settings()
+        if missing:
+            raise WhitelistConfigError("설정 누락: " + ", ".join(missing))
+
+        try:
+            async with asyncssh.connect(
+                self.host,
+                port=self._port(),
+                username=self.user,
+                client_keys=[self._private_key()],
+                known_hosts=self._known_hosts(),
+                agent_path=None,
+                connect_timeout=_WHITELIST_SSH_TIMEOUT_SEC,
+                login_timeout=_WHITELIST_SSH_TIMEOUT_SEC,
+            ) as connection:
+                # 서버의 forced-command 래퍼가 SSH_ORIGINAL_COMMAND를 검사한다.
+                # username도 위 정규식으로 제한해 셸 메타문자가 들어갈 수 없다.
+                result = await connection.run(
+                    f"whitelist add {username}",
+                    check=False,
+                    timeout=_WHITELIST_SSH_TIMEOUT_SEC,
+                )
+        except (OSError, asyncssh.Error, asyncio.TimeoutError) as exc:
+            raise WhitelistConnectionError("Minecraft 서버 SSH 연결 실패") from exc
+
+        stdout = str(result.stdout or "").strip()
+        stderr = str(result.stderr or "").strip()
+        if result.exit_status != 0:
+            detail = (stderr or stdout or "원격 명령 실패")[:400]
+            raise WhitelistCommandError(detail)
+        return stdout[:400]
 
 
 class AttemptLimiter:
@@ -209,13 +332,21 @@ class MCControlCog(commands.Cog):
         description="마인크래프트 서버 안내",
         parent=mc,
     )
+    whitelist = app_commands.Group(
+        name="화이트리스트",
+        description="마인크래프트 서버 화이트리스트 관리",
+        parent=mc,
+    )
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.gcp = GcpComputeClient()
+        self.whitelist_client = MinecraftWhitelistClient()
         self.limiter = AttemptLimiter()
         # 두 사람이 동시에 켜기/끄기를 눌러 API가 교차 호출되는 걸 막는다.
         self._power_lock = asyncio.Lock()
+        # whitelist.json/RCON에 등록 명령이 동시에 들어가지 않게 직렬화한다.
+        self._whitelist_lock = asyncio.Lock()
 
     # ---- 공통 ------------------------------------------------------------
 
@@ -249,6 +380,27 @@ class MCControlCog(commands.Cog):
             return False
         return True
 
+    async def _whitelist_guard(self, interaction: discord.Interaction) -> bool:
+        """화이트리스트 등록에 필요한 guild/암호/GCP/SSH 설정 확인."""
+        if interaction.guild_id is None:
+            await interaction.response.send_message(
+                embed=notice_embed("사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"),
+                ephemeral=True,
+            )
+            return False
+
+        missing = self.gcp.missing_settings()
+        missing.extend(self.whitelist_client.missing_settings())
+        if not _password():
+            missing.append("MC_CONTROL_PASSWORD")
+        if missing:
+            await interaction.response.send_message(
+                embed=self._config_error_embed(list(dict.fromkeys(missing))),
+                ephemeral=True,
+            )
+            return False
+        return True
+
     @staticmethod
     async def _edit(interaction: discord.Interaction, embed: discord.Embed) -> None:
         try:
@@ -267,6 +419,161 @@ class MCControlCog(commands.Cog):
             color=BRAND_COLOR,
         )
         await interaction.response.send_message(embed=embed)
+
+    # ---- /마크 화이트리스트 등록 ----------------------------------------
+
+    @whitelist.command(
+        name="등록", description="Minecraft 닉네임을 화이트리스트에 등록합니다 (암호 필요)"
+    )
+    @app_commands.rename(username="닉네임")
+    @app_commands.describe(username="등록할 Minecraft Java Edition 닉네임")
+    async def whitelist_add(self, interaction: discord.Interaction, username: str) -> None:
+        if not await self._whitelist_guard(interaction):
+            return
+
+        username = username.strip()
+        if not _valid_mc_username(username):
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "닉네임 형식 오류",
+                    "닉네임은 영문, 숫자, 밑줄(`_`)로 된 3~16자여야 합니다.",
+                    tone="warn",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        async def register(verified_interaction: discord.Interaction) -> None:
+            await self._do_whitelist_add(verified_interaction, username)
+
+        await interaction.response.send_modal(
+            PasswordModal(
+                title="화이트리스트 등록 확인",
+                limiter=self.limiter,
+                handler=register,
+            )
+        )
+
+    async def _do_whitelist_add(self, interaction: discord.Interaction, username: str) -> None:
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        log.info(
+            "mc whitelist add requested: user_id=%s guild_id=%s",
+            interaction.user.id,
+            interaction.guild_id,
+        )
+
+        if self._whitelist_lock.locked() or self._power_lock.locked():
+            await self._edit(
+                interaction,
+                notice_embed(
+                    "처리 중",
+                    "다른 Minecraft 서버 요청이 진행 중입니다. 잠시 후 다시 시도하세요.",
+                    tone="warn",
+                ),
+            )
+            return
+
+        async with self._whitelist_lock, self._power_lock:
+            try:
+                vm_status = await self.gcp.get_status()
+            except (GcpConfigError, GcpApiError) as exc:
+                log.exception("mc whitelist: status lookup failed")
+                await self._edit(
+                    interaction,
+                    notice_embed("상태 조회 실패", str(exc)[:400], tone="error"),
+                )
+                return
+
+            wait_for_ssh = vm_status in {"TERMINATED", "PROVISIONING", "STAGING"}
+            if vm_status == "TERMINATED":
+                await self._edit(
+                    interaction,
+                    notice_embed(
+                        "서버를 켜는 중",
+                        "화이트리스트 등록을 위해 서버에 연결하고 있습니다.",
+                        tone="info",
+                    ),
+                )
+                try:
+                    await self.gcp.start()
+                except (GcpConfigError, GcpApiError) as exc:
+                    log.exception("mc whitelist: start call failed")
+                    await self._edit(
+                        interaction,
+                        notice_embed("기동 실패", str(exc)[:400], tone="error"),
+                    )
+                    return
+            elif vm_status not in {"RUNNING", "PROVISIONING", "STAGING"}:
+                await self._edit(
+                    interaction,
+                    notice_embed(
+                        "현재 등록할 수 없습니다",
+                        f"VM 상태가 `{vm_status}`입니다. 잠시 후 다시 시도해 주세요.",
+                        tone="warn",
+                    ),
+                )
+                return
+
+            deadline = time.monotonic() + _WHITELIST_BOOT_TIMEOUT_SEC
+            while True:
+                try:
+                    result = await self.whitelist_client.add(username)
+                    break
+                except WhitelistConnectionError:
+                    if not wait_for_ssh or time.monotonic() >= deadline:
+                        log.exception(
+                            "mc whitelist: SSH connection failed: guild_id=%s",
+                            interaction.guild_id,
+                        )
+                        await self._edit(
+                            interaction,
+                            notice_embed(
+                                "서버 연결 실패",
+                                "화이트리스트 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+                                tone="error",
+                            ),
+                        )
+                        return
+                    await asyncio.sleep(_WHITELIST_BOOT_RETRY_SEC)
+                except WhitelistConfigError:
+                    log.exception(
+                        "mc whitelist: invalid SSH configuration: guild_id=%s",
+                        interaction.guild_id,
+                    )
+                    await self._edit(
+                        interaction,
+                        notice_embed(
+                            "설정 오류",
+                            "화이트리스트 SSH 설정을 확인해 주세요.",
+                            tone="error",
+                        ),
+                    )
+                    return
+                except WhitelistCommandError as exc:
+                    log.warning(
+                        "mc whitelist command rejected: guild_id=%s detail=%s",
+                        interaction.guild_id,
+                        str(exc)[:200],
+                    )
+                    await self._edit(
+                        interaction,
+                        notice_embed(
+                            "등록 실패",
+                            f"`{username}` 등록에 실패했습니다.\n`{str(exc)[:300]}`",
+                            tone="error",
+                        ),
+                    )
+                    return
+
+            detail = f"`{username}` 닉네임을 등록했습니다."
+            if result:
+                # 원격 스크립트의 실제 Minecraft 응답을 함께 보여줘 중복 등록
+                # 같은 결과도 사용자가 확인할 수 있게 한다.
+                detail += f"\n\n서버 응답:\n```\n{result[:300]}\n```"
+            await self._edit(
+                interaction,
+                notice_embed("화이트리스트 등록 완료", detail, tone="ok"),
+            )
 
     # ---- /마크 켜기 ------------------------------------------------------
 
@@ -404,7 +711,8 @@ class MCControlCog(commands.Cog):
 
         if status == "TERMINATED":
             await self._edit(
-                interaction, notice_embed("이미 꺼져 있습니다", "요금이 발생하지 않는 상태입니다.", tone="info")
+                interaction,
+                notice_embed("이미 꺼져 있습니다", "요금이 발생하지 않는 상태입니다.", tone="info")
             )
             return
 

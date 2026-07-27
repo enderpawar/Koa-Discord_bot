@@ -10,7 +10,7 @@
 | `/읽기채널` | Manage Channels | `채널: TextChannel` | TTS 읽기 대상 텍스트 채널 설정 |
 | `/음성채널` | Manage Channels | `채널: VoiceChannel` | 봇이 음성 출력할 채널 설정 |
 | `/목소리` | Manage Channels | `종류: Choice[str]` | TTS 보이스 변경 (한국어 10개 선택지) |
-| `/입장` | 일반 | – | 설정된 음성 채널로 즉시 입장 |
+| `/입장` | 일반 | – | 사용자가 참여 중인 음성 채널로 입장하고 그 채널 채팅을 TTS 입력으로 자동 설정 |
 | `/퇴장` | 일반 | – | 음성 채널에서 퇴장 |
 | `/상태` | 일반 | – | 현재 설정(채널 ID, voice) 확인 |
 
@@ -49,14 +49,25 @@ class TTSCog(commands.Cog):
         await self.store.set(itx.guild_id, voice=voice.value)
         await itx.response.send_message(f"보이스: {voice.name}", ephemeral=True)
 
-    @app_commands.command(name="입장", description="음성 채널 입장")
+    @app_commands.command(name="입장", description="현재 음성 채널에서 TTS 시작")
     async def join(self, itx):
-        cfg = await self.store.get(itx.guild_id)
-        ch = itx.guild.get_channel(cfg.get("voice_channel_id", 0))
-        if not ch:
-            return await itx.response.send_message("먼저 /음성채널로 음성 채널을 지정하세요", ephemeral=True)
-        await self.queue.connect(itx.guild, ch.id)
-        await itx.response.send_message("입장했습니다", ephemeral=True)
+        voice_state = getattr(itx.user, "voice", None)
+        ch = voice_state.channel if voice_state else None
+        if not isinstance(ch, discord.VoiceChannel):
+            return await itx.response.send_message(
+                "먼저 사용할 음성 채널에 입장하세요",
+                ephemeral=True,
+            )
+        await self.queue.ensure_voice(itx.guild, ch.id)
+        await self.store.set(
+            itx.guild_id,
+            tts_channel_id=ch.id,
+            voice_channel_id=ch.id,
+        )
+        await itx.response.send_message(
+            "입장했습니다. 이제 이 음성 채널의 채팅을 읽습니다",
+            ephemeral=True,
+        )
 
     @app_commands.command(name="퇴장", description="음성 채널 퇴장")
     async def leave(self, itx):
@@ -89,6 +100,6 @@ class TTSCog(commands.Cog):
 - [06-logging-standards](../rules/06-logging-standards.md): 명령어 실행을 INFO 레벨로 로깅
 
 ## Validation
-1. 테스트 서버에서 `/읽기채널` `/음성채널` `/목소리` `/입장` 순으로 실행 → 응답 정상
+1. 사용자가 음성 채널에 입장한 뒤 `/입장` 실행 → 봇 입장 + 해당 음성 채널 채팅을 TTS로 읽음
 2. `/상태` → 설정값 표시
 3. 일반 권한 사용자가 `/읽기채널` → 권한 부족 안내

@@ -6,3 +6,4 @@ python-dotenv>=1.0
 # GCP 서비스 계정 JWT(RS256) 서명용. google-auth 대신 이것만 쓴다 —
 # 필요한 건 서명 한 줄뿐인데 google-auth 는 requests/urllib3 까지 끌고 온다.
 cryptography>=42.0
+asyncssh==2.24.0

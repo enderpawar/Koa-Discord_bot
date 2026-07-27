@@ -92,6 +92,153 @@ def test_power_commands_require_no_discord_member_permissions():
         assert commands[name].checks == []
 
 
+# ---- 화이트리스트 ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("username", "valid"),
+    [
+        ("Steve", True),
+        ("abc", True),
+        ("Player_123456789", True),
+        ("ab", False),
+        ("Player_1234567890", False),
+        ("한글닉네임", False),
+        ("name-with-dash", False),
+        ("name space", False),
+        ("name;whoami", False),
+    ],
+)
+def test_mc_username_validation(username, valid):
+    assert mc_cog._valid_mc_username(username) is valid
+
+
+def test_whitelist_register_command_is_nested_under_mc():
+    commands = {command.name: command for command in mc_cog.MCControlCog.mc.commands}
+    whitelist = commands["화이트리스트"]
+
+    assert isinstance(whitelist, mc_cog.app_commands.Group)
+    assert {command.name for command in whitelist.commands} == {"등록"}
+    register = whitelist.commands[0]
+    assert register.default_permissions is None
+    assert register.checks == []
+
+
+def _set_whitelist_ssh_env(monkeypatch):
+    monkeypatch.setenv("MC_WHITELIST_SSH_HOST", "203.0.113.10")
+    monkeypatch.setenv("MC_WHITELIST_SSH_PORT", "22")
+    monkeypatch.setenv("MC_WHITELIST_SSH_USER", "whitelist-bot")
+    monkeypatch.setenv(
+        "MC_WHITELIST_SSH_PRIVATE_KEY_B64",
+        base64.b64encode(b"fake private key").decode(),
+    )
+    monkeypatch.setenv(
+        "MC_WHITELIST_SSH_HOST_KEY",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKey",
+    )
+
+
+def test_whitelist_client_lists_missing_settings(monkeypatch):
+    monkeypatch.delenv("MC_SERVER_HOST", raising=False)
+    for name in (
+        "MC_WHITELIST_SSH_HOST",
+        "MC_WHITELIST_SSH_USER",
+        "MC_WHITELIST_SSH_PRIVATE_KEY_B64",
+        "MC_WHITELIST_SSH_HOST_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert mc_cog.MinecraftWhitelistClient().missing_settings() == [
+        "MC_WHITELIST_SSH_HOST",
+        "MC_WHITELIST_SSH_USER",
+        "MC_WHITELIST_SSH_PRIVATE_KEY_B64",
+        "MC_WHITELIST_SSH_HOST_KEY",
+    ]
+
+
+async def test_whitelist_client_runs_only_restricted_command(monkeypatch):
+    _set_whitelist_ssh_env(monkeypatch)
+    captured = {}
+
+    class FakeConnection:
+        async def run(self, command, **kwargs):
+            captured["command"] = command
+            captured["run_kwargs"] = kwargs
+            return SimpleNamespace(
+                exit_status=0,
+                stdout="Steve -> Added Steve to the whitelist\n",
+                stderr="",
+            )
+
+    class FakeContext:
+        async def __aenter__(self):
+            return FakeConnection()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_connect(host, **kwargs):
+        captured["host"] = host
+        captured["connect_kwargs"] = kwargs
+        return FakeContext()
+
+    fake_key = object()
+    monkeypatch.setattr(mc_cog.asyncssh, "import_private_key", lambda raw: fake_key)
+    monkeypatch.setattr(mc_cog.asyncssh, "import_public_key", lambda raw: object())
+    monkeypatch.setattr(mc_cog.asyncssh, "connect", fake_connect)
+
+    result = await mc_cog.MinecraftWhitelistClient().add("Steve")
+
+    assert result == "Steve -> Added Steve to the whitelist"
+    assert captured["host"] == "203.0.113.10"
+    assert captured["command"] == "whitelist add Steve"
+    assert captured["run_kwargs"]["check"] is False
+    assert captured["connect_kwargs"]["client_keys"] == [fake_key]
+    assert captured["connect_kwargs"]["agent_path"] is None
+    assert (
+        captured["connect_kwargs"]["known_hosts"]
+        == b"203.0.113.10 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeHostKey\n"
+    )
+
+
+async def test_whitelist_client_rejects_remote_failure(monkeypatch):
+    _set_whitelist_ssh_env(monkeypatch)
+
+    class FakeConnection:
+        async def run(self, command, **kwargs):
+            return SimpleNamespace(exit_status=2, stdout="", stderr="등록 거부")
+
+    class FakeContext:
+        async def __aenter__(self):
+            return FakeConnection()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(mc_cog.asyncssh, "import_private_key", lambda raw: object())
+    monkeypatch.setattr(mc_cog.asyncssh, "import_public_key", lambda raw: object())
+    monkeypatch.setattr(mc_cog.asyncssh, "connect", lambda *args, **kwargs: FakeContext())
+
+    with pytest.raises(mc_cog.WhitelistCommandError, match="등록 거부"):
+        await mc_cog.MinecraftWhitelistClient().add("Steve")
+
+
+def test_whitelist_client_rejects_invalid_ssh_port(monkeypatch):
+    _set_whitelist_ssh_env(monkeypatch)
+    monkeypatch.setenv("MC_WHITELIST_SSH_PORT", "70000")
+
+    with pytest.raises(mc_cog.WhitelistConfigError):
+        mc_cog.MinecraftWhitelistClient._port()
+
+
+def test_whitelist_client_rejects_invalid_host_key(monkeypatch):
+    _set_whitelist_ssh_env(monkeypatch)
+    monkeypatch.setenv("MC_WHITELIST_SSH_HOST_KEY", "ssh-ed25519 not-base64")
+
+    with pytest.raises(mc_cog.WhitelistConfigError):
+        mc_cog.MinecraftWhitelistClient()._known_hosts()
+
+
 # ---- 공지 링크 -------------------------------------------------------------
 
 

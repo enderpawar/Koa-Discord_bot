@@ -69,6 +69,11 @@ jobs:
           MC_SERVER_HOST: ${{ vars.MC_SERVER_HOST }}
           MC_SERVER_PORT: ${{ vars.MC_SERVER_PORT }}
           MC_CONTROL_PASSWORD: ${{ secrets.MC_CONTROL_PASSWORD }}
+          MC_WHITELIST_SSH_HOST: ${{ vars.MC_WHITELIST_SSH_HOST }}
+          MC_WHITELIST_SSH_PORT: ${{ vars.MC_WHITELIST_SSH_PORT }}
+          MC_WHITELIST_SSH_USER: ${{ vars.MC_WHITELIST_SSH_USER }}
+          MC_WHITELIST_SSH_PRIVATE_KEY_B64: ${{ secrets.MC_WHITELIST_SSH_PRIVATE_KEY_B64 }}
+          MC_WHITELIST_SSH_HOST_KEY: ${{ vars.MC_WHITELIST_SSH_HOST_KEY }}
         run: |
           set -Eeuo pipefail
           install -d -m 700 "${HOME}/.ssh"
@@ -112,6 +117,11 @@ jobs:
               "MC_SERVER_HOST",
               "MC_SERVER_PORT",
               "MC_CONTROL_PASSWORD",
+              "MC_WHITELIST_SSH_HOST",
+              "MC_WHITELIST_SSH_PORT",
+              "MC_WHITELIST_SSH_USER",
+              "MC_WHITELIST_SSH_PRIVATE_KEY_B64",
+              "MC_WHITELIST_SSH_HOST_KEY",
           )
 
           lines = []

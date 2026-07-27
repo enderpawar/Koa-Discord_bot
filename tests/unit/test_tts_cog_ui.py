@@ -156,6 +156,78 @@ def _bot_member(member_id: int) -> MagicMock:
 
 
 @pytest.mark.asyncio
+async def test_join_uses_callers_voice_channel_for_input_and_output() -> None:
+    cog = _make_cog({"voice_channel_id": 999, "tts_channel_id": 888})
+    channel = _voice_channel(100)
+    guild = MagicMock()
+    guild.id = 1
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.guild_id = guild.id
+    interaction.user = SimpleNamespace(id=7, voice=SimpleNamespace(channel=channel))
+    interaction.response.defer = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    await TTSCog.join.callback(cog, interaction)
+
+    cog.store.get.assert_not_awaited()
+    cog.queue.ensure_voice.assert_awaited_once_with(guild, channel.id)
+    cog.store.set.assert_awaited_once_with(
+        guild.id,
+        tts_channel_id=channel.id,
+        voice_channel_id=channel.id,
+    )
+    interaction.response.defer.assert_awaited_once_with(thinking=True, ephemeral=True)
+    interaction.response.send_message.assert_not_awaited()
+    embed = interaction.edit_original_response.await_args.kwargs["embed"]
+    assert "이 음성 채널의 채팅을 읽습니다" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_join_requires_caller_to_be_in_voice_channel() -> None:
+    cog = _make_cog()
+    interaction = MagicMock()
+    interaction.guild = MagicMock()
+    interaction.guild.id = 1
+    interaction.guild_id = 1
+    interaction.user = SimpleNamespace(id=7, voice=None)
+    interaction.response.defer = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+
+    await TTSCog.join.callback(cog, interaction)
+
+    cog.queue.ensure_voice.assert_not_awaited()
+    cog.store.set.assert_not_awaited()
+    interaction.response.defer.assert_not_awaited()
+    interaction.response.send_message.assert_awaited_once()
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    assert "음성 채널에 입장" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_join_does_not_change_channels_when_voice_connection_fails() -> None:
+    cog = _make_cog()
+    cog.queue.ensure_voice.side_effect = RuntimeError("voice failed")
+    channel = _voice_channel(100)
+    guild = MagicMock()
+    guild.id = 1
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.guild_id = guild.id
+    interaction.user = SimpleNamespace(id=7, voice=SimpleNamespace(channel=channel))
+    interaction.response.defer = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    await TTSCog.join.callback(cog, interaction)
+
+    cog.store.set.assert_not_awaited()
+    embed = interaction.edit_original_response.await_args.kwargs["embed"]
+    assert embed.title == "입장 실패"
+
+
+@pytest.mark.asyncio
 async def test_voice_state_no_announcement_when_bot_disconnected() -> None:
     """봇이 watched 채널에 미접속이면 사용자 입장 시 안내 enqueue 금지 (자동 입장 방지)."""
     cog = _make_cog({
@@ -329,6 +401,31 @@ async def test_handle_tts_message_enqueues_when_channel_matches() -> None:
 
     cog.store.get.assert_awaited_once()
     cog.queue.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_reads_joined_voice_channel_chat() -> None:
+    """`/입장`이 같은 ID로 저장한 음성 채널 채팅을 바로 읽는다."""
+    cog = _make_cog({
+        "tts_channel_id": 100,
+        "voice_channel_id": 100,
+        "voice": "ko-KR-SunHiNeural",
+    })
+    voice_channel = _voice_channel(100)
+    voice_channel.members = [_human(10)]
+    message = MagicMock()
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.guild.get_channel.return_value = voice_channel
+    message.channel = voice_channel
+    message.clean_content = "음성 채널 채팅"
+
+    await cog._handle_tts_message(message)
+
+    cog.queue.enqueue.assert_awaited_once()
+    request = cog.queue.enqueue.await_args.args[1]
+    assert request.voice_channel_id == voice_channel.id
+    assert request.text == "음성 채널 채팅"
 
 
 @pytest.mark.asyncio
