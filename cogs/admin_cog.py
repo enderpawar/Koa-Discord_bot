@@ -14,12 +14,11 @@ log = logging.getLogger(__name__)
 
 
 def _web_dashboard_url() -> str | None:
+    # 공개 주소는 ADMIN_WEB_PUBLIC_URL 로만 받는다. 호스팅 업체가 주입하는
+    # 변수를 추측하지 않으므로 어디에 배포하든 동작이 같다.
     public_url = os.getenv("ADMIN_WEB_PUBLIC_URL", "").strip()
     if public_url:
         return public_url.rstrip("/")
-    render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip()
-    if render_url:
-        return render_url.rstrip("/")
     if not os.getenv("ADMIN_WEB_TOKEN"):
         return None
     host = os.getenv("ADMIN_WEB_HOST", "127.0.0.1")
