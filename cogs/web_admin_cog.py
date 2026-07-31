@@ -29,12 +29,10 @@ def _web_enabled() -> bool:
 
 
 def _web_host() -> str:
-    host = os.getenv("ADMIN_WEB_HOST")
-    if host:
-        return host
-    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PUBLIC_DOMAIN"):
-        return "0.0.0.0"
-    return "127.0.0.1"
+    # 외부 공개는 항상 명시적으로만. 호스팅 환경을 추측해 0.0.0.0 으로 여는 분기를
+    # 두지 않는다 — 토큰 하나로 보호되는 어드민이라 기본값은 로컬 바인딩이어야 한다.
+    # 외부에서 접근하려면 ADMIN_WEB_HOST=0.0.0.0 을 직접 설정한다 (docs/deploy-oracle.md §6).
+    return os.getenv("ADMIN_WEB_HOST") or "127.0.0.1"
 
 
 def _web_port() -> int:

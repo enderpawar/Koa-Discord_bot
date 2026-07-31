@@ -17,9 +17,6 @@ def _web_dashboard_url() -> str | None:
     public_url = os.getenv("ADMIN_WEB_PUBLIC_URL", "").strip()
     if public_url:
         return public_url.rstrip("/")
-    railway_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
-    if railway_domain:
-        return f"https://{railway_domain}".rstrip("/")
     render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip()
     if render_url:
         return render_url.rstrip("/")

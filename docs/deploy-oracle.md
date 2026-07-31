@@ -76,7 +76,7 @@ nano .env        # §5 참고해 값 입력
 mkdir -p data    # 볼륨 마운트 지점
 ```
 
-**Railway 에서 백업해 둔 `config.json` 이 있다면 지금 복원합니다:**
+**기존 배포에서 백업해 둔 `config.json` 이 있다면 지금 복원합니다:**
 
 ```bash
 # 로컬에서 서버로 전송
@@ -172,7 +172,7 @@ GCP 방화벽의 22번 포트도 가능하면 Oracle 공인 IP `/32`에서만 �
 
 ## 6. 웹 어드민을 쓸 경우 (선택)
 
-**Railway 와 동작이 다릅니다.** `cogs/web_admin_cog.py` 의 `_web_host()` 는 `ADMIN_WEB_HOST` 가 없으면 `RAILWAY_*` 환경변수 존재 여부로 바인딩을 결정합니다. Oracle 에는 그 변수가 없으므로 **`127.0.0.1` 에 바인딩되어 외부 접속이 불가능해집니다.**
+**`ADMIN_WEB_HOST` 를 반드시 명시해야 합니다.** `cogs/web_admin_cog.py` 의 `_web_host()` 는 이 변수가 없으면 **`127.0.0.1` 에 바인딩되어 외부 접속이 불가능합니다.** 토큰 하나로만 보호되는 어드민이라, 외부 공개는 호스팅 환경 추측이 아니라 명시적 설정으로만 이뤄집니다.
 
 `.env` 에 명시하세요:
 
@@ -345,11 +345,10 @@ docker compose logs -f --tail 100
 
 ---
 
-## 12. Railway 에서 이전할 때 체크리스트
+## 12. 다른 호스트에서 이전할 때 체크리스트
 
-- [ ] Railway 볼륨의 `/data/config.json` 백업 (`railway ssh` → `cat /data/config.json`)
-- [ ] `rank_stats.json` 은 백업 불가 — 구버전은 볼륨이 아닌 컨테이너 FS 에 기록되어 재배포마다 초기화됐음. 랭킹은 새로 시작됨
-- [ ] `.env` 에 `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` 포함 (Railway Variables 에서 확인)
+- [ ] 기존 배포의 `config.json` 백업
+- [ ] `.env` 에 `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` 포함
 - [ ] 웹 어드민을 썼다면 `ADMIN_WEB_HOST=0.0.0.0` 과 `ADMIN_WEB_PUBLIC_URL` 추가 (§6)
 - [ ] `data/config.json` 복원 후 `docker compose up -d --build`
 - [ ] Discord 에서 `/상태`로 길드 설정이 살아있는지 확인

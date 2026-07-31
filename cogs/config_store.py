@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 
 def _default_config_path() -> Path:
-    # Railway 등 컨테이너 배포에서는 영구 volume 경로를 CONFIG_PATH 로 주입한다.
+    # 컨테이너 배포에서는 영구 volume 경로를 CONFIG_PATH 로 주입한다.
     # 로컬 실행은 환경변수 부재 → 기존 동작(repo root/config.json) 유지.
     return Path(os.getenv("CONFIG_PATH", "config.json"))
 

@@ -28,7 +28,7 @@ services:
   # OCI Always Free A1 인스턴스의 유휴(idle) 회수 방지용.
   # 메모리 사용률을 상시 20% 이상으로 유지해 회수 조건(CPU/네트워크/메모리 모두
   # 20% 미만일 때만 회수)을 피한다. docs/deploy-oracle.md §0 참고.
-  # Oracle Always Free 가 아닌 환경(Railway, 로컬 등)에서는 불필요 — 지우거나
+  # Oracle Always Free 가 아닌 환경(로컬 등)에서는 불필요 — 지우거나
   # `docker compose up -d bot` 처럼 이 서비스만 빼고 기동해도 무방.
   mem-anchor:
     image: python:3.12-alpine

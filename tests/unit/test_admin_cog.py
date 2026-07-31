@@ -31,14 +31,6 @@ def test_web_dashboard_url_prefers_public_url(monkeypatch) -> None:
     assert _web_dashboard_url() == "https://admin.example.com"
 
 
-def test_web_dashboard_url_uses_railway_public_domain(monkeypatch) -> None:
-    monkeypatch.delenv("ADMIN_WEB_PUBLIC_URL", raising=False)
-    monkeypatch.setenv("ADMIN_WEB_TOKEN", "token")
-    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "nothing-bot.up.railway.app")
-
-    assert _web_dashboard_url() == "https://nothing-bot.up.railway.app"
-
-
 def test_web_dashboard_url_uses_localhost_when_available(monkeypatch) -> None:
     monkeypatch.delenv("ADMIN_WEB_PUBLIC_URL", raising=False)
     monkeypatch.setenv("ADMIN_WEB_TOKEN", "token")

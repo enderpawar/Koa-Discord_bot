@@ -37,17 +37,12 @@ def test_web_port_falls_back_for_invalid_env(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_web_host_defaults_to_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ADMIN_WEB_HOST", raising=False)
-    monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
-    monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
 
     assert _web_host() == "127.0.0.1"
 
 
-def test_web_host_defaults_to_public_bind_on_railway(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("ADMIN_WEB_HOST", raising=False)
-    monkeypatch.setenv("RAILWAY_ENVIRONMENT", "production")
+def test_web_host_uses_explicit_public_bind(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADMIN_WEB_HOST", "0.0.0.0")
 
     assert _web_host() == "0.0.0.0"
 
