@@ -17,6 +17,7 @@ from cogs.gcp_status import (
     CATALOG,
     build_status_embed,
     classify,
+    cloud_failure_embed,
     vm_status_label,
 )
 
@@ -195,6 +196,67 @@ def test_extract_operation_error_returns_none_for_successful_operation() -> None
 
 
 # ---- 실패 기록 --------------------------------------------------------------
+
+
+def test_successful_get_does_not_erase_a_start_failure() -> None:
+    """상태 조회는 VM이 꺼져 있어도 성공한다. 그걸로 start 실패를 지우면
+    `/클라우드 상태`가 항상 '문제 없어요'만 말하게 된다."""
+    gcp_compute._record_failure(
+        code="ZONE_RESOURCE_POOL_EXHAUSTED",
+        http_status=None,
+        action="start",
+        detail="",
+    )
+
+    gcp_compute._clear_failure("get")
+
+    assert last_failure() is not None
+    assert last_failure().code == "ZONE_RESOURCE_POOL_EXHAUSTED"
+
+
+def test_successful_start_clears_its_own_failure() -> None:
+    gcp_compute._record_failure(
+        code="ZONE_RESOURCE_POOL_EXHAUSTED",
+        http_status=None,
+        action="start",
+        detail="",
+    )
+
+    gcp_compute._clear_failure("start")
+
+    assert last_failure() is None
+
+
+def test_unscoped_clear_wipes_everything() -> None:
+    gcp_compute._record_failure(
+        code="ZONE_RESOURCE_POOL_EXHAUSTED", http_status=None, action="start", detail=""
+    )
+
+    gcp_compute._clear_failure()
+
+    assert last_failure() is None
+
+
+def test_start_not_applied_is_reported_as_transient_capacity_issue() -> None:
+    gcp_compute.record_start_not_applied()
+    failure = last_failure()
+
+    assert failure is not None
+    assert failure.action == "start"
+
+    diagnosis = classify(failure.code)
+    assert diagnosis.transient is True
+    assert "켜지지 않았어요" in diagnosis.title
+
+
+def test_failure_embed_explains_without_leaking_code() -> None:
+    gcp_compute.record_start_not_applied()
+
+    embed = cloud_failure_embed(last_failure())
+    rendered = json.dumps(embed.to_dict(), ensure_ascii=False)
+
+    assert "START_NOT_APPLIED" not in rendered
+    assert any(f.name == "기다리면 풀리나요" for f in embed.fields)
 
 
 def test_record_and_clear_failure_roundtrip() -> None:

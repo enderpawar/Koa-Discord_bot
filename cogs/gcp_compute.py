@@ -81,10 +81,35 @@ def _record_failure(
     log.warning("gcp %s failed: code=%s http=%s", action, code, http_status)
 
 
-def _clear_failure() -> None:
-    """호출이 성공하면 지운다 — 이미 해결된 문제를 계속 보고하지 않기 위해."""
+def _clear_failure(action: str | None = None) -> None:
+    """해결된 실패를 지운다.
+
+    `action`을 주면 **같은 동작의 실패만** 지운다. 이게 중요한 이유:
+    상태 조회(get)는 VM이 꺼져 있어도 정상적으로 성공하므로, 무조건 지우면
+    직전 start 실패 기록이 곧바로 사라진다. `/마크 켜기`의 기동 대기 루프와
+    `/클라우드 상태` 자신이 get 을 호출하기 때문에, 그러면 진단 명령이 읽기도
+    전에 증거를 스스로 지워 늘 "문제 없어요"만 나온다.
+
+    `action=None`은 전면 삭제(예: VM이 RUNNING 으로 확인된 경우 — 무엇이
+    실패했든 이미 무의미하다).
+    """
     global _last_failure
-    _last_failure = None
+    if action is None or (_last_failure is not None and _last_failure.action == action):
+        _last_failure = None
+
+
+def record_start_not_applied() -> None:
+    """정확한 코드를 못 받았을 때의 기동 실패 기록.
+
+    `compute.zoneOperations.get` 권한이 없으면 실패 사유를 GCP에서 직접 받을 수
+    없다. 그 경우 '요청은 갔는데 VM이 끝내 안 켜졌다'는 관측 사실만 남긴다.
+    """
+    _record_failure(
+        code="START_NOT_APPLIED",
+        http_status=None,
+        action="start",
+        detail="start 요청 후에도 인스턴스가 TERMINATED 상태",
+    )
 
 
 def _extract_http_error_code(body: str) -> str:
@@ -171,6 +196,10 @@ class GcpComputeClient:
         self._token_expiry: float = 0.0
         # 토큰 갱신이 동시에 여러 번 일어나지 않게 직렬화한다.
         self._token_lock = asyncio.Lock()
+        # 진행 중인 start/stop Operation: (이름, action)
+        self._pending_operation: tuple[str, str] | None = None
+        # zoneOperations.get 권한이 없다고 판명되면 내려간다.
+        self._operations_pollable = True
 
     @property
     def configured(self) -> bool:
@@ -285,7 +314,7 @@ class GcpComputeClient:
                     )
                     raise
 
-                url = f"{_API_ROOT}/projects/{self.project}/zones/{self.zone}/instances/{self.instance}{path}"
+                url = f"{_API_ROOT}{path}"
                 async with session.request(
                     method, url, headers={"Authorization": f"Bearer {token}"}
                 ) as resp:
@@ -320,16 +349,97 @@ class GcpComputeClient:
             )
             raise GcpApiError(f"{method} {path} 실패 ({code}): {message[:300]}")
 
-        _clear_failure()
+        _clear_failure(action)
         return data
+
+    # ---- 경로 ------------------------------------------------------------
+
+    def _instance_path(self, suffix: str = "") -> str:
+        return (
+            f"/projects/{self.project}/zones/{self.zone}"
+            f"/instances/{self.instance}{suffix}"
+        )
+
+    def _operation_path(self, name: str) -> str:
+        return f"/projects/{self.project}/zones/{self.zone}/operations/{name}"
+
+    # ---- 공개 API ---------------------------------------------------------
 
     async def get_status(self) -> str:
         """RUNNING / TERMINATED / STOPPING / PROVISIONING / STAGING 등."""
-        data = await self._request("GET", "", action="get")
-        return str(data.get("status", "UNKNOWN"))
+        data = await self._request("GET", self._instance_path(), action="get")
+        status = str(data.get("status", "UNKNOWN"))
+        if status == "RUNNING":
+            # 무엇이 실패했든 서버가 떠 있으면 더는 보고할 문제가 아니다.
+            _clear_failure()
+        return status
 
     async def start(self) -> None:
-        await self._request("POST", "/start", action="start")
+        data = await self._request(
+            "POST", self._instance_path("/start"), action="start"
+        )
+        self._remember_operation(data, action="start")
 
     async def stop(self) -> None:
-        await self._request("POST", "/stop", action="stop")
+        data = await self._request("POST", self._instance_path("/stop"), action="stop")
+        self._remember_operation(data, action="stop")
+
+    # ---- 비동기 Operation 추적 --------------------------------------------
+
+    def _remember_operation(self, data: dict[str, Any], *, action: str) -> None:
+        """start/stop 이 돌려준 Operation 이름을 기억한다.
+
+        `instances.start` 는 자원이 없어도 **HTTP 200 + status=PENDING** 인
+        Operation 을 즉시 돌려준다. ZONE_RESOURCE_POOL_EXHAUSTED 같은 사유는
+        그 Operation 이 나중에 DONE 이 되면서 채워지므로, 응답 본문만 봐서는
+        절대 알 수 없다. 이름을 붙들고 있다가 따로 확인해야 한다.
+        """
+        name = data.get("name")
+        self._pending_operation = (str(name), action) if name else None
+
+    async def poll_pending_operation(self) -> str | None:
+        """대기 중인 start/stop Operation 을 한 번 확인한다.
+
+        반환값:
+          - 실패 코드 문자열 — Operation 이 오류로 끝났다 (실패도 기록됨)
+          - None — 아직 진행 중이거나, 성공했거나, 확인할 수 없다
+
+        `compute.zoneOperations.get` 권한이 없으면(최소 권한 역할 mcPowerToggle
+        에는 없다) 조용히 포기하고 다시는 시도하지 않는다. 권한 없음을 사용자
+        오류로 보고하면 "봇에게 권한이 없어요"가 잘못 뜬다.
+        """
+        if self._pending_operation is None or not self._operations_pollable:
+            return None
+        name, action = self._pending_operation
+
+        try:
+            data = await self._request(
+                "GET", self._operation_path(name), action=action
+            )
+        except GcpApiError as exc:
+            failure = last_failure()
+            if failure is not None and failure.http_status in (403, 404):
+                # 권한이 없거나 Operation 이 이미 정리됨 — 진단 불가일 뿐 실패가 아니다.
+                self._operations_pollable = False
+                self._pending_operation = None
+                _clear_failure(action)
+                log.info("operation polling unavailable (%s) — 상태 기반으로만 판단", exc)
+                return None
+            # 그 밖의 오류는 _request 가 이미 기록했다.
+            self._pending_operation = None
+            return failure.code if failure is not None else "UNKNOWN"
+
+        if str(data.get("status")) != "DONE":
+            return None  # 아직 진행 중
+
+        self._pending_operation = None
+        return None  # DONE + 오류 없음 = 성공 (오류였다면 _request 가 raise 했다)
+
+    @property
+    def operations_pollable(self) -> bool:
+        """Operation 조회 권한이 있는지. 없으면 상태 기반 추정으로 대체해야 한다."""
+        return self._operations_pollable
+
+    @property
+    def has_pending_operation(self) -> bool:
+        return self._pending_operation is not None

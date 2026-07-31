@@ -62,6 +62,17 @@ _CAPACITY = Diagnosis(
     transient=True,
 )
 
+_START_NOT_APPLIED = Diagnosis(
+    title="서버를 켜라고 했는데 켜지지 않았어요",
+    summary=(
+        "구글이 요청은 받아 놓고 실제로 컴퓨터를 내주지는 못한 상태예요. "
+        "대개 그 지역에 자리가 없을 때 이렇게 돼요."
+    ),
+    action="조금 뒤에 `/마크 켜기`를 다시 눌러 주세요. 보통 수십 분 안에 자리가 나요.",
+    tone="warn",
+    transient=True,
+)
+
 _BUSY = Diagnosis(
     title="서버가 아직 이전 작업을 처리 중이에요",
     summary="방금 껐거나 켜는 중이라 새 명령을 받지 못하는 상태예요.",
@@ -161,6 +172,8 @@ CATALOG: dict[str, Diagnosis] = {
     "RESOURCE_POOL_EXHAUSTED": _CAPACITY,
     "RESOURCE_EXHAUSTED": _CAPACITY,
     "IP_SPACE_EXHAUSTED": _CAPACITY,
+    # Operation 조회 권한이 없어 정확한 코드를 못 받았을 때의 추정치.
+    "START_NOT_APPLIED": _START_NOT_APPLIED,
     # 할당량
     "QUOTA_EXCEEDED": _QUOTA,
     "QUOTAEXCEEDED": _QUOTA,
@@ -257,6 +270,23 @@ def vm_status_label(status: str) -> str:
     return _VM_STATUS_LABEL.get(status.strip().upper(), "상태를 확인하는 중이에요")
 
 
+def cloud_failure_embed(failure: ApiFailure | None) -> discord.Embed:
+    """전원 명령이 실패했을 때 그 자리에서 보여줄 안내.
+
+    `/클라우드 상태`와 같은 문구를 쓴다 — 실패 직후에 이미 이유를 읽을 수 있어야
+    사용자가 굳이 다른 명령을 더 칠 이유가 없다.
+    """
+    diagnosis = classify(failure.code, failure.http_status) if failure else _UNKNOWN
+    embed = notice_embed(diagnosis.title, diagnosis.summary, tone=diagnosis.tone)
+    embed.add_field(name="어떻게 하면 되나요", value=diagnosis.action, inline=False)
+    embed.add_field(
+        name="기다리면 풀리나요",
+        value="네, 시간이 지나면 대개 풀려요." if diagnosis.transient else "아니요, 관리자가 손봐야 해요.",
+        inline=False,
+    )
+    return embed
+
+
 def build_status_embed(
     vm_status: str | None,
     failure: ApiFailure | None,
@@ -310,15 +340,23 @@ class CloudStatusCog(commands.Cog):
     async def status(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(thinking=True)
 
+        # 조회보다 먼저 읽는다. get_status()가 VM=RUNNING 을 확인하면 기록을
+        # 지우는데, 그건 정상 동작이지만 그 전의 실패도 보고 대상이므로
+        # 순서를 뒤집으면 진단 명령이 스스로 증거를 지우게 된다.
+        failure = last_failure()
+
         vm_status: str | None = None
         try:
             vm_status = await self.gcp.get_status()
         except (GcpConfigError, GcpApiError):
-            # 조회 자체가 실패해도 그 실패가 last_failure 에 기록되므로,
-            # 아래에서 그대로 진단 대상으로 삼는다.
+            # 조회 자체가 실패했다면 그게 가장 최신 문제다.
             log.exception("cloud status: lookup failed")
+            failure = last_failure() or failure
 
-        embed = build_status_embed(vm_status, last_failure())
+        if vm_status == "RUNNING":
+            failure = None  # 서버가 떠 있으면 지난 실패는 의미 없다
+
+        embed = build_status_embed(vm_status, failure)
         await interaction.followup.send(embed=embed)
 
 

@@ -24,7 +24,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.gcp_compute import GcpApiError, GcpComputeClient, GcpConfigError
+from cogs.gcp_compute import (
+    GcpApiError,
+    GcpComputeClient,
+    GcpConfigError,
+    last_failure,
+    record_start_not_applied,
+)
+from cogs.gcp_status import cloud_failure_embed
 from cogs.mc_ping import try_ping
 from cogs.ui import BRAND_COLOR, notice_embed
 
@@ -33,6 +40,9 @@ log = logging.getLogger(__name__)
 # 부팅 대기: 10초 간격으로 최대 5분. RUNBOOK 실측 기동 시간은 1~2분이다.
 _BOOT_POLL_INTERVAL_SEC = 10
 _BOOT_TIMEOUT_SEC = 300
+# Operation 조회 권한이 없을 때, 기동 요청이 먹혔는지 판정하기까지 주는 유예.
+# 정상 기동은 이 안에 PROVISIONING/STAGING 으로 넘어간다.
+_START_EFFECT_GRACE_SEC = 60
 # 종료 대기: ACPI 종료 + 디스크 정리까지.
 _SHUTDOWN_POLL_INTERVAL_SEC = 10
 _SHUTDOWN_TIMEOUT_SEC = 180
@@ -650,7 +660,13 @@ class MCControlCog(commands.Cog):
                 log.info("mc start: server ready (online=%s)", status.online)
                 await self._edit(interaction, self._ready_embed(status.online))
                 return
+
             elapsed = int(_BOOT_TIMEOUT_SEC - (deadline - time.monotonic()))
+            if await self._start_failed(elapsed):
+                # 5분을 마저 기다려 봐야 의미가 없다. 이유를 즉시 알린다.
+                await self._edit(interaction, cloud_failure_embed(last_failure()))
+                return
+
             await self._edit(
                 interaction,
                 notice_embed(
@@ -659,6 +675,33 @@ class MCControlCog(commands.Cog):
                     tone="info",
                 ),
             )
+
+    async def _start_failed(self, elapsed: int) -> bool:
+        """기동 요청이 실제로 무산됐는지 확인한다.
+
+        GCE는 자원이 없어도 start 요청 자체는 HTTP 200으로 받아 준다. 실패는
+        Operation 이 나중에 DONE 되면서 드러나므로, 여기서 따로 확인하지 않으면
+        5분 타임아웃까지 원인을 모른 채 기다리게 된다.
+        """
+        try:
+            if self.gcp.operations_pollable:
+                if self.gcp.has_pending_operation:
+                    code = await self.gcp.poll_pending_operation()
+                    if code is not None:
+                        log.warning("mc start: operation failed (%s)", code)
+                        return True
+                return False
+
+            # Operation 조회 권한이 없을 때의 대체 판정: 충분히 기다렸는데도
+            # VM이 꺼진 그대로면 기동 요청이 먹히지 않은 것이다.
+            if elapsed < _START_EFFECT_GRACE_SEC:
+                return False
+            if await self.gcp.get_status() in ("TERMINATED", "STOPPED"):
+                record_start_not_applied()
+                return True
+        except (GcpConfigError, GcpApiError):
+            log.exception("mc start: failure check errored")
+        return False
 
         log.warning("mc start: readiness timeout after %ss", _BOOT_TIMEOUT_SEC)
         await self._edit(
