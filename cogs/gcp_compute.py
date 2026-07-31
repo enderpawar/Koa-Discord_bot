@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
@@ -41,6 +42,88 @@ class GcpConfigError(RuntimeError):
 
 class GcpApiError(RuntimeError):
     """Compute API 호출 실패."""
+
+
+@dataclass(frozen=True)
+class ApiFailure:
+    """마지막으로 관측된 Compute API 실패.
+
+    `/클라우드 상태`가 이걸 읽어 비전문가용 문구로 번역한다. `detail`은 프로젝트
+    ID·인스턴스명이 섞일 수 있으므로 로그용이며 디스코드에 그대로 노출하지 않는다.
+    """
+
+    code: str
+    http_status: int | None
+    action: str  # "start" / "stop" / "get"
+    at: float
+    detail: str
+
+
+_last_failure: ApiFailure | None = None
+
+
+def last_failure() -> ApiFailure | None:
+    """가장 최근 실패. 이후 호출이 성공했다면 None."""
+    return _last_failure
+
+
+def _record_failure(
+    *, code: str, http_status: int | None, action: str, detail: str
+) -> None:
+    global _last_failure
+    _last_failure = ApiFailure(
+        code=code,
+        http_status=http_status,
+        action=action,
+        at=time.time(),
+        detail=detail[:300],
+    )
+    log.warning("gcp %s failed: code=%s http=%s", action, code, http_status)
+
+
+def _clear_failure() -> None:
+    """호출이 성공하면 지운다 — 이미 해결된 문제를 계속 보고하지 않기 위해."""
+    global _last_failure
+    _last_failure = None
+
+
+def _extract_http_error_code(body: str) -> str:
+    """4xx/5xx 응답 본문에서 `error.errors[0].reason`을 뽑는다."""
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return "UNKNOWN"
+    if not isinstance(data, dict):
+        return "UNKNOWN"
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return "UNKNOWN"
+    errors = error.get("errors")
+    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+        reason = errors[0].get("reason")
+        if reason:
+            return str(reason)
+    status = error.get("status")
+    return str(status) if status else "UNKNOWN"
+
+
+def _extract_operation_error(data: Any) -> tuple[str, str] | None:
+    """Operation 본문에 담겨 오는 실패를 뽑는다.
+
+    `instances.start`는 자원이 없어도 HTTP 200 + Operation 을 돌려주고, 실제
+    사유는 `error.errors[0].code`(예: ZONE_RESOURCE_POOL_EXHAUSTED)에 들어온다.
+    이걸 보지 않으면 기동 실패가 5분 폴링 타임아웃으로만 드러나 원인을 알 수 없다.
+    """
+    if not isinstance(data, dict):
+        return None
+    error = data.get("error")
+    if not isinstance(error, dict):
+        return None
+    errors = error.get("errors")
+    if not (isinstance(errors, list) and errors and isinstance(errors[0], dict)):
+        return None
+    first = errors[0]
+    return str(first.get("code") or "UNKNOWN"), str(first.get("message") or "")
 
 
 def _load_service_account_info() -> dict[str, Any]:
@@ -180,25 +263,73 @@ class GcpComputeClient:
 
     # ---- API 호출 ---------------------------------------------------------
 
-    async def _request(self, method: str, path: str) -> dict[str, Any]:
-        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
-            token = await self._access_token(session)
-            url = f"{_API_ROOT}/projects/{self.project}/zones/{self.zone}/instances/{self.instance}{path}"
-            async with session.request(
-                method, url, headers={"Authorization": f"Bearer {token}"}
-            ) as resp:
-                body = await resp.text()
-                if resp.status >= 400:
-                    raise GcpApiError(f"{method} {path} 실패 (HTTP {resp.status}): {body[:300]}")
-                return json.loads(body) if body else {}
+    async def _request(self, method: str, path: str, *, action: str) -> dict[str, Any]:
+        try:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                try:
+                    token = await self._access_token(session)
+                except GcpConfigError:
+                    _record_failure(
+                        code="CONFIG_MISSING",
+                        http_status=None,
+                        action=action,
+                        detail="서비스 계정 설정 누락",
+                    )
+                    raise
+                except GcpApiError:
+                    _record_failure(
+                        code="AUTH_FAILED",
+                        http_status=None,
+                        action=action,
+                        detail="액세스 토큰 발급 실패",
+                    )
+                    raise
+
+                url = f"{_API_ROOT}/projects/{self.project}/zones/{self.zone}/instances/{self.instance}{path}"
+                async with session.request(
+                    method, url, headers={"Authorization": f"Bearer {token}"}
+                ) as resp:
+                    body = await resp.text()
+                    if resp.status >= 400:
+                        _record_failure(
+                            code=_extract_http_error_code(body),
+                            http_status=resp.status,
+                            action=action,
+                            detail=body,
+                        )
+                        raise GcpApiError(
+                            f"{method} {path} 실패 (HTTP {resp.status}): {body[:300]}"
+                        )
+                    data = json.loads(body) if body else {}
+        except asyncio.TimeoutError as exc:
+            _record_failure(
+                code="TIMEOUT", http_status=None, action=action, detail=str(exc)
+            )
+            raise GcpApiError(f"{method} {path} 시간 초과") from exc
+        except aiohttp.ClientError as exc:
+            _record_failure(
+                code="NETWORK_ERROR", http_status=None, action=action, detail=str(exc)
+            )
+            raise GcpApiError(f"{method} {path} 연결 실패: {exc}") from exc
+
+        op_error = _extract_operation_error(data)
+        if op_error is not None:
+            code, message = op_error
+            _record_failure(
+                code=code, http_status=None, action=action, detail=message
+            )
+            raise GcpApiError(f"{method} {path} 실패 ({code}): {message[:300]}")
+
+        _clear_failure()
+        return data
 
     async def get_status(self) -> str:
         """RUNNING / TERMINATED / STOPPING / PROVISIONING / STAGING 등."""
-        data = await self._request("GET", "")
+        data = await self._request("GET", "", action="get")
         return str(data.get("status", "UNKNOWN"))
 
     async def start(self) -> None:
-        await self._request("POST", "/start")
+        await self._request("POST", "/start", action="start")
 
     async def stop(self) -> None:
-        await self._request("POST", "/stop")
+        await self._request("POST", "/stop", action="stop")

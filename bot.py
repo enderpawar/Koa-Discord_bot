@@ -53,6 +53,7 @@ KNOWN_EXTENSIONS = (
     "cogs.admin_cog",
     "cogs.web_admin_cog",
     "cogs.mc_cog",
+    "cogs.gcp_status",
     "cogs.valorant_cog",
     "cogs.lol_cog",
     "cogs.party_cog",
