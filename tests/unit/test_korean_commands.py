@@ -92,6 +92,7 @@ def test_user_facing_option_names_are_korean() -> None:
     assert _option_names(TTSCog.setvoice) == ["종류"]
     assert _option_names(RankCog.rank) == ["멤버"]
     assert _option_names(PartyCog.create_party) == ["게임", "정원", "시작", "메모"]
+    assert _payload(PartyCog.create_party)["options"][0]["type"] == 8
 
     mc_payload = _payload(MCControlCog.mc)
     mc_whitelist = next(

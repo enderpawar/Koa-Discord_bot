@@ -83,22 +83,6 @@ def _member_name(guild: discord.Guild | None, user_id: int) -> str:
     return member.display_name if member is not None else f"<@{user_id}>"
 
 
-def find_game_role(guild: discord.Guild, game: str) -> discord.Role | None:
-    """Return the non-default guild role whose name exactly matches the game."""
-    game_name = game.strip().removeprefix("@").strip().casefold()
-    if not game_name:
-        return None
-
-    return next(
-        (
-            role
-            for role in guild.roles
-            if not role.is_default() and role.name.casefold() == game_name
-        ),
-        None,
-    )
-
-
 def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Embed:
     is_open = party.status == "open"
     embed = discord.Embed(
@@ -227,9 +211,9 @@ class PartyCog(commands.Cog):
         self.party_scheduler.cancel()
 
     @app_commands.command(name="파티모집", description="함께 플레이할 파티원을 모집합니다")
-    @app_commands.rename(game="게임", capacity="정원", start="시작", note="메모")
+    @app_commands.rename(game_role="게임", capacity="정원", start="시작", note="메모")
     @app_commands.describe(
-        game="게임 또는 활동 이름",
+        game_role="알림을 보낼 게임 역할",
         capacity="모집 정원(2~20명, 모집자 포함)",
         start="오늘 21:00, 내일 19:30, 2026-08-01 20:00",
         note="파티 설명이나 조건",
@@ -237,7 +221,7 @@ class PartyCog(commands.Cog):
     async def create_party(
         self,
         interaction: discord.Interaction,
-        game: str,
+        game_role: discord.Role,
         capacity: app_commands.Range[int, 2, 20],
         start: str,
         note: str = "",
@@ -254,11 +238,21 @@ class PartyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        if not game.strip() or len(game.strip()) > 50 or len(note.strip()) > 500:
+        if game_role.is_default() or not game_role.mentionable:
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "역할 확인",
+                    "`@everyone`이 아닌 멘션 가능한 게임 역할을 선택해 주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
+            )
+            return
+        if len(game_role.name) > 50 or len(note.strip()) > 500:
             await interaction.response.send_message(
                 embed=notice_embed(
                     "입력 확인",
-                    "게임 이름은 1~50자, 메모는 500자 이하로 입력해 주세요.",
+                    "게임 역할 이름은 50자, 메모는 500자 이하로 입력해 주세요.",
                     tone="warn",
                 ),
                 ephemeral=True,
@@ -277,25 +271,20 @@ class PartyCog(commands.Cog):
             interaction.guild_id,
             interaction.channel_id,
             interaction.user.id,
-            game=game,
+            game=game_role.name,
             capacity=int(capacity),
             starts_at=starts_at.timestamp(),
             note=note,
         )
-        game_role = find_game_role(interaction.guild, game)
-        allowed_mentions = (
-            discord.AllowedMentions(
-                everyone=False,
-                users=False,
-                roles=[game_role],
-                replied_user=False,
-            )
-            if game_role is not None
-            else discord.AllowedMentions.none()
+        allowed_mentions = discord.AllowedMentions(
+            everyone=False,
+            users=False,
+            roles=[game_role],
+            replied_user=False,
         )
         try:
             await interaction.response.send_message(
-                content=game_role.mention if game_role is not None else None,
+                content=game_role.mention,
                 embed=party_embed(party, interaction.guild),
                 view=self.view,
                 allowed_mentions=allowed_mentions,
