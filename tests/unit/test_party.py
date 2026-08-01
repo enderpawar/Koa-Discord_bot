@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 import discord
 from discord.ext import commands
 
-from cogs.party_cog import parse_party_start, party_embed
+from cogs.party_cog import can_mention_game_role, parse_party_start, party_embed
 from cogs.party_store import PartyStore
 
 KST = ZoneInfo("Asia/Seoul")
@@ -60,6 +61,19 @@ def test_parse_party_start_rejects_past_explicit_time() -> None:
 
     with pytest.raises(ValueError, match="현재보다 이후"):
         parse_party_start("오늘 19:00", now=now)
+
+
+def test_game_role_can_use_role_setting_or_bot_permission() -> None:
+    public_role = SimpleNamespace(is_default=lambda: False, mentionable=True)
+    private_role = SimpleNamespace(is_default=lambda: False, mentionable=False)
+    everyone = SimpleNamespace(is_default=lambda: True, mentionable=True)
+    no_permissions = discord.Permissions.none()
+    mention_permissions = discord.Permissions(mention_everyone=True)
+
+    assert can_mention_game_role(public_role, no_permissions)
+    assert can_mention_game_role(private_role, mention_permissions)
+    assert not can_mention_game_role(private_role, no_permissions)
+    assert not can_mention_game_role(everyone, mention_permissions)
 
 
 async def test_create_and_bind_message_is_guild_isolated(store: PartyStore) -> None:

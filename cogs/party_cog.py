@@ -83,6 +83,15 @@ def _member_name(guild: discord.Guild | None, user_id: int) -> str:
     return member.display_name if member is not None else f"<@{user_id}>"
 
 
+def can_mention_game_role(
+    role: discord.Role, permissions: discord.Permissions
+) -> bool:
+    """Whether Discord will allow the bot to notify the selected role."""
+    return not role.is_default() and (
+        role.mentionable or permissions.mention_everyone
+    )
+
+
 def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Embed:
     is_open = party.status == "open"
     embed = discord.Embed(
@@ -238,11 +247,12 @@ class PartyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        if game_role.is_default() or not game_role.mentionable:
+        if not can_mention_game_role(game_role, interaction.app_permissions):
             await interaction.response.send_message(
                 embed=notice_embed(
                     "역할 확인",
-                    "`@everyone`이 아닌 멘션 가능한 게임 역할을 선택해 주세요.",
+                    "이 역할은 봇이 멘션할 수 없습니다. 역할의 멘션 허용 설정을 "
+                    "켜거나 봇에 `모든 역할 멘션` 권한을 부여해 주세요.",
                     tone="warn",
                 ),
                 ephemeral=True,
