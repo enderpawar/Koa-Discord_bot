@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 import discord
 from discord.ext import commands
 
-from cogs.party_cog import parse_party_start, party_embed
+from cogs.party_cog import find_game_role, parse_party_start, party_embed
 from cogs.party_store import PartyStore
 
 KST = ZoneInfo("Asia/Seoul")
@@ -60,6 +61,15 @@ def test_parse_party_start_rejects_past_explicit_time() -> None:
 
     with pytest.raises(ValueError, match="현재보다 이후"):
         parse_party_start("오늘 19:00", now=now)
+
+
+def test_find_game_role_matches_exact_name_case_insensitively() -> None:
+    default_role = SimpleNamespace(name="LOL", is_default=lambda: True)
+    lol_role = SimpleNamespace(name="LoL", is_default=lambda: False)
+    guild = SimpleNamespace(roles=[default_role, lol_role])
+
+    assert find_game_role(guild, "  @LOL ") is lol_role
+    assert find_game_role(guild, "롤") is None
 
 
 async def test_create_and_bind_message_is_guild_isolated(store: PartyStore) -> None:

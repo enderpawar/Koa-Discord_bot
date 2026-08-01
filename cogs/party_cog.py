@@ -83,6 +83,22 @@ def _member_name(guild: discord.Guild | None, user_id: int) -> str:
     return member.display_name if member is not None else f"<@{user_id}>"
 
 
+def find_game_role(guild: discord.Guild, game: str) -> discord.Role | None:
+    """Return the non-default guild role whose name exactly matches the game."""
+    game_name = game.strip().removeprefix("@").strip().casefold()
+    if not game_name:
+        return None
+
+    return next(
+        (
+            role
+            for role in guild.roles
+            if not role.is_default() and role.name.casefold() == game_name
+        ),
+        None,
+    )
+
+
 def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Embed:
     is_open = party.status == "open"
     embed = discord.Embed(
@@ -266,11 +282,23 @@ class PartyCog(commands.Cog):
             starts_at=starts_at.timestamp(),
             note=note,
         )
+        game_role = find_game_role(interaction.guild, game)
+        allowed_mentions = (
+            discord.AllowedMentions(
+                everyone=False,
+                users=False,
+                roles=[game_role],
+                replied_user=False,
+            )
+            if game_role is not None
+            else discord.AllowedMentions.none()
+        )
         try:
             await interaction.response.send_message(
+                content=game_role.mention if game_role is not None else None,
                 embed=party_embed(party, interaction.guild),
                 view=self.view,
-                allowed_mentions=discord.AllowedMentions.none(),
+                allowed_mentions=allowed_mentions,
             )
             message = await interaction.original_response()
             await self.store.bind_message(
