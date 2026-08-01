@@ -183,6 +183,7 @@ async def test_party_embed_shows_capacity_and_status(store: PartyStore) -> None:
     embed = party_embed(party)
 
     assert embed.title == "🎮 롤 파티 모집"
+    assert embed.fields[0].value == "<t:2000:t> (<t:2000:R>)"
     assert embed.fields[1].value == "**1 / 4명**"
     assert embed.fields[2].value == "🟢 모집 중"
 

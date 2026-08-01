@@ -93,7 +93,7 @@ def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Emb
     timestamp = int(party.starts_at)
     embed.add_field(
         name="시작",
-        value=f"<t:{timestamp}:F>\n<t:{timestamp}:R>",
+        value=f"<t:{timestamp}:t> (<t:{timestamp}:R>)",
         inline=True,
     )
     embed.add_field(
