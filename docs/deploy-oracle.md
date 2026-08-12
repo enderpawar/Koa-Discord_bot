@@ -102,9 +102,9 @@ docker compose up -d --build
 | `AZURE_SPEECH_REGION` | ✅ | 예: `koreacentral` |
 | `LOG_LEVEL` | – | `INFO` (기본 권장) |
 | `TEST_GUILD_ID` | – | 슬래시 명령 즉시 sync 할 길드 ID. 미설정 시 전역 sync (캐시 1시간) |
-| `ADMIN_WEB_ENABLED` | – | 웹 어드민을 사용할 때 `1` |
+| `ADMIN_WEB_ENABLED` | – | compose 가 `1` 로 못박음. 끄고 싶을 때만 빈 값으로 덮어씀 (§6) |
 | `ADMIN_LOGIN_DB_PATH` | – | 일회용 로그인 해시 DB 경로. Docker 기본값 `/data/admin_login.sqlite3` |
-| `ADMIN_WEB_HOST` | ⚠️ | 웹 어드민 사용 시 **반드시 `0.0.0.0`** — §6 참조 |
+| `ADMIN_WEB_HOST` | – | compose 가 `0.0.0.0` 으로 못박음. compose 없이 띄울 때만 직접 지정 (§6) |
 | `ADMIN_WEB_PUBLIC_URL` | – | `http://<공인IP>:8080` — 봇이 안내하는 대시보드 주소 |
 | `MC_WHITELIST_SSH_*` | – | `/마크 화이트리스트 등록` 사용 시 필요 — 아래 절 참조 |
 
@@ -180,16 +180,27 @@ GCP 방화벽의 22번 포트도 가능하면 Oracle 공인 IP `/32`에서만 �
 
 ## 6. 웹 어드민을 쓸 경우 (선택)
 
-**`ADMIN_WEB_HOST` 를 반드시 명시해야 합니다.** `cogs/web_admin_cog.py` 의 `_web_host()` 는 이 변수가 없으면 **`127.0.0.1` 에 바인딩되어 외부 접속이 불가능합니다.** 외부 공개는 호스팅 환경 추측이 아니라 명시적 설정으로만 이뤄집니다.
+`docker-compose.yml` 로 띄우면 **따로 설정할 것이 없습니다.** `ADMIN_WEB_ENABLED=1` 과
+`ADMIN_WEB_HOST=0.0.0.0` 은 이 compose 구성의 상수라서 compose 가 기본값으로 못박습니다.
+cloudflared 가 별도 컨테이너이므로 봇은 `0.0.0.0` 에 바인딩해야 하고(`127.0.0.1` 이면
+컨테이너 루프백에만 묶여 터널이 못 붙습니다), 이 파일로 띄운다는 것 자체가 웹 어드민을
+쓴다는 뜻입니다. 두 값을 배포 환경 변수에 의존하게 두면 하나만 빠져도 터널이 502 만
+뱉는 형태로 조용히 깨집니다.
 
-`.env` 에 명시하세요:
+바꿔야 할 때만 `.env` 에 적으면 compose 기본값을 덮어씁니다:
 
 ```
-ADMIN_WEB_ENABLED=1
-ADMIN_WEB_HOST=0.0.0.0
+# 웹 어드민을 끄고 싶을 때
+ADMIN_WEB_ENABLED=
+# 포트를 바꿀 때
 ADMIN_WEB_PORT=8080
-ADMIN_WEB_PUBLIC_URL=https://<Cloudflare 공개 주소>
+# 도메인 + named tunnel 로 옮겨 고정 주소를 쓸 때
+ADMIN_WEB_PUBLIC_URL=https://<고정 주소>
 ```
+
+compose 없이 직접 `python bot.py` 로 띄우는 경우에만 `ADMIN_WEB_HOST` 를 직접 지정해야
+합니다. `cogs/web_admin_cog.py` 의 `_web_host()` 는 이 변수가 없으면 `127.0.0.1` 에
+바인딩합니다 — 외부 공개는 호스팅 환경 추측이 아니라 명시적 설정으로만 이뤄집니다.
 
 Cloudflare Tunnel을 사용하면 8080 인바운드 포트를 열지 마세요. `docker-compose.yml`은
 호스트의 `127.0.0.1:8080`에만 게시하고, `cloudflared`가 Docker 내부의 `bot:8080`으로
@@ -339,8 +350,8 @@ GitHub 저장소 **Settings → Secrets and variables → Actions** 에 다음 �
 | Secret | `AZURE_SPEECH_REGION` | Azure Speech 리전 |
 | Secret | `TEST_GUILD_ID` | 선택: 즉시 슬래시 명령 동기화 대상 |
 | Variable | `LOG_LEVEL` | 선택: 기본 `INFO` |
-| Variable | `ADMIN_WEB_ENABLED` | 웹 어드민 사용 시 `1` |
-| Variable | `ADMIN_WEB_HOST` | 웹 어드민 사용 시 `0.0.0.0` |
+| Variable | `ADMIN_WEB_ENABLED` | 불필요 — compose 가 `1` 로 못박음 (§6) |
+| Variable | `ADMIN_WEB_HOST` | 불필요 — compose 가 `0.0.0.0` 으로 못박음 (§6) |
 | Variable | `ADMIN_WEB_PORT` | 선택: 기본 `8080` |
 | Variable | `ADMIN_WEB_PUBLIC_URL` | 선택: 외부 대시보드 URL |
 | Variable | `MEM_ANCHOR_BYTES` | 선택: 기본 `2600000000` |
@@ -414,7 +425,7 @@ docker compose logs -f --tail 100
 
 - [ ] 기존 배포의 `config.json` 백업
 - [ ] `.env` 에 `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` 포함
-- [ ] 웹 어드민을 썼다면 `ADMIN_WEB_HOST=0.0.0.0` 과 `ADMIN_WEB_PUBLIC_URL` 추가 (§6)
+- [ ] 웹 어드민은 compose 기본값으로 켜진다. 고정 주소를 쓸 때만 `ADMIN_WEB_PUBLIC_URL` 추가 (§6)
 - [ ] `data/config.json` 복원 후 `docker compose up -d --build`
 - [ ] Discord 에서 `/상태`로 길드 설정이 살아있는지 확인
 - [ ] 백업 cron 설정 (§7)

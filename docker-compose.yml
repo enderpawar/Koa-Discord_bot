@@ -13,6 +13,13 @@ services:
     environment:
       # 공개 주소를 런타임에 물어볼 곳. ADMIN_WEB_PUBLIC_URL 이 있으면 그쪽이 우선.
       CLOUDFLARED_METRICS_URL: http://cloudflared:2000
+      # 이 두 값은 이 compose 구성의 상수다. cloudflared 가 별도 컨테이너라
+      # 봇은 0.0.0.0 에 바인딩해야 하고(127.0.0.1 이면 컨테이너 루프백에만 묶여
+      # 터널이 못 붙는다), 이 파일로 띄운다는 것 자체가 웹 어드민을 쓴다는 뜻이다.
+      # 배포 환경 변수에 빠뜨리면 터널이 502 만 뱉는 형태로 조용히 깨지므로
+      # 기본값을 여기서 못박고, 필요하면 .env 로 덮어쓴다.
+      ADMIN_WEB_ENABLED: "${ADMIN_WEB_ENABLED:-1}"
+      ADMIN_WEB_HOST: "${ADMIN_WEB_HOST:-0.0.0.0}"
       # 외부 접근은 Cloudflare 가 종단한 HTTPS 로만 들어온다. SSH 터널
       # (http://127.0.0.1:8080)은 브라우저가 보안 컨텍스트로 취급하므로
       # Secure 쿠키가 그대로 저장된다.

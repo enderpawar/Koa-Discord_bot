@@ -545,16 +545,35 @@ def test_rank_cog_guard_is_uniform_across_handlers() -> None:
         assert 'self.bot.get_cog("RankCog")' not in inspect.getsource(handler)
 
 
-def test_compose_publishes_admin_port_to_loopback_only() -> None:
+def _compose_lines() -> list[str]:
     raw = (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(
         encoding="utf-8"
     )
-    lines = [
+    return [
         line.strip()
         for line in raw.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def test_compose_publishes_admin_port_to_loopback_only() -> None:
     published = [
-        line for line in lines if line.startswith('- "') and line.rstrip().endswith('8080"')
+        line
+        for line in _compose_lines()
+        if line.startswith('- "') and line.rstrip().endswith('8080"')
     ]
     assert published == ['- "127.0.0.1:8080:8080"']
+
+
+def test_compose_pins_the_settings_its_own_topology_requires() -> None:
+    """배포 환경 변수에서 빠뜨려도 조용히 깨지지 않게 compose 가 기본값을 준다.
+
+    cloudflared 가 별도 컨테이너라 봇은 0.0.0.0 에 바인딩해야 하고, 이 파일로
+    띄운다는 것 자체가 웹 어드민을 쓴다는 뜻이다. 둘 중 하나라도 빠지면 터널이
+    502 만 뱉는 형태로 깨진다.
+    """
+    lines = _compose_lines()
+
+    assert 'ADMIN_WEB_ENABLED: "${ADMIN_WEB_ENABLED:-1}"' in lines
+    assert 'ADMIN_WEB_HOST: "${ADMIN_WEB_HOST:-0.0.0.0}"' in lines
+    assert 'ADMIN_WEB_COOKIE_SECURE: "1"' in lines
