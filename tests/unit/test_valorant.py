@@ -98,12 +98,6 @@ def test_match_line_missing_scores_is_safe():
     assert line.startswith("▫️")  # 승패 판정 불가여도 크래시하지 않음
 
 
-def test_match_performance_extracts_outcome_and_kda():
-    performance = vc._match_performance(_match("Blue", 7, 13, k=3, d=8, a=2))
-    assert performance.outcome == "win"
-    assert (performance.kills, performance.deaths, performance.assists) == (3, 8, 2)
-
-
 # ---- _profile_embed -------------------------------------------------------
 
 
@@ -123,7 +117,9 @@ def test_profile_embed_fields():
     assert "최고 랭크" in field_names
     assert "최근 경기" in field_names
     recent = next(f for f in embed.fields if f.name == "최근 경기")
-    assert "코아" in recent.value
+    # 전적은 기록만 보여 준다. 봇의 한 줄 평은 붙이지 않는다.
+    assert recent.value == vc._match_line(matches[0])
+    assert "코아" not in recent.value
     current_field = next(f for f in embed.fields if f.name == "현재 랭크")
     assert "Immortal 1" in current_field.value
     assert "42 RR" in current_field.value

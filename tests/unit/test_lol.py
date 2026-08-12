@@ -11,7 +11,6 @@ import pytest
 
 from cogs import lol_api as api
 from cogs import lol_cog as lc
-from cogs.game_reactions import RecentPerformance
 from cogs.lol_store import LolStore
 
 
@@ -140,15 +139,6 @@ def test_match_line_missing_participant_returns_none():
     assert lc._match_line({}, "p1") is None
 
 
-def test_match_performance_extracts_outcome_and_kda():
-    performance = lc._match_performance(
-        _match("p1", win=False, k=3, d=7, a=4), "p1"
-    )
-    assert performance == RecentPerformance(
-        outcome="loss", kills=3, deaths=7, assists=4
-    )
-
-
 # ---- _profile_embed -------------------------------------------------------
 
 
@@ -171,7 +161,6 @@ def test_profile_embed_fields():
         summoner,
         entries,
         ["✅ `Ahri` 8/2/10"],
-        [RecentPerformance("win", 8, 2, 10)],
     )
     assert embed.title == "nick#KR1"
     assert embed.thumbnail.url == api.profile_icon_url(29)
@@ -180,7 +169,9 @@ def test_profile_embed_fields():
     assert "자유 랭크" in names
     assert "최근 경기" in names
     recent = next(f for f in embed.fields if f.name == "최근 경기")
-    assert "코아" in recent.value
+    # 전적은 기록만 보여 준다. 봇의 한 줄 평은 붙이지 않는다.
+    assert recent.value == "✅ `Ahri` 8/2/10"
+    assert "코아" not in recent.value
     solo = next(f for f in embed.fields if f.name == "솔로 랭크")
     assert "Platinum I" in solo.value
     flex = next(f for f in embed.fields if f.name == "자유 랭크")

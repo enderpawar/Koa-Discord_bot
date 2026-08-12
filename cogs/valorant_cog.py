@@ -16,7 +16,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs import valorant_api as api
-from cogs.game_reactions import RecentPerformance, cute_recent_reaction, stat_int
 from cogs.ui import BRAND_COLOR, notice_embed
 from cogs.valorant_store import ValorantStore
 
@@ -131,29 +130,6 @@ def _match_line(match: dict) -> str:
     return f"{result} `{map_name}` {kills}/{deaths}/{assists} · `{score}`"
 
 
-def _match_performance(match: dict) -> RecentPerformance:
-    stats = match.get("stats") or {}
-    teams = match.get("teams") or {}
-    team = str(stats.get("team", "")).lower()
-    mine = teams.get(team)
-    other = teams.get("blue" if team == "red" else "red")
-    if isinstance(mine, int) and isinstance(other, int):
-        if mine > other:
-            outcome = "win"
-        elif mine < other:
-            outcome = "loss"
-        else:
-            outcome = "draw"
-    else:
-        outcome = "unknown"
-    return RecentPerformance(
-        outcome=outcome,
-        kills=stat_int(stats.get("kills")),
-        deaths=stat_int(stats.get("deaths")),
-        assists=stat_int(stats.get("assists")),
-    )
-
-
 def _error_embed(exc: Exception) -> discord.Embed:
     if isinstance(exc, api.ValorantConfigError):
         return notice_embed(
@@ -214,15 +190,8 @@ def _profile_embed(
         embed.add_field(name="레벨", value=f"{level}", inline=True)
 
     if matches:
-        recent_matches = matches[:5]
-        lines = [_match_line(match) for match in recent_matches]
-        reaction = cute_recent_reaction(
-            [_match_performance(match) for match in recent_matches]
-        )
-        recent_value = "\n".join(lines)
-        if reaction:
-            recent_value += f"\n\n💬 **코아:** {reaction}"
-        embed.add_field(name="최근 경기", value=recent_value, inline=False)
+        lines = [_match_line(match) for match in matches[:5]]
+        embed.add_field(name="최근 경기", value="\n".join(lines), inline=False)
 
     embed.set_footer(text="전적 제공: HenrikDev (비공식 API)")
     return embed

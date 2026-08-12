@@ -16,7 +16,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs import lol_api as api
-from cogs.game_reactions import RecentPerformance, cute_recent_reaction, stat_int
 from cogs.lol_store import LolStore
 from cogs.ui import BRAND_COLOR, notice_embed
 
@@ -132,20 +131,6 @@ def _match_line(match: dict, puuid: str) -> str | None:
     return f"{result} `{champ}` {k}/{d}/{a}"
 
 
-def _match_performance(match: dict, puuid: str) -> RecentPerformance | None:
-    info = match.get("info") or {}
-    participants = info.get("participants") or []
-    me = next((p for p in participants if p.get("puuid") == puuid), None)
-    if me is None:
-        return None
-    return RecentPerformance(
-        outcome="win" if me.get("win") else "loss",
-        kills=stat_int(me.get("kills")),
-        deaths=stat_int(me.get("deaths")),
-        assists=stat_int(me.get("assists")),
-    )
-
-
 def _error_embed(exc: Exception) -> discord.Embed:
     if isinstance(exc, api.LolConfigError):
         return notice_embed(
@@ -176,7 +161,6 @@ def _profile_embed(
     summoner: dict,
     entries: list[dict],
     matches: list[str],
-    performances: list[RecentPerformance] | None = None,
 ) -> discord.Embed:
     embed = discord.Embed(title=f"{name}#{tag}", color=BRAND_COLOR)
     embed.set_author(name=f"리그 오브 레전드 · {platform.upper()}")
@@ -197,11 +181,7 @@ def _profile_embed(
         embed.add_field(name="레벨", value=f"{level}", inline=True)
 
     if matches:
-        recent_value = "\n".join(matches)
-        reaction = cute_recent_reaction(performances or [])
-        if reaction:
-            recent_value += f"\n\n💬 **코아:** {reaction}"
-        embed.add_field(name="최근 경기", value=recent_value, inline=False)
+        embed.add_field(name="최근 경기", value="\n".join(matches), inline=False)
 
     embed.set_footer(text="제공: Riot Games API")
     return embed
@@ -236,32 +216,26 @@ class LolCog(commands.Cog):
         self.cooldown.stamp(interaction.user.id)
         return True
 
-    async def _fetch_recent_lines(
-        self, regional: str, puuid: str
-    ) -> tuple[list[str], list[RecentPerformance]]:
+    async def _fetch_recent_lines(self, regional: str, puuid: str) -> list[str]:
         """최근 경기 요약. 실패해도 프로필은 나오도록 best-effort."""
         try:
             match_ids = await api.get_recent_match_ids(
                 regional, puuid, _RECENT_MATCH_COUNT
             )
             lines: list[str] = []
-            performances: list[RecentPerformance] = []
             for match_id in match_ids:
                 match = await api.get_match(regional, match_id)
                 line = _match_line(match, puuid)
                 if line:
                     lines.append(line)
-                performance = _match_performance(match, puuid)
-                if performance:
-                    performances.append(performance)
-            return lines, performances
+            return lines
         except (
             api.LolApiError,
             api.LolRateLimited,
             api.LolNotFound,
             api.LolConfigError,
         ):
-            return [], []
+            return []
 
     async def _send_profile(
         self, interaction: discord.Interaction, name: str, tag: str, platform: str
@@ -281,19 +255,13 @@ class LolCog(commands.Cog):
             await interaction.followup.send(embed=_error_embed(exc), ephemeral=True)
             return
 
-        matches, performances = await self._fetch_recent_lines(regional, puuid)
+        matches = await self._fetch_recent_lines(regional, puuid)
         # account 가 정규화한 표기 사용
         disp_name = account.get("gameName", name)
         disp_tag = account.get("tagLine", tag)
         await interaction.followup.send(
             embed=_profile_embed(
-                disp_name,
-                disp_tag,
-                platform,
-                summoner,
-                entries,
-                matches,
-                performances,
+                disp_name, disp_tag, platform, summoner, entries, matches
             )
         )
 
