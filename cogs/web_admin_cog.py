@@ -430,25 +430,27 @@ class WebAdminCog(commands.Cog):
             )
 
         cfg = await self.store.get(guild.id)
-        return web.json_response(
-            {
-                "guilds": [{"id": _id(item.id), "name": item.name} for item in guilds],
-                "selected": {
-                    "id": _id(guild.id),
-                    "name": guild.name,
-                    "config": cfg,
-                    "text_channels": [_channel_payload(ch) for ch in guild.text_channels],
-                    "voice_channels": [_channel_payload(ch) for ch in guild.voice_channels],
-                },
-                "env": {
-                    "host": _web_host(),
-                    "port": _web_port(),
-                    "config_path": os.getenv("CONFIG_PATH", "config.json"),
-                    "rank_path": os.getenv("RANK_PATH", "rank_stats.json"),
-                    "test_guild_id": os.getenv("TEST_GUILD_ID", ""),
-                },
+        payload: dict[str, Any] = {
+            "guilds": [{"id": _id(item.id), "name": item.name} for item in guilds],
+            "selected": {
+                "id": _id(guild.id),
+                "name": guild.name,
+                "config": cfg,
+                "text_channels": [_channel_payload(ch) for ch in guild.text_channels],
+                "voice_channels": [_channel_payload(ch) for ch in guild.voice_channels],
+            },
+        }
+        # env 는 운영자에게만. 서버 주인에게는 남의 길드 ID(TEST_GUILD_ID)와 호스트
+        # 파일시스템 경로가 자기 서버와 무관한 정보로 새어 나간다.
+        if self._scope(request) is None:
+            payload["env"] = {
+                "host": _web_host(),
+                "port": _web_port(),
+                "config_path": os.getenv("CONFIG_PATH", "config.json"),
+                "rank_path": os.getenv("RANK_PATH", "rank_stats.json"),
+                "test_guild_id": os.getenv("TEST_GUILD_ID", ""),
             }
-        )
+        return web.json_response(payload)
 
     async def _api_config(self, request: web.Request) -> web.Response:
         payload = await request.json()

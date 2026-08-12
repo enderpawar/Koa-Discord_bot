@@ -400,3 +400,21 @@ async def test_reissue_revokes_live_sessions_for_that_guild() -> None:
     assert cog._session_valid(mine) is False
     assert cog._session_valid(other) is True
     assert cog._session_valid(operator) is True
+
+
+def test_env_block_is_operator_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    """env 는 남의 길드 ID(TEST_GUILD_ID)와 호스트 경로를 담는다.
+
+    서버 주인에게 내보내면 자기 서버와 무관한 정보가 새어 나간다.
+    """
+    import inspect
+
+    source = inspect.getsource(WebAdminCog._api_state)
+
+    # env 는 반드시 운영자 범위 가드 안에서만 채워져야 한다.
+    assert 'if self._scope(request) is None:' in source
+    guarded = source.split("if self._scope(request) is None:", 1)[1]
+    assert '"env"' in guarded
+    assert '"test_guild_id"' in guarded
+    # 가드 앞쪽에는 env 가 없어야 한다.
+    assert '"env"' not in source.split("if self._scope(request) is None:", 1)[0]
