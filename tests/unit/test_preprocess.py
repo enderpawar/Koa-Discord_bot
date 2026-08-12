@@ -61,11 +61,11 @@ def test_korean_chat_laughter_repeats_are_speakable():
 
 def test_question_only_message_is_spoken_once_regardless_of_count():
     """되묻는 `?` 는 소리가 없어 그냥 두면 침묵이 나간다. 한 번만 읽어 준다."""
-    assert _clean("?") == "음?"
-    assert _clean("??") == "음?"
-    assert _clean("????") == "음?"
-    assert _clean("  ???  ") == "음?"
-    assert _clean("? ?") == "음?"
+    assert _clean("?") == "으음?!"
+    assert _clean("??") == "으음?!"
+    assert _clean("????") == "으음?!"
+    assert _clean("  ???  ") == "으음?!"
+    assert _clean("? ?") == "으음?!"
 
 
 def test_question_mark_attached_to_a_sentence_is_left_alone():

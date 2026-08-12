@@ -20,7 +20,10 @@ _QUESTION_ONLY_RE = re.compile(r"[?？\s]+")
 _URL_PLACEHOLDER = "링크"
 # 물음표 하나는 소리가 없어서 그냥 두면 침묵이 재생된다. 되묻는 뉘앙스만
 # 한 번 읽어 준다. 개수와 무관하게 한 번이다 — `????` 를 네 번 읽으면 시끄럽다.
-_QUESTION_ONLY_SPEECH = "음?"
+#
+# `으음?!` 인 이유: 앞의 `으` 가 소리를 끌어 밋밋한 `음` 보다 갸웃하는 느낌이
+# 살고, 끝의 `?!` 로 Azure 가 억양을 올렸다 끊어 궁금함과 놀람이 섞인 톤이 된다.
+_QUESTION_ONLY_SPEECH = "으음?!"
 _TRUNCATE_SUFFIX = "…"  # U+2026
 _REACTION_SOUNDS = {
     "ㅋ": "크",
