@@ -87,7 +87,9 @@ if (( mem_total_kb >= 4194304 )); then
   anchor_enabled=true
   "${compose[@]}" up -d --build --remove-orphans
 else
-  "${compose[@]}" up -d --build --remove-orphans bot
+  # 메모리가 작은 인스턴스에서는 mem-anchor 를 빼고 띄운다. cloudflared 는
+  # 128MB 남짓이라 함께 올린다 — 빼면 대시보드 공개 주소가 사라진다.
+  "${compose[@]}" up -d --build --remove-orphans bot cloudflared
 fi
 ln -sfn "$release_dir" "$app_root/current"
 

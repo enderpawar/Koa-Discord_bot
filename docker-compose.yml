@@ -10,6 +10,14 @@ services:
     env_file:
       - .env
 
+    environment:
+      # 공개 주소를 런타임에 물어볼 곳. ADMIN_WEB_PUBLIC_URL 이 있으면 그쪽이 우선.
+      CLOUDFLARED_METRICS_URL: http://cloudflared:2000
+      # 외부 접근은 Cloudflare 가 종단한 HTTPS 로만 들어온다. SSH 터널
+      # (http://127.0.0.1:8080)은 브라우저가 보안 컨텍스트로 취급하므로
+      # Secure 쿠키가 그대로 저장된다.
+      ADMIN_WEB_COOKIE_SECURE: "1"
+
     # 컨테이너 재생성과 무관하게 설정/랭킹을 보존한다.
     # Dockerfile 의 CONFIG_PATH=/data/config.json, RANK_PATH=/data/rank_stats.json 과 대응.
     volumes:
@@ -32,6 +40,29 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # 대시보드를 HTTPS 로 외부에 노출한다. 포트를 열지 않고 아웃바운드 연결만
+  # 쓰므로 OCI 방화벽과 무관하고, TLS 는 Cloudflare 가 종단한다.
+  #
+  # 도메인이 없어 임시 터널(trycloudflare)을 쓴다 — 주소가 재시작마다 바뀌고
+  # Cloudflare 가 가용성을 보장하지 않는다. 봇은 metrics 의 /quicktunnel 로
+  # 현재 주소를 물어보므로(CLOUDFLARED_METRICS_URL) 주소가 바뀌어도 따라간다.
+  # 고정 주소가 필요해지면 도메인 + named tunnel 로 바꾸고 봇에는
+  # ADMIN_WEB_PUBLIC_URL 을 주면 된다 (그 값이 우선한다).
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: koa-cloudflared
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --metrics
+      - 0.0.0.0:2000
+      - --url
+      - http://bot:8080
+    depends_on:
+      - bot
+    mem_limit: 128m
 
   # OCI Always Free A1 인스턴스의 유휴(idle) 회수 방지용.
   # 메모리 사용률을 상시 20% 이상으로 유지해 회수 조건(CPU/네트워크/메모리 모두

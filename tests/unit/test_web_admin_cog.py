@@ -488,6 +488,11 @@ def test_compose_publishes_admin_port_to_loopback_only() -> None:
         for line in raw.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
-    published = [line for line in lines if line.startswith("- ") and ":8080" in line]
+    # 게시 포트 항목만 (따옴표로 감싼 "호스트:컨테이너" 형태).
+    published = [
+        line
+        for line in lines
+        if line.startswith('- "') and line.rstrip().endswith('8080"')
+    ]
 
     assert published == ['- "127.0.0.1:8080:8080"'], published

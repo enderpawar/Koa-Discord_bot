@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from cogs.admin_key_store import AdminKeyStore
 from cogs.config_store import ConfigStore
+from cogs.public_url import cached_url, resolve_url
 from cogs.web_admin_cog import _web_enabled
 from cogs.ui import BRAND_COLOR, INFO_COLOR, notice_embed
 
@@ -51,11 +52,13 @@ def _key_embed(guild: discord.Guild, key: str, web_url: str | None) -> discord.E
 
 
 def _web_dashboard_url() -> str | None:
-    # 공개 주소는 ADMIN_WEB_PUBLIC_URL 로만 받는다. 호스팅 업체가 주입하는
-    # 변수를 추측하지 않으므로 어디에 배포하든 동작이 같다.
-    public_url = os.getenv("ADMIN_WEB_PUBLIC_URL", "").strip()
+    # 공개 주소는 ADMIN_WEB_PUBLIC_URL(고정) 또는 cloudflared 임시 터널에서
+    # 온다. 호스팅 업체가 주입하는 변수를 추측하지 않으므로 어디에 배포하든
+    # 동작이 같다. 네트워크를 타는 해석은 resolve_url() 이 하고, 여기서는
+    # 마지막으로 확인된 값만 읽는다 (동기 경로).
+    public_url = cached_url()
     if public_url:
-        return public_url.rstrip("/")
+        return public_url
     # 어드민이 켜져 있는지로 판단한다. ADMIN_WEB_TOKEN 은 운영자 마스터 키라
     # 없는 구성이 정상이므로, 그 유무로 게이트하면 서버별 키만 쓰는 배포에서
     # 안내 링크가 통째로 사라진다.
@@ -74,8 +77,8 @@ def _configured(value: str | None, *, secret: bool = False) -> str:
     return "설정됨" if secret else f"`{value}`"
 
 
-def _dashboard_embed() -> discord.Embed:
-    web_url = _web_dashboard_url()
+def _dashboard_embed(web_url: str | None = None) -> discord.Embed:
+    web_url = web_url if web_url is not None else _web_dashboard_url()
     embed = discord.Embed(
         title="관리자 대시보드",
         description="서버 운영 설정은 웹 관리자 UI에서 관리합니다.",
@@ -115,9 +118,9 @@ def _is_admin(interaction: discord.Interaction) -> bool:
 
 
 class AdminPanelView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(self, web_url: str | None = None) -> None:
         super().__init__(timeout=300)
-        web_url = _web_dashboard_url()
+        web_url = web_url if web_url is not None else _web_dashboard_url()
         if web_url:
             self.add_item(
                 discord.ui.Button(
@@ -183,7 +186,7 @@ class AdminCog(commands.Cog):
             await web_cog.revoke_sessions_for_guild(guild.id)
 
         try:
-            await target.send(embed=_key_embed(guild, key, _web_dashboard_url()))
+            await target.send(embed=_key_embed(guild, key, await resolve_url()))
         except discord.Forbidden:
             log.warning(
                 "dashboard key DM blocked for guild_id=%s user_id=%s (%s)",
@@ -242,9 +245,10 @@ class AdminCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        web_url = await resolve_url()
         await interaction.response.send_message(
-            embed=_dashboard_embed(),
-            view=AdminPanelView(),
+            embed=_dashboard_embed(web_url),
+            view=AdminPanelView(web_url),
             ephemeral=True,
         )
 
