@@ -114,6 +114,13 @@ docker compose up -d --build
 
 ### Minecraft 화이트리스트 SSH
 
+> ⚠️ **현재 비활성화됨.** `/마크` 와 `/클라우드` 는 `bot.py` 의 KNOWN_EXTENSIONS 에서
+> 빠져 있어 로드되지 않습니다. 두 기능 모두 운영자 개인 GCP VM 한 대를 대상으로 하는데
+> `default_permissions=None` 이라 코아를 초대한 아무 서버의 아무나 쓸 수 있었고, 전역
+> 배포에서는 남의 서버 멤버가 VM 전원을 내리거나 화이트리스트에 자신을 올릴 수
+> 있습니다. 되살리려면 길드 허용 목록으로 먼저 가두세요. 아래 절차와 환경변수는
+> 그때를 위해 남겨 둡니다.
+
 코아는 Oracle에서 실행되고 Minecraft 서버는 GCP에 있으므로 로컬
 `whitelist.json`을 수정하지 않습니다. GCP의 `mc-whitelist.sh`를 전용 SSH
 키로 호출합니다. 이 키에는 셸 권한을 주지 말고 반드시 GCP 서버의

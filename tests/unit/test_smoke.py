@@ -67,3 +67,17 @@ def test_bot_loads_community_content_extensions(monkeypatch) -> None:
 
     assert "cogs.party_cog" in namespace["KNOWN_EXTENSIONS"]
     assert "cogs.fortune_cog" in namespace["KNOWN_EXTENSIONS"]
+
+
+def test_minecraft_cogs_are_not_loaded(monkeypatch) -> None:
+    """/마크 · /클라우드 는 운영자 개인 VM 한 대를 향한 단일 테넌트 기능이다.
+
+    default_permissions=None 이라 초대된 아무 서버의 아무나 쓸 수 있어서,
+    전역 배포에서는 남의 서버 멤버가 운영자 VM 전원과 화이트리스트를 건드릴 수
+    있다. 길드 허용 목록으로 가두기 전에는 다시 로드하지 않는다.
+    """
+    monkeypatch.setenv("DISCORD_TOKEN", "dummy_for_import")
+    namespace = runpy.run_path(str(BOT_PY), run_name="bot_test")
+
+    assert "cogs.mc_cog" not in namespace["KNOWN_EXTENSIONS"]
+    assert "cogs.gcp_status" not in namespace["KNOWN_EXTENSIONS"]
