@@ -196,6 +196,32 @@ ADMIN_WEB_PUBLIC_URL=http://<공인IP>:8080
 
 웹 어드민을 쓰지 않으면 `ADMIN_WEB_TOKEN` 을 비워 두세요. 자동으로 비활성화되고 포트를 열 필요도 없습니다.
 
+### 6.1 보안
+
+어드민에 적용된 방어:
+
+| 항목 | 동작 |
+|---|---|
+| 세션 | 로그인 성공 시 임의 세션 ID 발급. 쿠키에 `ADMIN_WEB_TOKEN` 자체를 담지 않는다 |
+| 세션 만료 | 12시간. 로그아웃하면 서버에서 즉시 폐기되어 복사된 쿠키도 무효 |
+| 쿠키 | `HttpOnly`, `SameSite=Strict`. 공개 주소가 https 면 `Secure` 자동 |
+| 로그인 시도 | IP 당 5회 실패 시 15분 차단. 잠금 중에는 올바른 토큰도 거부 |
+| 토큰 비교 | `hmac.compare_digest` (타이밍 공격 방어) |
+| 쿼리스트링 인증 | 없음. `?token=` 은 접근 로그·Referer·히스토리에 남아 지원하지 않는다 |
+| 비브라우저 인증 | `Authorization: Bearer <토큰>` 또는 `X-Admin-Token` 헤더 |
+| CSP | `default-src 'none'`, 인라인 style/script 는 요청별 nonce 로만 허용 |
+| 기타 헤더 | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
+
+> ⚠️ **평문 HTTP 로 공개하면 토큰과 세션 쿠키가 그대로 노출됩니다.** 위 방어는
+> 전송 구간을 보호하지 못합니다. 같은 네트워크의 누구나 로그인 폼에 입력한 토큰을
+> 읽을 수 있습니다. 공개 운영이라면 Caddy·nginx 같은 리버스 프록시로 TLS 를 붙이고
+> `ADMIN_WEB_PUBLIC_URL=https://...` 로 지정하세요 (`Secure` 쿠키가 자동으로 켜집니다).
+> 프록시가 TLS 를 끊고 봇에는 평문으로 전달하는 구성이라면 `ADMIN_WEB_COOKIE_SECURE=1`
+> 을 직접 켜세요. TLS 없이 쓸 거라면 `ADMIN_WEB_HOST` 를 열지 말고 SSH 터널
+> (`ssh -L 8080:127.0.0.1:8080 ubuntu@<IP>`)로 접속하는 편이 안전합니다.
+
+봇 기동 시 평문 HTTP 로 외부에 열려 있으면 로그에 경고가 남습니다.
+
 ---
 
 ## 7. 백업 — 반드시 설정할 것

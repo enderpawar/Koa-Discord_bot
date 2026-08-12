@@ -1,41 +1,270 @@
 <!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>코아 관리자</title><style>
-:root{--bg:#f4f6f8;--panel:#fff;--line:#d8dee8;--line-strong:#c5ceda;--text:#16181d;--muted:#667085;--brand:#5865f2;--brand-soft:#eef0ff;--ok:#15803d;--ok-soft:#e8f7ee;--warn:#b7791f;--warn-soft:#fff7e6;--danger:#b42318;--gold:#b58105;--gold-soft:#fff7d6}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;font-size:15px}
-header{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-h1{font-size:20px;margin:0}.shell{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 64px)}
-aside{border-right:1px solid var(--line);background:#fff;padding:20px}.content{padding:24px;max-width:1180px;width:100%}
-.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}.section h2{font-size:17px;margin:0 0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
-.section .sub{font-size:12px;font-weight:600;color:var(--muted)}
-.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.field label{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:800;color:#4b5563;margin-bottom:7px}
-select,input{width:100%;height:42px;border:1px solid var(--line-strong);border-radius:7px;background:#fff;padding:0 11px;font-size:14px;color:var(--text)}select:focus,input:focus{outline:2px solid rgba(88,101,242,.18);border-color:var(--brand)}
-.toggle{display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid var(--line);border-radius:8px;padding:13px 14px;margin-top:14px;background:#fbfcfe}
-.status{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:7px 10px;font-weight:800;font-size:13px;background:var(--warn-soft);color:var(--warn)}.status.on{background:var(--ok-soft);color:var(--ok)}.dot{width:8px;height:8px;border-radius:50%;background:currentColor}
-button{height:40px;border:0;border-radius:7px;background:var(--brand);color:#fff;font-weight:800;padding:0 15px;cursor:pointer}button.secondary{background:#eef1f6;color:#1f2937}button.danger{background:#fff1f0;color:var(--danger);border:1px solid #f3b7b2}button:disabled{opacity:.55;cursor:not-allowed}
-.actions{display:flex;gap:10px;flex-wrap:wrap}.muted{color:var(--muted);line-height:1.55}.list{display:grid;gap:8px}.guild{width:100%;text-align:left;background:#f1f4f8;color:var(--text);border:1px solid transparent;border-radius:7px;padding:10px 12px}.guild.active{background:var(--brand-soft);border-color:var(--brand);color:#2730a8;font-weight:800}
-#message.ok{color:var(--ok);font-weight:800}#message.error{color:var(--danger);font-weight:800}
-.lb-rows{display:grid;gap:8px}
-.lb-row{display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}
-.lb-row .rank{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;background:#eef1f6;font-weight:800;font-size:13px;color:#1f2937}
-.lb-row.top1 .rank{background:var(--gold-soft);color:var(--gold)}
-.lb-row.top2 .rank,.lb-row.top3 .rank{background:var(--brand-soft);color:#2730a8}
-.lb-row .name{font-weight:700}.lb-row .meta{font-size:12px;color:var(--muted);margin-top:2px}
-.lb-row .score{font-weight:800;font-variant-numeric:tabular-nums}
-.history{display:grid;gap:10px}
-.history-week{border:1px solid var(--line);border-radius:8px;background:#fbfcfe;overflow:hidden}
-.history-week summary{cursor:pointer;list-style:none;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700}
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>코아 관리자</title>
+<style nonce="{{NONCE}}">
+:root{
+  --bg:#eef1f8; --panel:#fff; --panel-soft:#f7f9fd;
+  --line:#dde3ee; --line-strong:#c6cfdf;
+  --text:#14161c; --muted:#5f6b81;
+  --brand:#5865f2; --brand-ink:#2f39ad; --brand-soft:#eef0ff;
+  --ok:#12703a; --ok-soft:#e6f7ed;
+  --warn:#8f6212; --warn-soft:#fdf4e3;
+  --danger:#b42318; --danger-soft:#fff1f0; --danger-line:#f3b7b2;
+  --gold:#96690a; --gold-soft:#fdf3d4;
+  --shadow:0 1px 2px rgba(20,30,60,.05), 0 8px 24px -16px rgba(20,30,60,.28);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0d1017; --panel:#161b26; --panel-soft:#1b2230;
+    --line:#252d3d; --line-strong:#36415a;
+    --text:#e9edf5; --muted:#95a2b9;
+    --brand:#7b86ff; --brand-ink:#b3b9ff; --brand-soft:#1d2239;
+    --ok:#5ddc95; --ok-soft:#10281c;
+    --warn:#f0c069; --warn-soft:#2a2113;
+    --danger:#ff8a80; --danger-soft:#2a1614; --danger-line:#5b2b26;
+    --gold:#f0c869; --gold-soft:#2b2413;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.9);
+  }
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:"Pretendard","Apple SD Gothic Neo",Inter,system-ui,"Malgun Gothic",sans-serif;
+  font-size:15px; line-height:1.5;
+}
+header{
+  height:62px; display:flex; align-items:center; justify-content:space-between;
+  gap:16px; padding:0 22px; background:var(--panel);
+  border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5;
+}
+.brand{display:flex; align-items:center; gap:11px; min-width:0}
+.brand-mark{
+  width:32px; height:32px; flex:none; display:grid; place-items:center;
+  border:2.5px solid var(--text); border-radius:9px; box-shadow:3px 3px 0 var(--brand);
+  font-family:Bahnschrift,"Arial Narrow",sans-serif; font-weight:900; font-size:15px;
+}
+h1{font-size:17px; margin:0; letter-spacing:-.01em; white-space:nowrap}
+.shell{display:grid; grid-template-columns:280px 1fr; min-height:calc(100vh - 62px)}
+aside{
+  border-right:1px solid var(--line); background:var(--panel);
+  padding:20px 18px; display:flex; flex-direction:column; gap:16px;
+}
+.content{padding:22px; max-width:1120px; width:100%; display:grid; gap:16px; align-content:start}
+.section{
+  background:var(--panel); border:1px solid var(--line); border-radius:14px;
+  padding:20px; box-shadow:var(--shadow);
+}
+.section h2{
+  font-size:15px; margin:0 0 16px; display:flex; align-items:center;
+  justify-content:space-between; gap:10px; letter-spacing:-.01em;
+}
+.section .sub{font-size:12px; font-weight:700; color:var(--muted)}
+.grid{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px}
+.field label{
+  display:block; font-size:11.5px; font-weight:800; color:var(--muted);
+  margin-bottom:7px; letter-spacing:.03em;
+}
+select,input{
+  width:100%; height:42px; padding:0 12px; font-size:14px; color:var(--text);
+  background:var(--panel-soft); border:1px solid var(--line-strong); border-radius:9px;
+  transition:border-color .15s, box-shadow .15s;
+}
+select:focus,input:focus{
+  outline:none; border-color:var(--brand);
+  box-shadow:0 0 0 4px color-mix(in srgb, var(--brand) 16%, transparent);
+}
+.toggle{
+  display:flex; align-items:center; gap:12px; border:1px solid var(--line);
+  border-radius:10px; padding:13px 14px; margin-top:14px;
+  background:var(--panel-soft); font-weight:600; cursor:pointer;
+}
+.toggle input{width:18px; height:18px; flex:none; accent-color:var(--brand); cursor:pointer}
+.status{
+  display:inline-flex; align-items:center; gap:8px; border-radius:999px;
+  padding:7px 12px; font-weight:800; font-size:12.5px;
+  background:var(--warn-soft); color:var(--warn);
+}
+.status.on{background:var(--ok-soft); color:var(--ok)}
+.dot{width:7px; height:7px; border-radius:50%; background:currentColor}
+#status p{margin:12px 0 0; color:var(--muted); font-size:13.5px}
+button{
+  height:40px; border:0; border-radius:9px; background:var(--brand); color:#fff;
+  font-weight:800; font-size:14px; padding:0 16px; cursor:pointer;
+  transition:filter .15s;
+}
+button:hover:not(:disabled){filter:brightness(1.08)}
+button.secondary{background:var(--panel-soft); color:var(--text); border:1px solid var(--line-strong)}
+button.danger{background:var(--danger-soft); color:var(--danger); border:1px solid var(--danger-line)}
+button:disabled{opacity:.5; cursor:not-allowed}
+.actions{display:flex; gap:9px; flex-wrap:wrap}
+.muted{color:var(--muted); line-height:1.6}
+.list{display:grid; gap:7px}
+.guild{
+  width:100%; text-align:left; height:auto; padding:11px 13px; font-size:14px;
+  background:var(--panel-soft); color:var(--text);
+  border:1px solid transparent; border-radius:9px; font-weight:600;
+}
+.guild.active{
+  background:var(--brand-soft); border-color:var(--brand);
+  color:var(--brand-ink); font-weight:800;
+}
+#message{margin:14px 0 0; font-size:13.5px}
+#message.ok{color:var(--ok); font-weight:800}
+#message.error{color:var(--danger); font-weight:800}
+.lb-rows{display:grid; gap:8px}
+.lb-row{
+  display:grid; grid-template-columns:34px 1fr auto; align-items:center; gap:13px;
+  padding:11px 13px; border:1px solid var(--line); border-radius:10px;
+  background:var(--panel-soft);
+}
+.lb-row .rank{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:28px; height:28px; border-radius:999px; background:var(--bg);
+  font-weight:800; font-size:13px;
+}
+.lb-row.top1 .rank{background:var(--gold-soft); color:var(--gold)}
+.lb-row.top2 .rank,.lb-row.top3 .rank{background:var(--brand-soft); color:var(--brand-ink)}
+.lb-row .name{font-weight:700}
+.lb-row .meta{font-size:12px; color:var(--muted); margin-top:2px}
+.lb-row .score{font-weight:800; font-variant-numeric:tabular-nums}
+.history{display:grid; gap:9px}
+.history-week{
+  border:1px solid var(--line); border-radius:10px;
+  background:var(--panel-soft); overflow:hidden;
+}
+.history-week summary{
+  cursor:pointer; list-style:none; padding:12px 14px; display:flex;
+  align-items:center; justify-content:space-between; gap:10px; font-weight:700;
+}
 .history-week summary::-webkit-details-marker{display:none}
-.history-week summary::after{content:'▾';color:var(--muted);font-size:12px;transition:transform .15s}
+.history-week summary::after{content:'▾'; color:var(--muted); font-size:12px; transition:transform .15s}
 .history-week[open] summary::after{transform:rotate(180deg)}
-.history-week .week-label{display:flex;align-items:center;gap:10px}
-.history-week .top3{font-size:12px;color:var(--muted)}
-.history-week .body{padding:0 14px 14px;display:grid;gap:6px}
-.history-row{display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:10px;font-size:13px;padding:6px 8px;border-radius:6px}
-.history-row .rank{font-weight:800;color:#4b5563}
-.history-row .meta{color:var(--muted);font-size:11px}
-@media(max-width:900px){.shell{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr}.content{padding:16px}}
-</style></head><body><header><h1>코아 관리자</h1><button class="secondary" id="logout">로그아웃</button></header><div class="shell"><aside><div class="section"><h2>서버</h2><div id="guilds" class="list"></div></div><p class="muted">웹 대시보드는 ADMIN_WEB_TOKEN으로 보호됩니다. 토큰은 서버 환경변수에서 관리하세요.</p></aside><main class="content"><div class="section"><h2>운영 상태</h2><div id="status" class="muted">불러오는 중</div></div><div class="section"><h2>이번 주 리더보드 미리보기 <span class="sub" id="lb_anchor"></span></h2><div id="lb_rows" class="lb-rows"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>지난 주차 히스토리 <span class="sub" id="history_count"></span></h2><div id="history" class="history"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>TTS 설정</h2><div class="grid"><div class="field"><label>TTS 입력 채널</label><select id="tts_channel"></select></div><div class="field"><label>음성 출력 채널</label><select id="voice_channel"></select></div></div></div><div class="section"><h2>일일 리더보드</h2><div class="grid"><div class="field"><label>발송 채널</label><select id="leaderboard_channel"></select></div><div class="field"><label>발송 시각 KST</label><input id="post_time" placeholder="00:00" maxlength="5"></div></div><div style="height:14px"></div><label class="toggle"><input id="daily_enabled" type="checkbox" style="width:auto;height:auto"> 매일 자동 발송 사용</label></div><div class="section"><h2>작업</h2><div class="actions"><button id="save">설정 저장</button><button class="secondary" id="post">리더보드 즉시 발송</button><button class="secondary" id="refresh">새로고침</button><button class="danger" id="clear">리더보드 데이터 초기화</button></div><p id="message" class="muted"></p></div></main></div><script>
+.history-week .week-label{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+.history-week .top3{font-size:12px; color:var(--muted); font-weight:600}
+.history-week .body{padding:0 14px 14px; display:grid; gap:5px}
+.history-row{
+  display:grid; grid-template-columns:26px 1fr auto; align-items:center;
+  gap:10px; font-size:13px; padding:6px 8px; border-radius:7px;
+}
+.history-row .rank{font-weight:800; color:var(--muted)}
+.history-row .meta{color:var(--muted); font-size:11px}
+.danger-zone{
+  border-top:1px solid var(--line); margin-top:18px; padding-top:16px;
+  display:grid; gap:10px;
+}
+.danger-zone h3{margin:0; font-size:13px; color:var(--danger); letter-spacing:.02em}
+.confirm-row{display:flex; gap:9px; flex-wrap:wrap; align-items:center}
+.confirm-row input{max-width:190px}
+.note{font-size:12px}
+.note-lg{font-size:13px; margin:0}
+[hidden]{display:none !important}
+@media(max-width:900px){
+  .shell{grid-template-columns:1fr}
+  aside{border-right:0; border-bottom:1px solid var(--line)}
+  .grid{grid-template-columns:1fr}
+  .content{padding:15px}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">K</span>
+    <h1>코아 관리자</h1>
+  </div>
+  <button class="secondary" id="logout" type="button">로그아웃</button>
+</header>
+
+<div class="shell">
+  <aside>
+    <div class="section">
+      <h2>서버</h2>
+      <div id="guilds" class="list"></div>
+    </div>
+    <p class="muted note">
+      세션은 12시간 후 만료됩니다. 관리자 토큰은 서버 환경변수(<code>ADMIN_WEB_TOKEN</code>)에서 관리하세요.
+    </p>
+  </aside>
+
+  <main class="content">
+    <div class="section">
+      <h2>운영 상태</h2>
+      <div id="status" class="muted">불러오는 중…</div>
+    </div>
+
+    <div class="section">
+      <h2>이번 주 리더보드 미리보기 <span class="sub" id="lb_anchor"></span></h2>
+      <div id="lb_rows" class="lb-rows"><p class="muted">불러오는 중…</p></div>
+    </div>
+
+    <div class="section">
+      <h2>지난 주차 히스토리 <span class="sub" id="history_count"></span></h2>
+      <div id="history" class="history"><p class="muted">불러오는 중…</p></div>
+    </div>
+
+    <div class="section">
+      <h2>TTS 설정</h2>
+      <div class="grid">
+        <div class="field">
+          <label for="tts_channel">TTS 입력 채널</label>
+          <select id="tts_channel"></select>
+        </div>
+        <div class="field">
+          <label for="voice_channel">음성 출력 채널</label>
+          <select id="voice_channel"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>일일 리더보드</h2>
+      <div class="grid">
+        <div class="field">
+          <label for="leaderboard_channel">발송 채널</label>
+          <select id="leaderboard_channel"></select>
+        </div>
+        <div class="field">
+          <label for="post_time">발송 시각 KST</label>
+          <input id="post_time" placeholder="00:00" maxlength="5" inputmode="numeric">
+        </div>
+      </div>
+      <label class="toggle" for="daily_enabled">
+        <input id="daily_enabled" type="checkbox"> 매일 자동 발송 사용
+      </label>
+    </div>
+
+    <div class="section">
+      <h2>작업</h2>
+      <div class="actions">
+        <button id="save" type="button">설정 저장</button>
+        <button class="secondary" id="post" type="button">리더보드 즉시 발송</button>
+        <button class="secondary" id="refresh" type="button">새로고침</button>
+      </div>
+      <p id="message" class="muted"></p>
+
+      <div class="danger-zone">
+        <h3>위험 구역</h3>
+        <p class="muted note-lg">
+          선택한 서버의 리더보드 집계를 되돌릴 수 없게 삭제합니다.
+        </p>
+        <div class="actions">
+          <button class="danger" id="clear" type="button">리더보드 데이터 초기화</button>
+        </div>
+        <div class="confirm-row" id="clear_confirm" hidden>
+          <input id="clear_input" placeholder="CLEAR 입력" autocomplete="off" aria-label="확인 문구">
+          <button class="danger" id="clear_go" type="button">영구 삭제</button>
+          <button class="secondary" id="clear_cancel" type="button">취소</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script nonce="{{NONCE}}">
 let state=null;let guildId=null;
 const $=id=>document.getElementById(id);
 function option(value,name){const o=document.createElement('option');o.value=value;o.textContent=name;return o}
@@ -45,15 +274,154 @@ function fmtScore(score){return (Math.max(0,score|0)/100).toFixed(2)+'점'}
 function fmtDuration(secs){const s=Math.max(0,Math.floor(secs|0));const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),r=s%60;if(h)return `${h}시간 ${m}분`;if(m)return `${m}분 ${r}초`;return `${r}초`}
 function fmtAnchorRange(anchor){if(!anchor)return '';const start=new Date(anchor);if(isNaN(start))return anchor;const end=new Date(start.getTime()+6*86400000);const f=d=>`${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;return `${start.getFullYear()} ${f(start)}–${f(end)}`}
 function rankIcon(i){return i===1?'🥇':i===2?'🥈':i===3?'🥉':String(i)}
-function render(){const g=state.selected;if(!g){$('status').textContent='봇이 접속한 서버가 없습니다.';$('lb_rows').innerHTML='<p class="muted">서버를 선택하세요.</p>';$('history').innerHTML='<p class="muted">서버를 선택하세요.</p>';return}guildId=String(g.id);const cfg=g.config||{};$('guilds').innerHTML='';for(const item of state.guilds){const b=document.createElement('button');b.className='guild'+(String(item.id)===guildId?' active':'');b.textContent=item.name;b.onclick=()=>load(item.id);$('guilds').appendChild(b)}fillSelect($('tts_channel'),g.text_channels,cfg.tts_channel_id,'미설정');fillSelect($('leaderboard_channel'),g.text_channels,cfg.leaderboard_channel_id,'미설정');fillSelect($('voice_channel'),g.voice_channels,cfg.voice_channel_id,'미설정');$('post_time').value=cfg.leaderboard_post_time||'00:00';$('daily_enabled').checked=!!cfg.leaderboard_daily_enabled;const on=cfg.leaderboard_daily_enabled?'on':'';$('status').innerHTML=`<span class="status ${on}"><span class="dot"></span>일일 리더보드 ${cfg.leaderboard_daily_enabled?'켜짐':'꺼짐'}</span><p>TTS 입력: ${cfg.tts_channel_id?'#'+channelName(g.text_channels,cfg.tts_channel_id):'미설정'} · 음성 출력: ${cfg.voice_channel_id?channelName(g.voice_channels,cfg.voice_channel_id):'미설정'}</p>`}
+
+function render(){
+  const g=state.selected;
+  if(!g){$('status').textContent='봇이 접속한 서버가 없습니다.';$('lb_rows').innerHTML='<p class="muted">서버를 선택하세요.</p>';$('history').innerHTML='<p class="muted">서버를 선택하세요.</p>';return}
+  guildId=String(g.id);
+  const cfg=g.config||{};
+  $('guilds').innerHTML='';
+  for(const item of state.guilds){
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='guild'+(String(item.id)===guildId?' active':'');
+    b.textContent=item.name;
+    b.onclick=()=>load(item.id);
+    $('guilds').appendChild(b);
+  }
+  fillSelect($('tts_channel'),g.text_channels,cfg.tts_channel_id,'미설정');
+  fillSelect($('leaderboard_channel'),g.text_channels,cfg.leaderboard_channel_id,'미설정');
+  fillSelect($('voice_channel'),g.voice_channels,cfg.voice_channel_id,'미설정');
+  $('post_time').value=cfg.leaderboard_post_time||'00:00';
+  $('daily_enabled').checked=!!cfg.leaderboard_daily_enabled;
+  // 서버 이름·채널 이름은 사용자 입력이다. innerHTML 로 넣지 않고 노드로 조립한다.
+  const box=$('status');
+  box.textContent='';
+  const pill=document.createElement('span');
+  pill.className='status'+(cfg.leaderboard_daily_enabled?' on':'');
+  const dot=document.createElement('span');dot.className='dot';
+  pill.appendChild(dot);
+  pill.appendChild(document.createTextNode('일일 리더보드 '+(cfg.leaderboard_daily_enabled?'켜짐':'꺼짐')));
+  const line=document.createElement('p');
+  line.textContent='TTS 입력: '+(cfg.tts_channel_id?'#'+channelName(g.text_channels,cfg.tts_channel_id):'미설정')
+    +' · 음성 출력: '+(cfg.voice_channel_id?channelName(g.voice_channels,cfg.voice_channel_id):'미설정');
+  box.appendChild(pill);box.appendChild(line);
+}
 function channelName(items,id){const found=items.find(x=>String(x.id)===String(id));return found?found.name:id}
-function renderLeaderboard(data){const el=$('lb_rows');$('lb_anchor').textContent=data&&data.anchor?fmtAnchorRange(data.anchor):'';if(!data||!data.rows||!data.rows.length){el.innerHTML='<p class="muted">아직 집계된 활동이 없습니다.</p>';return}el.innerHTML='';data.rows.forEach((row,idx)=>{const i=idx+1;const div=document.createElement('div');div.className='lb-row'+(i<=3?` top${i}`:'');div.innerHTML=`<span class="rank">${rankIcon(i)}</span><div><div class="name"></div><div class="meta">음성 <b></b> · 메시지 <b></b>개</div></div><div class="score"></div>`;div.querySelector('.name').textContent=row.name;const metaB=div.querySelectorAll('.meta b');metaB[0].textContent=fmtDuration(row.voice_seconds);metaB[1].textContent=row.message_count;div.querySelector('.score').textContent=fmtScore(row.score);el.appendChild(div)})}
-function renderHistory(data){const el=$('history');const weeks=(data&&data.weeks)||[];$('history_count').textContent=weeks.length?`${weeks.length}주 보관 중`:'';if(!weeks.length){el.innerHTML='<p class="muted">아직 보관된 주차 기록이 없습니다. 다음 주 금요일 자동 초기화부터 쌓입니다.</p>';return}el.innerHTML='';weeks.forEach((wk,idx)=>{const det=document.createElement('details');det.className='history-week';if(idx===0)det.open=true;const top3=wk.top.slice(0,3).map((r,i)=>`${rankIcon(i+1)} ${escapeHtml(r.name)}`).join(' · ');det.innerHTML=`<summary><span class="week-label">${fmtAnchorRange(wk.anchor)} <span class="top3">${top3||'기록 없음'}</span></span><span class="muted" style="font-size:12px">${wk.top.length}명</span></summary><div class="body"></div>`;const body=det.querySelector('.body');if(!wk.top.length){body.innerHTML='<p class="muted">활동이 없었던 주차입니다.</p>'}else{wk.top.forEach((row,i)=>{const r=document.createElement('div');r.className='history-row';r.innerHTML=`<span class="rank"></span><div><div class="name"></div><div class="meta">음성 <b></b> · 메시지 <b></b>개</div></div><div class="score"></div>`;r.querySelector('.rank').textContent=rankIcon(i+1);r.querySelector('.name').textContent=row.name;const mb=r.querySelectorAll('.meta b');mb[0].textContent=fmtDuration(row.voice_seconds);mb[1].textContent=row.message_count;r.querySelector('.score').textContent=fmtScore(row.score);body.appendChild(r)})}el.appendChild(det)})}
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function load(id){const q=id?`?guild_id=${id}`:'';const r=await fetch('/api/state'+q);if(r.status===401){location.href='/login';return}state=await r.json();render();await loadActivity()}
-async function loadActivity(){if(!guildId)return;try{const [lb,hist]=await Promise.all([fetch('/api/leaderboard?guild_id='+guildId),fetch('/api/leaderboard-history?guild_id='+guildId)]);if(lb.ok)renderLeaderboard(await lb.json());if(hist.ok)renderHistory(await hist.json())}catch(e){console.error(e)}}
-async function save(){const body={guild_id:guildId,tts_channel_id:$('tts_channel').value,voice_channel_id:$('voice_channel').value,leaderboard_channel_id:$('leaderboard_channel').value,leaderboard_post_time:$('post_time').value,leaderboard_daily_enabled:$('daily_enabled').checked};const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();setMessage(r.ok?'설정을 저장했습니다.':(data.error||'저장 실패'),r.ok?'ok':'error');await load(guildId)}
-async function post(){const r=await fetch('/api/post-leaderboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guild_id:guildId})});const data=await r.json();setMessage(r.ok?'리더보드를 발송했습니다.':(data.error||'발송 실패'),r.ok?'ok':'error')}
-async function clearLeaderboard(){const answer=prompt('선택한 서버의 리더보드 데이터를 초기화하려면 CLEAR를 입력하세요.');if(answer!=='CLEAR'){setMessage('초기화를 취소했습니다.');return}const r=await fetch('/api/clear-leaderboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guild_id:guildId,confirm:'CLEAR'})});const data=await r.json();setMessage(r.ok?`리더보드 데이터를 초기화했습니다. (${data.cleared_users||0}명)`:(data.error||'초기화 실패'),r.ok?'ok':'error');await loadActivity()}
-$('save').onclick=save;$('post').onclick=post;$('refresh').onclick=()=>load(guildId);$('clear').onclick=clearLeaderboard;$('logout').onclick=async()=>{await fetch('/logout',{method:'POST'});location.href='/login'};load();
-</script></body></html>
+
+function activityRow(cls,label,row){
+  const div=document.createElement('div');
+  div.className=cls;
+  const rank=document.createElement('span');rank.className='rank';rank.textContent=label;
+  const mid=document.createElement('div');
+  const name=document.createElement('div');name.className='name';name.textContent=row.name;
+  const meta=document.createElement('div');meta.className='meta';
+  meta.textContent='음성 '+fmtDuration(row.voice_seconds)+' · 메시지 '+row.message_count+'개';
+  mid.appendChild(name);mid.appendChild(meta);
+  const score=document.createElement('div');score.className='score';score.textContent=fmtScore(row.score);
+  div.appendChild(rank);div.appendChild(mid);div.appendChild(score);
+  return div;
+}
+
+function renderLeaderboard(data){
+  const el=$('lb_rows');
+  $('lb_anchor').textContent=data&&data.anchor?fmtAnchorRange(data.anchor):'';
+  if(!data||!data.rows||!data.rows.length){el.innerHTML='<p class="muted">아직 집계된 활동이 없습니다.</p>';return}
+  el.innerHTML='';
+  data.rows.forEach((row,idx)=>{
+    const i=idx+1;
+    el.appendChild(activityRow('lb-row'+(i<=3?` top${i}`:''),rankIcon(i),row));
+  });
+}
+
+function renderHistory(data){
+  const el=$('history');
+  const weeks=(data&&data.weeks)||[];
+  $('history_count').textContent=weeks.length?`${weeks.length}주 보관 중`:'';
+  if(!weeks.length){el.innerHTML='<p class="muted">아직 보관된 주차 기록이 없습니다. 다음 주 금요일 자동 초기화부터 쌓입니다.</p>';return}
+  el.innerHTML='';
+  weeks.forEach((wk,idx)=>{
+    const det=document.createElement('details');
+    det.className='history-week';
+    if(idx===0)det.open=true;
+    const summary=document.createElement('summary');
+    const label=document.createElement('span');label.className='week-label';
+    label.appendChild(document.createTextNode(fmtAnchorRange(wk.anchor)+' '));
+    const top3=document.createElement('span');top3.className='top3';
+    top3.textContent=wk.top.slice(0,3).map((r,i)=>`${rankIcon(i+1)} ${r.name}`).join(' · ')||'기록 없음';
+    label.appendChild(top3);
+    const count=document.createElement('span');count.className='muted note';
+    count.textContent=wk.top.length+'명';
+    summary.appendChild(label);summary.appendChild(count);
+    det.appendChild(summary);
+    const body=document.createElement('div');body.className='body';
+    if(!wk.top.length){body.innerHTML='<p class="muted">활동이 없었던 주차입니다.</p>'}
+    else{wk.top.forEach((row,i)=>body.appendChild(activityRow('history-row',rankIcon(i+1),row)))}
+    det.appendChild(body);
+    el.appendChild(det);
+  });
+}
+
+async function load(id){
+  const q=id?`?guild_id=${encodeURIComponent(id)}`:'';
+  const r=await fetch('/api/state'+q);
+  if(r.status===401){location.href='/login';return}
+  state=await r.json();render();await loadActivity();
+}
+async function loadActivity(){
+  if(!guildId)return;
+  try{
+    const q='?guild_id='+encodeURIComponent(guildId);
+    const [lb,hist]=await Promise.all([fetch('/api/leaderboard'+q),fetch('/api/leaderboard-history'+q)]);
+    if(lb.ok)renderLeaderboard(await lb.json());
+    if(hist.ok)renderHistory(await hist.json());
+  }catch(e){console.error(e)}
+}
+async function send(url,body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===401){location.href='/login';return null}
+  return {ok:r.ok,data:await r.json()};
+}
+async function save(){
+  const res=await send('/api/config',{
+    guild_id:guildId,
+    tts_channel_id:$('tts_channel').value,
+    voice_channel_id:$('voice_channel').value,
+    leaderboard_channel_id:$('leaderboard_channel').value,
+    leaderboard_post_time:$('post_time').value,
+    leaderboard_daily_enabled:$('daily_enabled').checked
+  });
+  if(!res)return;
+  setMessage(res.ok?'설정을 저장했습니다.':(res.data.error||'저장 실패'),res.ok?'ok':'error');
+  await load(guildId);
+}
+async function post(){
+  const res=await send('/api/post-leaderboard',{guild_id:guildId});
+  if(!res)return;
+  setMessage(res.ok?'리더보드를 발송했습니다.':(res.data.error||'발송 실패'),res.ok?'ok':'error');
+}
+function showClearConfirm(show){
+  $('clear_confirm').hidden=!show;
+  $('clear').disabled=show;
+  if(show){$('clear_input').value='';$('clear_input').focus()}
+}
+async function clearLeaderboard(){
+  if($('clear_input').value!=='CLEAR'){setMessage('확인 문구가 일치하지 않습니다. CLEAR 를 입력하세요.','error');return}
+  const res=await send('/api/clear-leaderboard',{guild_id:guildId,confirm:'CLEAR'});
+  if(!res)return;
+  showClearConfirm(false);
+  setMessage(res.ok?`리더보드 데이터를 초기화했습니다. (${res.data.cleared_users||0}명)`:(res.data.error||'초기화 실패'),res.ok?'ok':'error');
+  await loadActivity();
+}
+
+$('save').onclick=save;
+$('post').onclick=post;
+$('refresh').onclick=()=>load(guildId);
+$('clear').onclick=()=>showClearConfirm(true);
+$('clear_cancel').onclick=()=>{showClearConfirm(false);setMessage('초기화를 취소했습니다.')};
+$('clear_go').onclick=clearLeaderboard;
+$('logout').onclick=async()=>{await fetch('/logout',{method:'POST'});location.href='/login'};
+load();
+</script>
+</body>
+</html>

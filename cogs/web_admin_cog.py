@@ -5,6 +5,9 @@ import hmac
 import logging
 import os
 import re
+import secrets
+import time
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +22,15 @@ from cogs.rank_store import weekly_reset_anchor
 log = logging.getLogger(__name__)
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-_COOKIE_NAME = "koa_admin_token"
+
+# 쿠키에는 ADMIN_WEB_TOKEN 이 아니라 세션 ID 만 담는다. 쿠키가 새더라도 새는 것은
+# 그 세션 하나이고, 로그아웃으로 즉시 끊을 수 있다. 이름이 'token' 이 아닌 이유다.
+_COOKIE_NAME = "koa_admin_session"
+_SESSION_TTL_SECONDS = 12 * 60 * 60
+
+# 토큰 무차별 대입 방어. IP 당 실패 횟수를 세고 잠근다.
+_LOGIN_MAX_FAILURES = 5
+_LOGIN_LOCKOUT_SECONDS = 15 * 60
 
 # 관리자 페이지 HTML 은 파이썬 문자열이 아니라 templates/*.html 에 둔다.
 # 에디터 문법 강조와 diff 가 살아나고, 마크업을 고칠 때 cog 를 건드리지 않는다.
@@ -36,6 +47,29 @@ def _template_reload() -> bool:
         "yes",
         "on",
     }
+
+
+def _apply_security_headers(response: web.StreamResponse, nonce: str) -> None:
+    headers = response.headers
+    # default-src 'none' 로 전부 막고 필요한 것만 연다. 인라인 style/script 는
+    # nonce 가 있어야만 실행되므로 XSS 로 삽입된 <script> 는 죽는다.
+    headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'none'; "
+        f"style-src 'nonce-{nonce}'; "
+        f"script-src 'nonce-{nonce}'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "form-action 'self'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'",
+    )
+    headers.setdefault("X-Content-Type-Options", "nosniff")
+    headers.setdefault("X-Frame-Options", "DENY")
+    # 어드민 URL 이 외부 사이트로 새어 나가지 않게 한다.
+    headers.setdefault("Referrer-Policy", "no-referrer")
+    # 설정값과 리더보드가 디스크 캐시나 뒤로가기 버튼에 남지 않게 한다.
+    headers.setdefault("Cache-Control", "no-store")
 
 
 def _template(name: str) -> str:
@@ -64,6 +98,18 @@ def _web_host() -> str:
     # 두지 않는다 — 토큰 하나로 보호되는 어드민이라 기본값은 로컬 바인딩이어야 한다.
     # 외부에서 접근하려면 ADMIN_WEB_HOST=0.0.0.0 을 직접 설정한다 (docs/deploy-oracle.md §6).
     return os.getenv("ADMIN_WEB_HOST") or "127.0.0.1"
+
+
+def _cookie_secure() -> bool:
+    """세션 쿠키에 Secure 를 붙일지.
+
+    공개 주소가 https 면 자동으로 켠다. 평문 HTTP 로 서비스하는데 Secure 를 붙이면
+    쿠키가 아예 저장되지 않아 로그인이 무한 반복되므로 기본값을 켜둘 수는 없다.
+    """
+    explicit = os.getenv("ADMIN_WEB_COOKIE_SECURE")
+    if explicit is not None:
+        return explicit.strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("ADMIN_WEB_PUBLIC_URL", "").strip().lower().startswith("https://")
 
 
 def _web_port() -> int:
@@ -132,6 +178,55 @@ class WebAdminCog(commands.Cog):
         self._token = os.getenv("ADMIN_WEB_TOKEN", "")
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
+        # 세션 ID -> 만료 시각(monotonic). 프로세스 메모리에만 둔다. 재시작하면
+        # 전부 무효가 되는데, 어드민 세션에서는 그게 올바른 기본값이다.
+        self._sessions: dict[str, float] = {}
+        # 클라이언트 IP -> (연속 실패 횟수, 잠금 해제 시각)
+        self._login_failures: dict[str, tuple[int, float]] = {}
+
+    def _issue_session(self) -> str:
+        now = time.monotonic()
+        self._sessions = {sid: exp for sid, exp in self._sessions.items() if exp > now}
+        sid = secrets.token_urlsafe(32)
+        self._sessions[sid] = now + _SESSION_TTL_SECONDS
+        return sid
+
+    def _session_valid(self, sid: str) -> bool:
+        expiry = self._sessions.get(sid)
+        if expiry is None:
+            return False
+        if expiry <= time.monotonic():
+            self._sessions.pop(sid, None)
+            return False
+        return True
+
+    @staticmethod
+    def _client_ip(request: web.Request) -> str:
+        # X-Forwarded-For 는 신뢰하지 않는다. 헤더는 위조가 쉬워서, 그걸 키로 쓰면
+        # 공격자가 매 요청 다른 값을 보내 잠금을 그냥 우회한다.
+        return request.remote or "unknown"
+
+    def _lockout_remaining(self, ip: str) -> int:
+        record = self._login_failures.get(ip)
+        if record is None:
+            return 0
+        failures, until = record
+        if failures < _LOGIN_MAX_FAILURES:
+            return 0
+        remaining = until - time.monotonic()
+        if remaining <= 0:
+            self._login_failures.pop(ip, None)
+            return 0
+        return int(remaining) + 1
+
+    def _record_login_failure(self, ip: str) -> None:
+        failures = self._login_failures.get(ip, (0, 0.0))[0] + 1
+        self._login_failures[ip] = (
+            failures,
+            time.monotonic() + _LOGIN_LOCKOUT_SECONDS,
+        )
+        if failures >= _LOGIN_MAX_FAILURES:
+            log.warning("web admin login locked out for %s after %d failures", ip, failures)
 
     async def cog_load(self) -> None:
         if not _web_enabled():
@@ -150,7 +245,10 @@ class WebAdminCog(commands.Cog):
             log.exception("web admin templates not readable under %s", _TEMPLATE_DIR)
             return
 
-        app = web.Application(middlewares=[self._auth_middleware])
+        # 보안 헤더가 바깥, 인증이 안쪽. 인증 실패로 나가는 401/302 에도 헤더가 붙는다.
+        app = web.Application(
+            middlewares=[self._security_headers_middleware, self._auth_middleware]
+        )
         app.add_routes(
             [
                 web.get("/", self._index),
@@ -170,10 +268,34 @@ class WebAdminCog(commands.Cog):
         self._site = web.TCPSite(self._runner, _web_host(), _web_port())
         await self._site.start()
         log.info("web admin listening on http://%s:%s", _web_host(), _web_port())
+        if _web_host() not in {"127.0.0.1", "localhost", "::1"} and not _cookie_secure():
+            log.warning(
+                "web admin is exposed on %s over plain HTTP — the admin token and "
+                "session cookie travel unencrypted. Put it behind TLS and set "
+                "ADMIN_WEB_PUBLIC_URL=https://... (see docs/deploy-oracle.md)",
+                _web_host(),
+            )
 
     async def cog_unload(self) -> None:
         if self._runner is not None:
             await self._runner.cleanup()
+
+    @web.middleware
+    async def _security_headers_middleware(self, request: web.Request, handler):
+        """모든 응답에 보안 헤더를 붙이고 요청별 CSP nonce 를 발급한다.
+
+        인라인 <style>/<script> 를 nonce 로만 허용하므로, 마크업에 주입이 성공해도
+        스크립트가 실행되지 않는다. 리다이렉트(HTTPException)도 응답이라 같이 감싼다.
+        """
+        nonce = secrets.token_urlsafe(16)
+        request["csp_nonce"] = nonce
+        try:
+            response = await handler(request)
+        except web.HTTPException as exc:
+            _apply_security_headers(exc, nonce)
+            raise
+        _apply_security_headers(response, nonce)
+        return response
 
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
@@ -186,42 +308,70 @@ class WebAdminCog(commands.Cog):
         raise web.HTTPFound("/login")
 
     def _authorized(self, request: web.Request) -> bool:
+        sid = request.cookies.get(_COOKIE_NAME, "")
+        if sid and self._session_valid(sid):
+            return True
+        # 비브라우저 클라이언트(스크립트·모니터링)용 경로. 헤더로만 받는다.
+        # 쿼리스트링(?token=)은 지원하지 않는다 — 접근 로그, Referer 헤더,
+        # 브라우저 히스토리, 프록시 캐시에 토큰이 그대로 남기 때문이다.
         header = request.headers.get("Authorization", "")
         bearer = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
-        supplied = (
-            bearer
-            or request.headers.get("X-Admin-Token", "")
-            or request.cookies.get(_COOKIE_NAME, "")
-            or request.query.get("token", "")
-        )
+        supplied = bearer or request.headers.get("X-Admin-Token", "")
         return bool(supplied) and hmac.compare_digest(supplied, self._token)
 
-    async def _login(self, _: web.Request) -> web.Response:
-        return web.Response(text=_template(_LOGIN_TEMPLATE), content_type="text/html")
+    def _render(self, request: web.Request, name: str, *, error: str = "", status: int = 200) -> web.Response:
+        html = _template(name).replace("{{NONCE}}", request.get("csp_nonce", ""))
+        if error:
+            html = html.replace("<!--ERROR-->", f'<p class="error" role="alert">{escape(error)}</p>')
+        return web.Response(text=html, content_type="text/html", status=status)
+
+    async def _login(self, request: web.Request) -> web.Response:
+        return self._render(request, _LOGIN_TEMPLATE)
 
     async def _login_submit(self, request: web.Request) -> web.Response:
+        ip = self._client_ip(request)
+        locked = self._lockout_remaining(ip)
+        if locked:
+            minutes = max(1, locked // 60)
+            return self._render(
+                request,
+                _LOGIN_TEMPLATE,
+                error=f"시도 횟수를 초과했습니다. 약 {minutes}분 후 다시 시도하세요.",
+                status=429,
+            )
+
         data = await request.post()
         token = str(data.get("token", ""))
         if not hmac.compare_digest(token, self._token):
-            return web.Response(text=_template(_LOGIN_TEMPLATE).replace("<!--ERROR-->", "<p class=\"error\">토큰이 올바르지 않습니다.</p>"), content_type="text/html", status=401)
+            self._record_login_failure(ip)
+            return self._render(
+                request,
+                _LOGIN_TEMPLATE,
+                error="토큰이 올바르지 않습니다.",
+                status=401,
+            )
+
+        self._login_failures.pop(ip, None)
         response = web.HTTPFound("/")
         response.set_cookie(
             _COOKIE_NAME,
-            token,
+            self._issue_session(),
             httponly=True,
-            secure=False,
+            secure=_cookie_secure(),
             samesite="Strict",
-            max_age=60 * 60 * 12,
+            max_age=_SESSION_TTL_SECONDS,
         )
         raise response
 
-    async def _logout(self, _: web.Request) -> web.Response:
+    async def _logout(self, request: web.Request) -> web.Response:
+        # 세션을 서버에서 지운다. 쿠키만 지우면 복사해 둔 쿠키가 계속 통한다.
+        self._sessions.pop(request.cookies.get(_COOKIE_NAME, ""), None)
         response = web.json_response({"ok": True})
         response.del_cookie(_COOKIE_NAME)
         return response
 
-    async def _index(self, _: web.Request) -> web.Response:
-        return web.Response(text=_template(_DASHBOARD_TEMPLATE), content_type="text/html")
+    async def _index(self, request: web.Request) -> web.Response:
+        return self._render(request, _DASHBOARD_TEMPLATE)
 
     async def _api_state(self, request: web.Request) -> web.Response:
         guild_id = request.query.get("guild_id")
