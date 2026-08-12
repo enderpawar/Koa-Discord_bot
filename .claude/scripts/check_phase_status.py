@@ -48,6 +48,11 @@ PHASES = [
         ["cogs/fortune_cog.py"],
         "tests/unit/test_fortune.py",
     ),
+    (
+        "Feature Web Admin Auth",
+        ["cogs/admin_login_store.py", "cogs/admin_cog.py", "cogs/web_admin_cog.py"],
+        "tests/unit/test_admin_login_store.py",
+    ),
 ]
 
 

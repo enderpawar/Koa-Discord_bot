@@ -191,8 +191,8 @@ button:disabled{opacity:.5; cursor:not-allowed}
       <p id="guild_name" class="muted">불러오는 중…</p>
     </div>
     <p class="muted note">
-      세션은 12시간 후 만료됩니다. 이 키는 이 서버만 열 수 있으며,
-      서버에서 <code>/관리자 키재발급</code> 으로 언제든 무효화할 수 있습니다.
+      세션은 15분 동안 사용하지 않거나 로그인 후 30분이 지나면 만료됩니다.
+      다시 접속하려면 서버에서 <code>/관리자 대시보드</code>를 실행하세요.
     </p>
   </aside>
 
@@ -286,20 +286,11 @@ function render(){
   if(!g){$('status').textContent='봇이 접속한 서버가 없습니다.';$('lb_rows').innerHTML='<p class="muted">서버를 선택하세요.</p>';$('history').innerHTML='<p class="muted">서버를 선택하세요.</p>';return}
   guildId=String(g.id);
   const cfg=g.config||{};
-  // 서버별 키로 들어오면 목록이 1개뿐이라 고를 것이 없다. 이름만 보여준다.
-  const multi=state.guilds.length>1;
-  $('guild_picker').hidden=!multi;
-  $('guild_name_box').hidden=multi;
+  // 인증 세션은 서버 하나에만 묶이므로 서버 선택기는 항상 숨긴다.
+  $('guild_picker').hidden=true;
+  $('guild_name_box').hidden=false;
   $('guild_name').textContent=g.name;
   $('guilds').innerHTML='';
-  for(const item of state.guilds){
-    const b=document.createElement('button');
-    b.type='button';
-    b.className='guild'+(String(item.id)===guildId?' active':'');
-    b.textContent=item.name;
-    b.onclick=()=>load(item.id);
-    $('guilds').appendChild(b);
-  }
   fillSelect($('tts_channel'),g.text_channels,cfg.tts_channel_id,'미설정');
   fillSelect($('leaderboard_channel'),g.text_channels,cfg.leaderboard_channel_id,'미설정');
   fillSelect($('voice_channel'),g.voice_channels,cfg.voice_channel_id,'미설정');
@@ -373,17 +364,15 @@ function renderHistory(data){
   });
 }
 
-async function load(id){
-  const q=id?`?guild_id=${encodeURIComponent(id)}`:'';
-  const r=await fetch('/api/state'+q);
+async function load(){
+  const r=await fetch('/api/state');
   if(r.status===401){location.href='/login';return}
   state=await r.json();render();await loadActivity();
 }
 async function loadActivity(){
   if(!guildId)return;
   try{
-    const q='?guild_id='+encodeURIComponent(guildId);
-    const [lb,hist]=await Promise.all([fetch('/api/leaderboard'+q),fetch('/api/leaderboard-history'+q)]);
+    const [lb,hist]=await Promise.all([fetch('/api/leaderboard'),fetch('/api/leaderboard-history')]);
     if(lb.ok)renderLeaderboard(await lb.json());
     if(hist.ok)renderHistory(await hist.json());
   }catch(e){console.error(e)}
@@ -395,7 +384,6 @@ async function send(url,body){
 }
 async function save(){
   const res=await send('/api/config',{
-    guild_id:guildId,
     tts_channel_id:$('tts_channel').value,
     voice_channel_id:$('voice_channel').value,
     leaderboard_channel_id:$('leaderboard_channel').value,
@@ -404,10 +392,10 @@ async function save(){
   });
   if(!res)return;
   setMessage(res.ok?'설정을 저장했습니다.':(res.data.error||'저장 실패'),res.ok?'ok':'error');
-  await load(guildId);
+  await load();
 }
 async function post(){
-  const res=await send('/api/post-leaderboard',{guild_id:guildId});
+  const res=await send('/api/post-leaderboard',{});
   if(!res)return;
   setMessage(res.ok?'리더보드를 발송했습니다.':(res.data.error||'발송 실패'),res.ok?'ok':'error');
 }
@@ -418,7 +406,7 @@ function showClearConfirm(show){
 }
 async function clearLeaderboard(){
   if($('clear_input').value!=='CLEAR'){setMessage('확인 문구가 일치하지 않습니다. CLEAR 를 입력하세요.','error');return}
-  const res=await send('/api/clear-leaderboard',{guild_id:guildId,confirm:'CLEAR'});
+  const res=await send('/api/clear-leaderboard',{confirm:'CLEAR'});
   if(!res)return;
   showClearConfirm(false);
   setMessage(res.ok?`리더보드 데이터를 초기화했습니다. (${res.data.cleared_users||0}명)`:(res.data.error||'초기화 실패'),res.ok?'ok':'error');
@@ -427,7 +415,7 @@ async function clearLeaderboard(){
 
 $('save').onclick=save;
 $('post').onclick=post;
-$('refresh').onclick=()=>load(guildId);
+$('refresh').onclick=load;
 $('clear').onclick=()=>showClearConfirm(true);
 $('clear_cancel').onclick=()=>{showClearConfirm(false);setMessage('초기화를 취소했습니다.')};
 $('clear_go').onclick=clearLeaderboard;

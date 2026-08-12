@@ -55,11 +55,10 @@ jobs:
           VALORANT_API_KEY: ${{ secrets.VALORANT_API_KEY }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           TEST_GUILD_ID: ${{ secrets.TEST_GUILD_ID }}
-          ADMIN_WEB_TOKEN: ${{ secrets.ADMIN_WEB_TOKEN }}
+          ADMIN_WEB_ENABLED: ${{ vars.ADMIN_WEB_ENABLED }}
           ADMIN_WEB_HOST: ${{ vars.ADMIN_WEB_HOST }}
           ADMIN_WEB_PORT: ${{ vars.ADMIN_WEB_PORT }}
           ADMIN_WEB_PUBLIC_URL: ${{ vars.ADMIN_WEB_PUBLIC_URL }}
-          ADMIN_WEB_GUILD_IDS: ${{ vars.ADMIN_WEB_GUILD_IDS }}
           MEM_ANCHOR_BYTES: ${{ vars.MEM_ANCHOR_BYTES }}
           MEM_ANCHOR_INTERVAL_SEC: ${{ vars.MEM_ANCHOR_INTERVAL_SEC }}
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
@@ -99,11 +98,10 @@ jobs:
           optional = (
               "LOG_LEVEL",
               "TEST_GUILD_ID",
-              "ADMIN_WEB_TOKEN",
+              "ADMIN_WEB_ENABLED",
               "ADMIN_WEB_HOST",
               "ADMIN_WEB_PORT",
               "ADMIN_WEB_PUBLIC_URL",
-              "ADMIN_WEB_GUILD_IDS",
               "MEM_ANCHOR_BYTES",
               "MEM_ANCHOR_INTERVAL_SEC",
               "RIOT_API_KEY",

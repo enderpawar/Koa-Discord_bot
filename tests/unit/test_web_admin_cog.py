@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import inspect
+import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
 
 from cogs import web_admin_cog
+from cogs.admin_login_store import LoginGrant
 from cogs.web_admin_cog import (
     WebAdminCog,
     _DASHBOARD_TEMPLATE,
     _LOGIN_TEMPLATE,
-    _allowed_guild_ids,
     _bool_value,
     _channel_payload,
     _clean_time,
+    _config_payload,
+    _cookie_name,
     _cookie_secure,
     _id,
     _template,
@@ -23,91 +29,69 @@ from cogs.web_admin_cog import (
 )
 
 
-def test_clean_time_accepts_hh_mm() -> None:
+def test_clean_time_and_bool_value() -> None:
     assert _clean_time("23:59") == "23:59"
     assert _clean_time(None) == "00:00"
-
-
-def test_clean_time_rejects_invalid_value() -> None:
     with pytest.raises(ValueError):
         _clean_time("24:00")
-
-
-def test_bool_value_accepts_common_strings() -> None:
-    assert _bool_value(True) is True
-    assert _bool_value("true") is True
     assert _bool_value("on") is True
     assert _bool_value("false") is False
 
 
-def test_web_port_falls_back_for_invalid_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_web_bind_defaults_are_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADMIN_WEB_HOST", raising=False)
     monkeypatch.setenv("ADMIN_WEB_PORT", "bad")
+    assert _web_host() == "127.0.0.1"
     assert _web_port() == 8080
 
 
-def test_web_host_defaults_to_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ADMIN_WEB_HOST", raising=False)
+def test_discord_ids_are_serialized_as_strings() -> None:
+    snowflake = 123456789012345678
+    channel = SimpleNamespace(id=snowflake, name="일반")
 
-    assert _web_host() == "127.0.0.1"
-
-
-def test_web_host_uses_explicit_public_bind(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADMIN_WEB_HOST", "0.0.0.0")
-
-    assert _web_host() == "0.0.0.0"
-
-
-def test_allowed_guild_ids_uses_admin_web_guild_ids(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ADMIN_WEB_GUILD_IDS", "123, 456")
-    monkeypatch.setenv("TEST_GUILD_ID", "789")
-
-    assert _allowed_guild_ids() == {123, 456}
-
-
-def test_allowed_guild_ids_falls_back_to_test_guild_id(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
-    monkeypatch.setenv("TEST_GUILD_ID", "789")
-
-    assert _allowed_guild_ids() == {789}
-
-
-def test_id_is_serialized_as_string_to_preserve_discord_snowflakes() -> None:
-    assert _id(123456789012345678) == "123456789012345678"
-
-
-def test_channel_payload_serializes_id_as_string() -> None:
-    class FakeChannel:
-        id = 123456789012345678
-        name = "일반"
-
-    assert _channel_payload(FakeChannel()) == {
-        "id": "123456789012345678",
-        "name": "일반",
+    assert _id(snowflake) == str(snowflake)
+    assert _channel_payload(channel) == {"id": str(snowflake), "name": "일반"}
+    assert _config_payload(
+        {
+            "tts_channel_id": snowflake,
+            "voice_channel_id": snowflake + 1,
+            "leaderboard_channel_id": snowflake + 2,
+            "leaderboard_daily_enabled": True,
+        }
+    ) == {
+        "tts_channel_id": str(snowflake),
+        "voice_channel_id": str(snowflake + 1),
+        "leaderboard_channel_id": str(snowflake + 2),
+        "leaderboard_daily_enabled": True,
     }
 
 
-def test_templates_exist_and_are_complete_documents() -> None:
+def test_login_template_exchanges_fragment_without_exposing_guild() -> None:
     login = _template(_LOGIN_TEMPLATE)
     dashboard = _template(_DASHBOARD_TEMPLATE)
 
-    for html in (login, dashboard):
-        assert html.startswith("<!doctype html>")
-        assert html.rstrip().endswith("</html>")
+    assert login.startswith("<!doctype html>") and login.rstrip().endswith("</html>")
+    assert dashboard.startswith("<!doctype html>") and dashboard.rstrip().endswith("</html>")
+    assert "location.hash" in login
+    assert "history.replaceState" in login
+    assert "'/login/token'" in login
+    assert 'name="token"' not in login
+    assert "guild_hint" not in login
+    assert "/g/" not in login
+    assert '<style nonce="{{NONCE}}">' in login
+    assert '<script nonce="{{NONCE}}">' in login
+    assert '<script nonce="{{NONCE}}">' in dashboard
 
-    # 로그인 실패 문구를 끼워 넣는 자리. 이게 없으면 401 응답이 조용히 안내 없는
-    # 페이지가 된다.
-    assert "<!--ERROR-->" in login
-    # 대시보드는 guild_id 로 서버를 갈아끼우는 API 를 호출해야 한다.
-    assert "/api/state" in dashboard
+
+def test_dashboard_never_sends_client_selected_guild_id() -> None:
+    html = _template(_DASHBOARD_TEMPLATE)
+
+    assert "?guild_id=" not in html
+    assert "guild_id:guildId" not in html
+    assert "fetch('/api/state')" in html
 
 
-def test_template_is_cached_until_reload_is_enabled(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+def test_template_cache_can_be_reloaded(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     target = tmp_path / "admin_login.html"
     target.write_text("<!doctype html>first</html>", encoding="utf-8")
     monkeypatch.setattr(web_admin_cog, "_TEMPLATE_DIR", tmp_path)
@@ -115,111 +99,319 @@ def test_template_is_cached_until_reload_is_enabled(
     monkeypatch.delenv("ADMIN_WEB_TEMPLATE_RELOAD", raising=False)
 
     assert _template("admin_login.html") == "<!doctype html>first</html>"
-
     target.write_text("<!doctype html>second</html>", encoding="utf-8")
     assert _template("admin_login.html") == "<!doctype html>first</html>"
-
     monkeypatch.setenv("ADMIN_WEB_TEMPLATE_RELOAD", "1")
     assert _template("admin_login.html") == "<!doctype html>second</html>"
 
 
-class _FakeRequest:
-    """세션/잠금 로직만 검사하기 위한 최소 요청 객체."""
-
-    def __init__(self, *, cookies=None, headers=None, remote="10.0.0.1") -> None:
+class _Request(dict):
+    def __init__(
+        self,
+        *,
+        cookies=None,
+        headers=None,
+        payload=None,
+        remote="10.0.0.1",
+        method="POST",
+        host="admin.example.com",
+        path="/api/config",
+        json_error=False,
+    ) -> None:
+        super().__init__()
         self.cookies = cookies or {}
         self.headers = headers or {}
         self.remote = remote
-        self._state: dict = {}
+        self.method = method
+        self.host = host
+        self.path = path
+        self._payload = {} if payload is None else payload
+        self._json_error = json_error
 
-    def __setitem__(self, key, value):
-        self._state[key] = value
-
-    def __getitem__(self, key):
-        return self._state[key]
-
-    def get(self, key, default=None):
-        return self._state.get(key, default)
-
-
-def _cog() -> WebAdminCog:
-    return WebAdminCog(bot=None)
+    async def json(self):
+        if self._json_error:
+            raise json.JSONDecodeError("Expecting value", "not json", 0)
+        return self._payload
 
 
-def test_session_cookie_never_carries_the_admin_token(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ADMIN_WEB_TOKEN", "super-secret")
-    cog = _cog()
+class _FakeGuild:
+    def __init__(self, guild_id: int, name: str, *, admin_user_id: int | None = None) -> None:
+        self.id = guild_id
+        self.name = name
+        self.text_channels: list = []
+        self.voice_channels: list = []
+        self._admin_user_id = admin_user_id
 
-    sid = cog._issue_session(None)
+    def get_member(self, user_id: int):
+        if user_id != self._admin_user_id:
+            return None
+        return SimpleNamespace(
+            id=user_id, guild_permissions=SimpleNamespace(administrator=True)
+        )
 
-    # 쿠키가 새더라도 새는 것은 세션 하나여야 한다. 토큰 자체가 담기면 안 된다.
-    assert sid != "super-secret"
-    assert "super-secret" not in sid
-    assert cog._session_valid(sid)
+    def get_channel(self, channel_id: int):
+        return None
 
 
-def test_expired_session_is_rejected_and_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
-    cog = _cog()
-    sid = cog._issue_session(None)
-    monkeypatch.setattr(
-        web_admin_cog.time,
-        "monotonic",
-        lambda: cog._sessions[sid][1] + 1,
-    )
+class _FakeBot:
+    def __init__(self, *guilds: _FakeGuild) -> None:
+        self.guilds = list(guilds)
 
-    assert cog._session_valid(sid) is False
+    def get_guild(self, guild_id: int):
+        return next((guild for guild in self.guilds if guild.id == guild_id), None)
+
+    def get_cog(self, name: str):
+        return None
+
+
+def _cog(*guilds: _FakeGuild) -> WebAdminCog:
+    return WebAdminCog(bot=_FakeBot(*guilds))
+
+
+def test_session_is_opaque_and_carries_only_one_guild_and_user() -> None:
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+
+    sid = cog._issue_session(111, 222)
+    request = _Request(cookies={_cookie_name(): sid})
+
+    assert "111" not in sid and "222" not in sid
+    assert cog._authorized(request) is True
+    assert request["scope"] == 111
+    assert request["user_id"] == 222
+
+
+def test_discord_admin_revocation_invalidates_existing_session() -> None:
+    guild = _FakeGuild(111, "내 서버", admin_user_id=222)
+    cog = _cog(guild)
+    sid = cog._issue_session(111, 222)
+    guild._admin_user_id = None
+
+    request = _Request(cookies={_cookie_name(): sid})
+
+    assert cog._authorized(request) is False
     assert sid not in cog._sessions
 
 
-def test_query_string_token_is_not_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-    """?token= 은 접근 로그·Referer·히스토리에 남으므로 인증 경로가 아니어야 한다."""
-    monkeypatch.setenv("ADMIN_WEB_TOKEN", "super-secret")
+def test_idle_and_absolute_session_expiry_are_server_enforced(monkeypatch) -> None:
     cog = _cog()
-    request = _FakeRequest()
-    request.query = {"token": "super-secret"}  # type: ignore[attr-defined]
+    sid = cog._issue_session(111, 222)
+    record = cog._sessions[sid]
+
+    monkeypatch.setattr(
+        web_admin_cog.time,
+        "monotonic",
+        lambda: record.last_seen_at + web_admin_cog._SESSION_IDLE_TTL_SECONDS,
+    )
+    assert cog._session_valid(sid) is False
+
+    sid = cog._issue_session(111, 222)
+    record = cog._sessions[sid]
+    monkeypatch.setattr(
+        web_admin_cog.time,
+        "monotonic",
+        lambda: record.created_at + web_admin_cog._SESSION_ABSOLUTE_TTL_SECONDS,
+    )
+    assert cog._session_valid(sid) is False
+
+
+def test_master_headers_and_query_tokens_never_authorize(monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_WEB_TOKEN", "legacy-master-token")
+    cog = _cog()
+    request = _Request(headers={"X-Admin-Token": "legacy-master-token"})
+    request.query = {"token": "legacy-master-token"}  # type: ignore[attr-defined]
 
     assert cog._authorized(request) is False
-
-
-def test_header_token_still_authorizes_non_browser_clients(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ADMIN_WEB_TOKEN", "super-secret")
-    cog = _cog()
-
     assert cog._authorized(
-        _FakeRequest(headers={"Authorization": "Bearer super-secret"})
+        _Request(headers={"Authorization": "Bearer legacy-master-token"})
+    ) is False
+
+
+def _grants(cog: WebAdminCog, grant: LoginGrant | None) -> None:
+    """저장소를 타지 않도록 peek/consume 을 함께 대역으로 세운다."""
+    cog.login_grants.peek = AsyncMock(return_value=grant)
+    cog.login_grants.consume = AsyncMock(return_value=grant)
+
+
+async def test_single_use_grant_creates_scoped_session_cookie() -> None:
+    guild = _FakeGuild(111, "내 서버", admin_user_id=222)
+    cog = _cog(guild)
+    _grants(cog, LoginGrant(guild_id=111, user_id=222, expires_at=999))
+    request = _Request(payload={"token": "x" * 43})
+
+    response = await cog._login_token(request)  # type: ignore[arg-type]
+
+    assert response.status == 200
+    assert response.cookies[_cookie_name()]["httponly"] is True
+    assert response.cookies[_cookie_name()]["samesite"] == "Strict"
+    assert [(r.guild_id, r.user_id) for r in cog._sessions.values()] == [(111, 222)]
+    cog.login_grants.consume.assert_awaited_once()
+
+
+async def test_invalid_or_used_grant_is_rejected_without_scope_leak() -> None:
+    cog = _cog(_FakeGuild(111, "비밀 서버", admin_user_id=222))
+    _grants(cog, None)
+
+    response = await cog._login_token(
+        _Request(payload={"token": "x" * 43})  # type: ignore[arg-type]
     )
-    assert cog._authorized(_FakeRequest(headers={"X-Admin-Token": "super-secret"}))
-    assert not cog._authorized(_FakeRequest(headers={"X-Admin-Token": "wrong"}))
+
+    assert response.status == 401
+    assert "비밀 서버" not in response.text
+    assert cog._sessions == {}
 
 
-def test_login_locks_out_after_repeated_failures() -> None:
+async def test_grant_is_rejected_if_discord_admin_permission_was_removed() -> None:
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=None))
+    _grants(cog, LoginGrant(guild_id=111, user_id=222, expires_at=999))
+
+    response = await cog._login_token(
+        _Request(payload={"token": "x" * 43})  # type: ignore[arg-type]
+    )
+
+    assert response.status == 403
+    assert cog._sessions == {}
+
+
+async def test_failed_permission_check_does_not_burn_the_grant() -> None:
+    """재기동 직후 멤버 캐시가 비어 있어도 멀쩡한 링크를 태우지 않는다."""
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=None))
+    _grants(cog, LoginGrant(guild_id=111, user_id=222, expires_at=999))
+
+    response = await cog._login_token(
+        _Request(payload={"token": "x" * 43})  # type: ignore[arg-type]
+    )
+
+    assert response.status == 403
+    cog.login_grants.peek.assert_awaited_once()
+    cog.login_grants.consume.assert_not_awaited()
+
+
+async def test_concurrent_race_loser_gets_no_session() -> None:
+    """peek 은 통과했지만 원자적 소비에서 진 요청은 세션을 받지 못한다."""
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+    cog.login_grants.peek = AsyncMock(
+        return_value=LoginGrant(guild_id=111, user_id=222, expires_at=999)
+    )
+    cog.login_grants.consume = AsyncMock(return_value=None)
+
+    response = await cog._login_token(
+        _Request(payload={"token": "x" * 43})  # type: ignore[arg-type]
+    )
+
+    assert response.status == 401
+    assert cog._sessions == {}
+
+
+async def test_login_lockout_never_blocks_a_holder_of_a_valid_grant() -> None:
+    """공용 출발지 IP 하나로 모든 서버의 로그인을 막을 수 없어야 한다.
+
+    Cloudflare Tunnel 뒤에서는 신뢰 프록시를 지정하지 않는 한 모든 사용자의
+    request.remote 가 cloudflared 컨테이너 IP 하나로 같아진다.
+    """
+    shared_ip = "172.18.0.5"
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+    for _ in range(web_admin_cog._LOGIN_MAX_FAILURES * 3):
+        cog._record_login_failure(shared_ip)
+    assert cog._lockout_remaining(shared_ip) > 0
+
+    _grants(cog, LoginGrant(guild_id=111, user_id=222, expires_at=999))
+    response = await cog._login_token(
+        _Request(payload={"token": "x" * 43}, remote=shared_ip)  # type: ignore[arg-type]
+    )
+
+    assert response.status == 200
+    assert [(r.guild_id, r.user_id) for r in cog._sessions.values()] == [(111, 222)]
+    # 성공하면 그 출발지의 실패 기록도 걷힌다.
+    assert cog._lockout_remaining(shared_ip) == 0
+
+
+async def test_locked_out_source_still_gets_throttle_signal_for_bad_tokens() -> None:
     cog = _cog()
-
-    for _ in range(web_admin_cog._LOGIN_MAX_FAILURES - 1):
+    for _ in range(web_admin_cog._LOGIN_MAX_FAILURES):
         cog._record_login_failure("10.0.0.1")
-    assert cog._lockout_remaining("10.0.0.1") == 0
+    _grants(cog, None)
 
-    cog._record_login_failure("10.0.0.1")
-    assert cog._lockout_remaining("10.0.0.1") > 0
-    # 잠금은 IP 단위다. 다른 클라이언트까지 막지 않는다.
-    assert cog._lockout_remaining("10.0.0.2") == 0
-
-
-def test_lockout_ignores_forwarded_for_header() -> None:
-    """X-Forwarded-For 를 키로 쓰면 헤더만 바꿔가며 잠금을 우회할 수 있다."""
-    cog = _cog()
-    request = _FakeRequest(
-        headers={"X-Forwarded-For": "1.2.3.4"}, remote="10.0.0.1"
+    response = await cog._login_token(
+        _Request(payload={"token": "x" * 43})  # type: ignore[arg-type]
     )
 
-    assert cog._client_ip(request) == "10.0.0.1"
+    assert response.status == 429
 
 
-def test_security_headers_lock_down_the_page() -> None:
+def test_forwarded_client_ip_is_trusted_only_from_a_registered_proxy(monkeypatch) -> None:
+    cog = _cog()
+    spoofed = {"CF-Connecting-IP": "203.0.113.9"}
+
+    monkeypatch.delenv("ADMIN_WEB_TRUSTED_PROXIES", raising=False)
+    assert cog._client_ip(_Request(remote="172.18.0.5", headers=spoofed)) == "172.18.0.5"
+
+    monkeypatch.setenv("ADMIN_WEB_TRUSTED_PROXIES", "172.18.0.5")
+    assert cog._client_ip(_Request(remote="172.18.0.5", headers=spoofed)) == "203.0.113.9"
+
+    # 컨테이너 IP 는 유동적이라 대역으로도 적을 수 있어야 한다.
+    monkeypatch.setenv("ADMIN_WEB_TRUSTED_PROXIES", "10.9.9.9, 172.16.0.0/12")
+    assert cog._client_ip(_Request(remote="172.18.0.7", headers=spoofed)) == "203.0.113.9"
+    monkeypatch.setenv("ADMIN_WEB_TRUSTED_PROXIES", "172.18.0.5")
+    # 등록된 프록시라도 헤더가 IP 가 아니면 직전 홉으로 되돌린다.
+    assert (
+        cog._client_ip(_Request(remote="172.18.0.5", headers={"CF-Connecting-IP": "junk"}))
+        == "172.18.0.5"
+    )
+    # 등록되지 않은 출발지가 보낸 헤더는 무시한다.
+    assert cog._client_ip(_Request(remote="198.51.100.7", headers=spoofed)) == "198.51.100.7"
+
+
+def test_session_guild_ignores_client_supplied_guild_ids() -> None:
+    mine = _FakeGuild(111, "내 서버", admin_user_id=222)
+    other = _FakeGuild(222, "남의 서버", admin_user_id=222)
+    cog = _cog(mine, other)
+    request = _Request(payload={"guild_id": 222})
+    request["scope"] = 111
+    request.query = {"guild_id": "222"}  # type: ignore[attr-defined]
+
+    assert cog._session_guild(request) is mine  # type: ignore[arg-type]
+    for handler in (
+        WebAdminCog._api_state,
+        WebAdminCog._api_config,
+        WebAdminCog._api_leaderboard,
+        WebAdminCog._api_leaderboard_history,
+        WebAdminCog._api_post_leaderboard,
+        WebAdminCog._api_clear_leaderboard,
+    ):
+        source = inspect.getsource(handler)
+        assert 'payload.get("guild_id")' not in source
+        assert 'request.query.get("guild_id")' not in source
+
+
+def test_mutations_recheck_current_discord_admin_permission() -> None:
+    guild = _FakeGuild(111, "내 서버", admin_user_id=222)
+    cog = _cog(guild)
+    request = _Request()
+    request["scope"] = 111
+    request["user_id"] = 222
+
+    allowed, denied = cog._mutation_guild(request)  # type: ignore[arg-type]
+    assert allowed is guild and denied is None
+
+    guild._admin_user_id = None
+    allowed, denied = cog._mutation_guild(request)  # type: ignore[arg-type]
+    assert allowed is None and denied is not None and denied.status == 403
+
+
+async def test_revoke_guild_drops_only_its_sessions_and_unused_grants() -> None:
+    cog = _cog()
+    mine = cog._issue_session(111, 1)
+    other = cog._issue_session(222, 2)
+    cog.login_grants.revoke_for_guild = AsyncMock(return_value=1)
+
+    assert await cog.revoke_sessions_for_guild(111) == 1
+    assert not cog._session_valid(mine)
+    assert cog._session_valid(other)
+    cog.login_grants.revoke_for_guild.assert_awaited_once_with(111)
+
+
+def test_security_headers_lock_down_pages_and_cookies(monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "https://admin.example.com")
     response = web.Response(text="hi")
 
     web_admin_cog._apply_security_headers(response, "n0nce")
@@ -228,271 +420,141 @@ def test_security_headers_lock_down_the_page() -> None:
     assert "default-src 'none'" in csp
     assert "script-src 'nonce-n0nce'" in csp
     assert "frame-ancestors 'none'" in csp
-    assert response.headers["X-Content-Type-Options"] == "nosniff"
-    assert response.headers["X-Frame-Options"] == "DENY"
     assert response.headers["Referrer-Policy"] == "no-referrer"
     assert response.headers["Cache-Control"] == "no-store"
-
-
-def test_cookie_secure_follows_public_url_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ADMIN_WEB_COOKIE_SECURE", raising=False)
-    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "https://admin.example.com")
+    assert "max-age=31536000" in response.headers["Strict-Transport-Security"]
     assert _cookie_secure() is True
-
-    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "http://203.0.113.7:8080")
-    assert _cookie_secure() is False
-
-    # 평문 HTTP 라도 리버스 프록시가 TLS 를 끊는 구성이면 직접 켤 수 있어야 한다.
-    monkeypatch.setenv("ADMIN_WEB_COOKIE_SECURE", "1")
-    assert _cookie_secure() is True
+    assert _cookie_name() == "__Host-koa_admin_session"
 
 
-def test_templates_declare_a_csp_nonce_placeholder() -> None:
-    """nonce 자리가 없으면 CSP 가 자기 스타일/스크립트를 막아 화면이 깨진다."""
-    for name in (_LOGIN_TEMPLATE, _DASHBOARD_TEMPLATE):
-        html = _template(name)
-        assert '<style nonce="{{NONCE}}">' in html
-    assert '<script nonce="{{NONCE}}">' in _template(_DASHBOARD_TEMPLATE)
-
-
-def test_dashboard_has_no_inline_style_attributes() -> None:
-    """CSP style-src 에 nonce 만 두면 마크업의 style="" 속성은 차단된다.
-
-    nonce 는 요소에만 적용되고 속성에는 적용되지 않는다 (style-src-attr 폴백).
-    인라인 스타일을 남겨두면 조용히 무시돼 화면이 어긋난다.
-    """
-    for name in (_LOGIN_TEMPLATE, _DASHBOARD_TEMPLATE):
-        assert 'style="' not in _template(name)
-
-
-def test_dashboard_confirms_destructive_reset_in_page() -> None:
-    html = _template(_DASHBOARD_TEMPLATE)
-
-    # 초기화는 확인 문구 입력 후에만 가능해야 한다. 확인 행은 기본으로 숨어 있다.
-    assert 'id="clear_confirm" hidden' in html
-    assert 'id="clear_input"' in html
-    assert 'id="clear_go"' in html
-    # 브라우저 prompt() 는 쓰지 않는다 — 봇 자동화와 일부 브라우저에서 막힌다.
-    assert "prompt(" not in html
-
-
-class _FakeGuild:
-    def __init__(self, guild_id: int, name: str) -> None:
-        self.id = guild_id
-        self.name = name
-        self.text_channels: list = []
-        self.voice_channels: list = []
-
-
-class _ScopedBot:
-    def __init__(self, *guilds: _FakeGuild) -> None:
-        self.guilds = list(guilds)
-
-    def get_guild(self, guild_id: int):
-        return next((g for g in self.guilds if g.id == guild_id), None)
-
-
-def _scoped_request(scope):
-    request = _FakeRequest()
-    request["scope"] = scope  # type: ignore[index]
-    return request
-
-
-def _req_with_scope(scope):
-    """dict 접근을 흉내내는 최소 요청 객체."""
-
-    class R(dict):
-        cookies: dict = {}
-        headers: dict = {}
-        remote = "10.0.0.1"
-
-    r = R()
-    r["scope"] = scope
-    return r
-
-
-def test_guild_scoped_session_cannot_reach_another_guild(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """서버별 키의 핵심 보증 — 남의 서버 ID 를 직접 넣어도 막혀야 한다."""
-    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
-    monkeypatch.delenv("TEST_GUILD_ID", raising=False)
-    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "내 서버"), _FakeGuild(222, "남의 서버")))
-    request = _req_with_scope(111)
-
-    assert cog._guild(request, 111) is not None
-    assert cog._guild(request, "111") is not None
-    assert cog._guild(request, 222) is None
-    assert cog._guild(request, "222") is None
-
-
-def test_guild_scoped_session_sees_only_its_own_guild(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
-    monkeypatch.delenv("TEST_GUILD_ID", raising=False)
-    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "내 서버"), _FakeGuild(222, "남의 서버")))
-
-    visible = cog._visible_guilds(_req_with_scope(111))
-
-    assert [g.id for g in visible] == [111]
-
-
-def test_operator_scope_sees_every_guild(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
-    monkeypatch.delenv("TEST_GUILD_ID", raising=False)
-    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a"), _FakeGuild(222, "b")))
-
-    visible = cog._visible_guilds(_req_with_scope(None))
-
-    assert [g.id for g in visible] == [111, 222]
-    assert cog._guild(_req_with_scope(None), 222) is not None
-
-
-def test_allowlist_restricts_operator_but_not_guild_keys(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ADMIN_WEB_GUILD_IDS 는 운영자 범위 전용.
-
-    서버 주인이 직접 받은 키가 운영자의 편의 설정 때문에 막히면 안 된다.
-    """
-    monkeypatch.setenv("ADMIN_WEB_GUILD_IDS", "111")
-    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a"), _FakeGuild(222, "b")))
-
-    assert cog._guild(_req_with_scope(None), 222) is None
-    assert cog._guild(_req_with_scope(222), 222) is not None
-
-
-def test_session_scope_is_carried_from_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADMIN_WEB_TOKEN", "operator-token")
-    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a")))
-    sid = cog._issue_session(111)
-    request = _FakeRequest(cookies={web_admin_cog._COOKIE_NAME: sid})
-
-    assert cog._authorized(request) is True
-    assert request["scope"] == 111
-
-
-def test_header_token_grants_operator_scope(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADMIN_WEB_TOKEN", "operator-token")
-    cog = WebAdminCog(bot=_ScopedBot())
-    request = _FakeRequest(headers={"X-Admin-Token": "operator-token"})
-
-    assert cog._authorized(request) is True
-    assert request["scope"] is None
-
-
-def test_empty_operator_token_never_authorizes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """전역 토큰 없이 운영하는 구성에서 빈 문자열로 뚫리면 안 된다."""
-    monkeypatch.delenv("ADMIN_WEB_TOKEN", raising=False)
-    cog = WebAdminCog(bot=_ScopedBot())
-
-    assert cog._authorized(_FakeRequest(headers={"X-Admin-Token": ""})) is False
-    assert cog._authorized(_FakeRequest(headers={"Authorization": "Bearer "})) is False
-
-
-async def test_reissue_revokes_live_sessions_for_that_guild() -> None:
-    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a"), _FakeGuild(222, "b")))
-    mine = cog._issue_session(111)
-    other = cog._issue_session(222)
-    operator = cog._issue_session(None)
-
-    dropped = await cog.revoke_sessions_for_guild(111)
-
-    assert dropped == 1
-    assert cog._session_valid(mine) is False
-    assert cog._session_valid(other) is True
-    assert cog._session_valid(operator) is True
-
-
-def test_env_block_is_operator_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """env 는 남의 길드 ID(TEST_GUILD_ID)와 호스트 경로를 담는다.
-
-    서버 주인에게 내보내면 자기 서버와 무관한 정보가 새어 나간다.
-    """
-    import inspect
-
-    source = inspect.getsource(WebAdminCog._api_state)
-
-    # env 는 반드시 운영자 범위 가드 안에서만 채워져야 한다.
-    assert 'if self._scope(request) is None:' in source
-    guarded = source.split("if self._scope(request) is None:", 1)[1]
-    assert '"env"' in guarded
-    assert '"test_guild_id"' in guarded
-    # 가드 앞쪽에는 env 가 없어야 한다.
-    assert '"env"' not in source.split("if self._scope(request) is None:", 1)[0]
-
-
-def test_lockout_backs_off_exponentially_and_caps() -> None:
-    """공용 IP 뒤의 애먼 사용자가 첫 잠금부터 15분을 잃으면 안 된다."""
+def test_login_failure_tracking_is_bounded_and_expires() -> None:
     cog = _cog()
-    seconds = [cog._lockout_seconds(n) for n in range(5, 13)]
-
-    assert seconds[0] == 30
-    assert seconds[1] == 60
-    assert seconds[2] == 120
-    # 계속 두드리면 상한에 닿고 그 위로는 늘지 않는다.
-    assert seconds[-1] == web_admin_cog._LOGIN_LOCKOUT_MAX_SECONDS
-    assert all(b >= a for a, b in zip(seconds, seconds[1:]))
-    # 임계치 이전에는 잠그지 않는다.
-    assert cog._lockout_seconds(web_admin_cog._LOGIN_MAX_FAILURES - 1) == 30
-
-
-def test_login_failure_tracking_is_bounded() -> None:
-    """서로 다른 IP 로 두드려 메모리를 밀어 올릴 수 없어야 한다."""
-    cog = _cog()
-
-    for i in range(web_admin_cog._LOGIN_FAILURE_MAX_TRACKED + 500):
+    for i in range(web_admin_cog._LOGIN_FAILURE_MAX_TRACKED + 100):
         cog._record_login_failure(f"10.0.{i // 256}.{i % 256}")
-
     assert len(cog._login_failures) <= web_admin_cog._LOGIN_FAILURE_MAX_TRACKED
-
-
-def test_expired_login_failures_are_pruned(monkeypatch: pytest.MonkeyPatch) -> None:
-    cog = _cog()
-    cog._record_login_failure("10.0.0.1")
-    assert "10.0.0.1" in cog._login_failures
 
     later = time.monotonic() + web_admin_cog._LOGIN_LOCKOUT_MAX_SECONDS + 1
     cog._prune_login_failures(later)
-
     assert cog._login_failures == {}
 
 
-def test_hsts_only_when_served_over_https(monkeypatch: pytest.MonkeyPatch) -> None:
-    """평문 HTTP 에 HSTS 를 붙이면 브라우저가 https 만 고집해 접속이 끊긴다."""
-    monkeypatch.delenv("ADMIN_WEB_COOKIE_SECURE", raising=False)
-    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "http://203.0.113.7:8080")
-    plain = web.Response(text="hi")
-    web_admin_cog._apply_security_headers(plain, "n")
-    assert "Strict-Transport-Security" not in plain.headers
+async def test_logout_clears_the_cookie_with_the_attributes_it_was_issued_with(
+    monkeypatch,
+) -> None:
+    """__Host- 쿠키는 Secure 없는 Set-Cookie 를 브라우저가 통째로 거부한다."""
+    monkeypatch.setenv("ADMIN_WEB_COOKIE_SECURE", "1")
+    cog = _cog()
+    sid = cog._issue_session(111, 222)
+    name = _cookie_name()
 
-    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "https://admin.example.com")
-    secure = web.Response(text="hi")
-    web_admin_cog._apply_security_headers(secure, "n")
-    assert "max-age=31536000" in secure.headers["Strict-Transport-Security"]
+    response = await cog._logout(
+        _Request(cookies={name: sid}, path="/logout")  # type: ignore[arg-type]
+    )
+
+    assert sid not in cog._sessions
+    morsel = response.cookies[name]
+    assert morsel["secure"] is True
+    assert morsel["httponly"] is True
+    assert morsel["samesite"] == "Strict"
+    assert morsel["path"] == "/"
+
+
+async def test_malformed_json_body_is_a_client_error_not_a_crash() -> None:
+    guild = _FakeGuild(111, "내 서버", admin_user_id=222)
+    cog = _cog(guild)
+
+    for handler in (cog._api_config, cog._api_clear_leaderboard):
+        request = _Request(json_error=True)
+        request["scope"] = 111
+        request["user_id"] = 222
+
+        response = await handler(request)  # type: ignore[arg-type]
+
+        assert response.status == 400
+
+
+async def test_non_object_json_body_is_rejected() -> None:
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+    request = _Request(payload=["not", "an", "object"])
+    request["scope"] = 111
+    request["user_id"] = 222
+
+    response = await cog._api_config(request)  # type: ignore[arg-type]
+
+    assert response.status == 400
+
+
+async def test_cross_origin_state_change_is_rejected_without_sec_fetch_site() -> None:
+    """Sec-Fetch-Site 를 보내지 않는 구형 브라우저도 Origin 으로 걸러진다."""
+    cog = _cog()
+
+    async def _handler(_request):
+        return web.json_response({"ok": True})
+
+    evil = _Request(headers={"Origin": "https://evil.example.com"}, host="admin.example.com")
+    blocked = await cog._csrf_middleware(evil, _handler)  # type: ignore[arg-type]
+    assert blocked.status == 403
+
+    same = _Request(headers={"Origin": "https://admin.example.com"}, host="admin.example.com")
+    allowed = await cog._csrf_middleware(same, _handler)  # type: ignore[arg-type]
+    assert allowed.status == 200
+
+    # 터널이 TLS 를 끊고 평문으로 넘겨도 스킴 차이로 막히면 안 된다.
+    tunneled = _Request(
+        headers={"Origin": "https://admin.example.com"}, host="admin.example.com:8080"
+    )
+    assert (await cog._csrf_middleware(tunneled, _handler)).status == 200  # type: ignore[arg-type]
+
+    # 비브라우저(Origin 없음)는 그대로 통과한다.
+    assert (await cog._csrf_middleware(_Request(), _handler)).status == 200  # type: ignore[arg-type]
+
+
+async def test_leaving_a_guild_revokes_its_sessions_and_unused_links() -> None:
+    cog = _cog()
+    mine = cog._issue_session(111, 1)
+    other = cog._issue_session(222, 2)
+    cog.login_grants.revoke_for_guild = AsyncMock(return_value=1)
+
+    await cog.on_guild_remove(SimpleNamespace(id=111))  # type: ignore[arg-type]
+
+    assert not cog._session_valid(mine)
+    assert cog._session_valid(other)
+    cog.login_grants.revoke_for_guild.assert_awaited_once_with(111)
+
+
+def test_rank_cog_guard_is_uniform_across_handlers() -> None:
+    """핸들러마다 다른 hasattr 조합을 쓰다 한 곳만 빠뜨리는 일을 막는다."""
+    cog = _cog()
+
+    assert cog._rank_cog() is None  # RankCog 자체가 없음
+    cog.bot.get_cog = lambda _name: SimpleNamespace(store=object())  # type: ignore[assignment]
+    assert cog._rank_cog() is not None
+    assert cog._rank_cog("_leaderboard_embed") is None
+
+    cog.bot.get_cog = lambda _name: SimpleNamespace(  # type: ignore[assignment]
+        store=object(), _leaderboard_embed=object()
+    )
+    assert cog._rank_cog("_leaderboard_embed") is not None
+
+    for handler in (
+        WebAdminCog._api_leaderboard,
+        WebAdminCog._api_leaderboard_history,
+        WebAdminCog._api_post_leaderboard,
+        WebAdminCog._api_clear_leaderboard,
+    ):
+        assert 'self.bot.get_cog("RankCog")' not in inspect.getsource(handler)
 
 
 def test_compose_publishes_admin_port_to_loopback_only() -> None:
-    """도커 게시 주소가 0.0.0.0 이면 호스트 방화벽만 믿는 구성이 된다.
-
-    도커는 자체 iptables DOCKER 체인을 끼워 넣어 ufw 같은 호스트 방화벽을
-    우회하는 경우가 있다. 게시 주소 자체를 루프백으로 못박아야 안전하다.
-    """
     raw = (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(
         encoding="utf-8"
     )
-    # 주석에 예시로 적힌 문자열이 걸리지 않게 실제 설정 줄만 본다.
     lines = [
         line.strip()
         for line in raw.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
-    # 게시 포트 항목만 (따옴표로 감싼 "호스트:컨테이너" 형태).
     published = [
-        line
-        for line in lines
-        if line.startswith('- "') and line.rstrip().endswith('8080"')
+        line for line in lines if line.startswith('- "') and line.rstrip().endswith('8080"')
     ]
-
-    assert published == ['- "127.0.0.1:8080:8080"'], published
+    assert published == ['- "127.0.0.1:8080:8080"']

@@ -2,8 +2,9 @@
 .env
 .deploy/
 config.json
-admin_keys.json
-admin_keys.json.corrupt
+admin_login.sqlite3
+admin_login.sqlite3-shm
+admin_login.sqlite3-wal
 rank_stats.json
 party.db
 party.db-shm

@@ -16,7 +16,7 @@ COPY . .
 # 영구 볼륨이 /data 에 마운트된다고 가정. 미마운트여도 충돌 없음(컨테이너 FS 에 기록).
 # 데이터 경로를 모두 /data 로 지정해 재배포 후에도 설정과 사용자 데이터가 보존된다.
 ENV CONFIG_PATH=/data/config.json \
-    ADMIN_KEYS_PATH=/data/admin_keys.json \
+    ADMIN_LOGIN_DB_PATH=/data/admin_login.sqlite3 \
     RANK_PATH=/data/rank_stats.json \
     PARTY_DB_PATH=/data/party.db \
     VALORANT_STORE_PATH=/data/valorant_ids.json \

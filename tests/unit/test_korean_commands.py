@@ -55,7 +55,7 @@ def test_top_level_commands_are_friendly_korean() -> None:
 
 def test_command_groups_and_subcommands_are_korean() -> None:
     assert AdminCog.admin.name == "관리자"
-    assert {command.name for command in AdminCog.admin.commands} == {"대시보드", "키재발급"}
+    assert {command.name for command in AdminCog.admin.commands} == {"대시보드"}
     assert MCControlCog.mc.name == "마크"
     assert {command.name for command in MCControlCog.mc.commands} == {
         "켜기",

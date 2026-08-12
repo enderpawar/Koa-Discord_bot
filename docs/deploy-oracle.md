@@ -102,8 +102,8 @@ docker compose up -d --build
 | `AZURE_SPEECH_REGION` | ✅ | 예: `koreacentral` |
 | `LOG_LEVEL` | – | `INFO` (기본 권장) |
 | `TEST_GUILD_ID` | – | 슬래시 명령 즉시 sync 할 길드 ID. 미설정 시 전역 sync (캐시 1시간) |
-| `ADMIN_WEB_ENABLED` | – | 서버별 키만으로 운영할 때 `1` (마스터 키 없음) |
-| `ADMIN_WEB_TOKEN` | – | 운영자 마스터 키. 설정 시 웹 어드민 활성화 + 전 서버 열람 |
+| `ADMIN_WEB_ENABLED` | – | 웹 어드민을 사용할 때 `1` |
+| `ADMIN_LOGIN_DB_PATH` | – | 일회용 로그인 해시 DB 경로. Docker 기본값 `/data/admin_login.sqlite3` |
 | `ADMIN_WEB_HOST` | ⚠️ | 웹 어드민 사용 시 **반드시 `0.0.0.0`** — §6 참조 |
 | `ADMIN_WEB_PUBLIC_URL` | – | `http://<공인IP>:8080` — 봇이 안내하는 대시보드 주소 |
 | `MC_WHITELIST_SSH_*` | – | `/마크 화이트리스트 등록` 사용 시 필요 — 아래 절 참조 |
@@ -180,7 +180,7 @@ GCP 방화벽의 22번 포트도 가능하면 Oracle 공인 IP `/32`에서만 �
 
 ## 6. 웹 어드민을 쓸 경우 (선택)
 
-**`ADMIN_WEB_HOST` 를 반드시 명시해야 합니다.** `cogs/web_admin_cog.py` 의 `_web_host()` 는 이 변수가 없으면 **`127.0.0.1` 에 바인딩되어 외부 접속이 불가능합니다.** 키 하나로만 보호되는 어드민이라, 외부 공개는 호스팅 환경 추측이 아니라 명시적 설정으로만 이뤄집니다.
+**`ADMIN_WEB_HOST` 를 반드시 명시해야 합니다.** `cogs/web_admin_cog.py` 의 `_web_host()` 는 이 변수가 없으면 **`127.0.0.1` 에 바인딩되어 외부 접속이 불가능합니다.** 외부 공개는 호스팅 환경 추측이 아니라 명시적 설정으로만 이뤄집니다.
 
 `.env` 에 명시하세요:
 
@@ -188,46 +188,33 @@ GCP 방화벽의 22번 포트도 가능하면 Oracle 공인 IP `/32`에서만 �
 ADMIN_WEB_ENABLED=1
 ADMIN_WEB_HOST=0.0.0.0
 ADMIN_WEB_PORT=8080
-ADMIN_WEB_PUBLIC_URL=http://<공인IP>:8080
-# 운영자 마스터 키가 필요할 때만 (전 서버 열람). 생략을 권장 — §6.1 참조
-# ADMIN_WEB_TOKEN=<충분히 긴 랜덤 문자열>
+ADMIN_WEB_PUBLIC_URL=https://<Cloudflare 공개 주소>
 ```
 
-추가로 **방화벽 2곳을 모두** 열어야 합니다:
+Cloudflare Tunnel을 사용하면 8080 인바운드 포트를 열지 마세요. `docker-compose.yml`은
+호스트의 `127.0.0.1:8080`에만 게시하고, `cloudflared`가 Docker 내부의 `bot:8080`으로
+아웃바운드 연결합니다. 따라서 OCI Security List와 인스턴스 방화벽에 8080 허용 규칙은
+필요하지 않습니다.
 
-1. OCI 콘솔 → VCN → Security List → **Ingress Rules** 에 TCP 8080 허용 추가
-2. 인스턴스 내부:
-   ```bash
-   sudo iptables -I INPUT -p tcp --dport 8080 -j ACCEPT
-   sudo netfilter-persistent save
-   ```
+웹 어드민을 쓰지 않으면 `ADMIN_WEB_ENABLED` 를 비워 두세요. 자동으로 비활성화되고 포트를 열 필요도 없습니다.
 
-> Ubuntu 이미지는 기본 iptables 규칙이 막고 있어 OCI 콘솔만 열면 접속되지 않습니다. 둘 다 필요합니다.
-
-웹 어드민을 쓰지 않으면 `ADMIN_WEB_ENABLED` 와 `ADMIN_WEB_TOKEN` 을 모두 비워 두세요. 자동으로 비활성화되고 포트를 열 필요도 없습니다.
-
-### 6.1 로그인 — 서버별 키
+### 6.1 로그인 — Discord 일회용 권한
 
 대시보드 접근 권한은 **서버 단위**입니다.
 
-- 코아가 서버에 초대되면 `on_guild_join` 이 그 서버 **소유자에게 DM 으로 키**를 보냅니다.
-- 그 키로 로그인하면 **그 서버 하나만** 보이고 설정할 수 있습니다. 다른 서버 ID 를
-  직접 요청해도 404 로 막힙니다.
-- 키를 잃어버렸거나 유출됐으면 서버에서 `/관리자 키재발급` (관리자 권한) 을 실행합니다.
-  새 키가 DM 으로 오고, 이전 키와 그 서버 범위의 활성 세션이 모두 즉시 무효가 됩니다.
-- DM 이 막혀 있으면 전달에 실패합니다. **키를 서버 채널로 보내지는 않습니다** —
-  공개되기 때문입니다. 개인정보 설정에서 DM 을 허용한 뒤 `/관리자 키재발급` 을 다시 실행하세요.
-- 키 **평문은 어디에도 저장되지 않습니다.** `ADMIN_KEYS_PATH` 에는 sha256 해시만
-  남으므로, 파일이 유출돼도 그것만으로는 로그인할 수 없습니다.
+- 서버에서 `/관리자 대시보드`를 실행하면 Discord가 실행자의 현재 `관리자` 권한을 확인합니다.
+- 응답은 실행자에게만 보이며, 서버 ID나 이름이 없는 5분짜리 일회용 링크를 제공합니다.
+- 링크의 256비트 토큰은 URL fragment(`#token=...`)에 들어가므로 최초 HTTP 요청,
+  Cloudflare 접근 로그, Referer에 전달되지 않습니다. 브라우저가 즉시 fragment를 지운 뒤
+  HTTPS POST 본문으로 교환합니다.
+- SQLite에는 토큰 원문이 아닌 sha256 해시만 저장됩니다. 교환은 원자적
+  `DELETE ... RETURNING`으로 처리되어 동시에 제출해도 한 요청만 성공합니다.
+- 로그인할 때와 설정 변경 때 Discord 관리자 권한을 다시 확인합니다. 세션과 모든 API는
+  발급된 서버 ID를 서버 측에서만 사용하며 클라이언트가 보낸 서버 ID는 받지 않습니다.
+- 고정 로그인 키, 전 서버 마스터 토큰, 길드 선택 UI는 없습니다.
 
-> 이미 들어가 있는 서버는 초대 이벤트가 지난 뒤라 키가 없습니다. 각 서버에서
-> `/관리자 키재발급` 을 한 번 실행하면 발급됩니다.
-
-`ADMIN_WEB_TOKEN` 은 **운영자 마스터 키**로 남아 있습니다. 이걸로 로그인하면 봇이
-들어간 모든 서버가 보이고, 서버별 격리가 통째로 우회됩니다. 설정돼 있으면 봇 기동
-로그에 경고가 남습니다. 서버별 키만으로 운영하려면 `ADMIN_WEB_TOKEN` 을 비우고
-`ADMIN_WEB_ENABLED=1` 만 설정하세요. `ADMIN_WEB_GUILD_IDS` 허용 목록은 운영자
-범위에만 적용되고, 서버 주인이 받은 키에는 영향을 주지 않습니다.
+> 일회용 링크 자체가 5분 동안의 로그인 권한입니다. Discord 응답은 비공개이지만 사용자가
+> 링크를 복사해 다른 사람에게 넘기면 그 사람이 먼저 소비할 수 있으므로 공유하면 안 됩니다.
 
 ### 6.2 보안
 
@@ -235,31 +222,45 @@ ADMIN_WEB_PUBLIC_URL=http://<공인IP>:8080
 
 | 항목 | 동작 |
 |---|---|
-| 로그인 범위 | 서버별 키는 그 서버 하나만. 다른 길드 ID 요청은 404 |
-| 키 저장 | sha256 해시만 저장, 평문 미보관. 파일 권한 0600 |
-| 세션 | 로그인 성공 시 임의 세션 ID 발급. 쿠키에 키 자체를 담지 않는다 |
-| 세션 만료 | 12시간. 로그아웃하면 서버에서 즉시 폐기되어 복사된 쿠키도 무효 |
-| 쿠키 | `HttpOnly`, `SameSite=Strict`. 공개 주소가 https 면 `Secure` 자동 |
+| 로그인 범위 | Discord에서 확인한 사용자 + 서버 하나에만 발급 |
+| 권한 저장 | 5분짜리 토큰의 sha256 해시만 SQLite에 저장, 원문 미보관, 파일 권한 0600 |
+| 원자성 | `BEGIN IMMEDIATE` + `DELETE ... RETURNING`; 일회용 토큰은 정확히 한 요청만 소비 |
+| 은닉성 | 로그인 전 서버 ID·이름 미노출, 토큰은 URL fragment에서 즉시 제거 |
+| 세션 | 로그인 성공 시 임의 세션 ID 발급. 쿠키에 일회용 토큰을 담지 않는다 |
+| 세션 만료 | 15분 유휴 또는 발급 30분 후. 로그아웃하면 서버에서 즉시 폐기 |
+| 쿠키 | `HttpOnly`, `SameSite=Strict`. HTTPS에서는 `Secure` + `__Host-` 접두사 자동 |
 | 로그인 시도 | IP 당 5회 실패부터 잠금. 30초→1분→2분…최대 15분 지수 백오프 |
 | 잠금 기록 | 만료분 정리 + 최대 4096개 상한 (분산 시도로 메모리 고갈 방지) |
-| 키 재발급 | 이전 키 무효 + 그 서버 범위 활성 세션 전부 강제 로그아웃 |
-| 토큰 비교 | `hmac.compare_digest` (타이밍 공격 방어) |
 | 쿼리스트링 인증 | 없음. `?token=` 은 접근 로그·Referer·히스토리에 남아 지원하지 않는다 |
-| 비브라우저 인증 | `Authorization: Bearer <토큰>` 또는 `X-Admin-Token` 헤더 |
+| 마스터 우회 | `Authorization`, `X-Admin-Token`, 전 서버 세션을 지원하지 않음 |
+| 변경 작업 | 세션의 서버만 사용하고 Discord 관리자 권한을 매번 재확인 |
 | CSRF | `SameSite=Strict` + 상태 변경 요청의 `Sec-Fetch-Site` 검사 (login CSRF 포함) |
 | CSP | `default-src 'none'`, 인라인 style/script 는 요청별 nonce 로만 허용 |
 | 기타 헤더 | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
 | HSTS | https 로 서비스할 때만 자동 (`max-age=31536000`). 평문에는 붙이지 않는다 |
 
-> ⚠️ **평문 HTTP 로 공개하면 토큰과 세션 쿠키가 그대로 노출됩니다.** 위 방어는
-> 전송 구간을 보호하지 못합니다. 같은 네트워크의 누구나 로그인 폼에 입력한 토큰을
-> 읽을 수 있습니다. 공개 운영이라면 Caddy·nginx 같은 리버스 프록시로 TLS 를 붙이고
+> ⚠️ **평문 HTTP 로 공개하면 일회용 토큰 교환과 세션 쿠키가 노출됩니다.** 위 방어는
+> 전송 구간을 보호하지 못합니다. 공개 운영이라면 Cloudflare Tunnel 또는 Caddy·nginx로 TLS 를 붙이고
 > `ADMIN_WEB_PUBLIC_URL=https://...` 로 지정하세요 (`Secure` 쿠키가 자동으로 켜집니다).
 > 프록시가 TLS 를 끊고 봇에는 평문으로 전달하는 구성이라면 `ADMIN_WEB_COOKIE_SECURE=1`
 > 을 직접 켜세요. TLS 없이 쓸 거라면 `ADMIN_WEB_HOST` 를 열지 말고 SSH 터널
 > (`ssh -L 8080:127.0.0.1:8080 ubuntu@<IP>`)로 접속하는 편이 안전합니다.
 
 봇 기동 시 평문 HTTP 로 외부에 열려 있으면 로그에 경고가 남습니다.
+
+### 로그인 남용 집계와 신뢰 프록시
+
+로그인 실패는 출발지 IP 별로 셉니다. Cloudflare Tunnel 뒤에서는 봇이 보는 IP 가
+모든 사용자에게 `cloudflared` 컨테이너 하나로 같아지므로, 실제 사용자 IP 로
+집계하려면 `ADMIN_WEB_TRUSTED_PROXIES` 에 신뢰할 직전 홉을 IP 또는 CIDR 로
+등록해야 합니다 (`docker-compose.yml` 이 `172.16.0.0/12` 를 넣어 둡니다).
+등록하지 않으면 `CF-Connecting-IP` 헤더를 아예 무시합니다 — 위조된 헤더로
+집계를 흐리는 것보다 안전합니다.
+
+> 이 집계는 **차단이 아니라 남용 신호** 용도입니다. 유효한 일회용 링크를 든
+> 관리자는 같은 출발지가 잠금 상태여도 항상 로그인할 수 있습니다. 토큰이
+> 256비트 난수 + 1회용이라 무차별 대입이 성립하지 않는 반면, 먼저 거부하는
+> 구조에서는 공용 IP 하나로 다른 서버 관리자까지 묶여 버리기 때문입니다.
 
 ---
 
@@ -337,12 +338,11 @@ GitHub 저장소 **Settings → Secrets and variables → Actions** 에 다음 �
 | Secret | `AZURE_SPEECH_KEY` | Azure Speech 키 |
 | Secret | `AZURE_SPEECH_REGION` | Azure Speech 리전 |
 | Secret | `TEST_GUILD_ID` | 선택: 즉시 슬래시 명령 동기화 대상 |
-| Secret | `ADMIN_WEB_TOKEN` | 선택: 운영자 마스터 키 (서버별 키만 쓰면 불필요) |
 | Variable | `LOG_LEVEL` | 선택: 기본 `INFO` |
+| Variable | `ADMIN_WEB_ENABLED` | 웹 어드민 사용 시 `1` |
 | Variable | `ADMIN_WEB_HOST` | 웹 어드민 사용 시 `0.0.0.0` |
 | Variable | `ADMIN_WEB_PORT` | 선택: 기본 `8080` |
 | Variable | `ADMIN_WEB_PUBLIC_URL` | 선택: 외부 대시보드 URL |
-| Variable | `ADMIN_WEB_GUILD_IDS` | 선택: 웹 어드민 길드 목록 |
 | Variable | `MEM_ANCHOR_BYTES` | 선택: 기본 `2600000000` |
 | Variable | `MEM_ANCHOR_INTERVAL_SEC` | 선택: 기본 `30` |
 | Variable | `MC_WHITELIST_SSH_HOST` | GCP Minecraft VM 공인 IP |

@@ -17,6 +17,11 @@ services:
       # (http://127.0.0.1:8080)은 브라우저가 보안 컨텍스트로 취급하므로
       # Secure 쿠키가 그대로 저장된다.
       ADMIN_WEB_COOKIE_SECURE: "1"
+      # 로그인 실패 집계를 실제 사용자 IP 로 하기 위해, cloudflared 가 붙이는
+      # CF-Connecting-IP 를 믿을 직전 홉 대역. compose 브리지 네트워크의
+      # 컨테이너 IP 는 유동적이라 대역으로 적는다. 이 포트는 호스트 루프백과
+      # 컴포즈 네트워크에서만 닿으므로 이 신뢰 범위로 충분하다.
+      ADMIN_WEB_TRUSTED_PROXIES: "172.16.0.0/12"
 
     # 컨테이너 재생성과 무관하게 설정/랭킹을 보존한다.
     # Dockerfile 의 CONFIG_PATH=/data/config.json, RANK_PATH=/data/rank_stats.json 과 대응.
