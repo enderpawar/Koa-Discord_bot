@@ -8,6 +8,7 @@ import discord
 import pytest
 
 from cogs.tts_cog import TTSCog, VOICE_CHOICES, _tts_status_embed, _voice_label
+from cogs.tts_engine import DEFAULT_VOICE
 
 
 def test_voice_choices_include_all_available_korean_voices() -> None:
@@ -27,6 +28,13 @@ def test_voice_choices_include_all_available_korean_voices() -> None:
         "ko-KR-HyunsuNeural",
         "ko-KR-HyunsuMultilingualNeural",
     ]
+
+
+def test_default_voice_is_the_soft_female_choice() -> None:
+    """서버가 따로 고르기 전 기본 목소리는 `여성 · 부드러움` 이다."""
+    assert DEFAULT_VOICE == "ko-KR-SeoHyeonNeural"
+    assert _voice_label(DEFAULT_VOICE) == "여성 · 부드러움"
+    assert DEFAULT_VOICE in [choice.value for choice in VOICE_CHOICES]
 
 
 def test_voice_label_uses_choice_name() -> None:

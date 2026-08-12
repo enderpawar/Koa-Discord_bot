@@ -33,7 +33,8 @@ import aiohttp
 
 log = logging.getLogger(__name__)
 
-DEFAULT_VOICE = "ko-KR-SunHiNeural"
+# `/목소리` 의 "여성 · 부드러움". 서버가 따로 고르기 전까지 이 목소리로 읽는다.
+DEFAULT_VOICE = "ko-KR-SeoHyeonNeural"
 _OUTPUT_FORMAT = "raw-48khz-16bit-mono-pcm"
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=15)
 _WS_RECEIVE_TIMEOUT_SEC = 15.0
