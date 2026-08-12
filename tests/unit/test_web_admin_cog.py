@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 from aiohttp import web
 
@@ -418,3 +420,53 @@ def test_env_block_is_operator_only(monkeypatch: pytest.MonkeyPatch) -> None:
     assert '"test_guild_id"' in guarded
     # 가드 앞쪽에는 env 가 없어야 한다.
     assert '"env"' not in source.split("if self._scope(request) is None:", 1)[0]
+
+
+def test_lockout_backs_off_exponentially_and_caps() -> None:
+    """공용 IP 뒤의 애먼 사용자가 첫 잠금부터 15분을 잃으면 안 된다."""
+    cog = _cog()
+    seconds = [cog._lockout_seconds(n) for n in range(5, 13)]
+
+    assert seconds[0] == 30
+    assert seconds[1] == 60
+    assert seconds[2] == 120
+    # 계속 두드리면 상한에 닿고 그 위로는 늘지 않는다.
+    assert seconds[-1] == web_admin_cog._LOGIN_LOCKOUT_MAX_SECONDS
+    assert all(b >= a for a, b in zip(seconds, seconds[1:]))
+    # 임계치 이전에는 잠그지 않는다.
+    assert cog._lockout_seconds(web_admin_cog._LOGIN_MAX_FAILURES - 1) == 30
+
+
+def test_login_failure_tracking_is_bounded() -> None:
+    """서로 다른 IP 로 두드려 메모리를 밀어 올릴 수 없어야 한다."""
+    cog = _cog()
+
+    for i in range(web_admin_cog._LOGIN_FAILURE_MAX_TRACKED + 500):
+        cog._record_login_failure(f"10.0.{i // 256}.{i % 256}")
+
+    assert len(cog._login_failures) <= web_admin_cog._LOGIN_FAILURE_MAX_TRACKED
+
+
+def test_expired_login_failures_are_pruned(monkeypatch: pytest.MonkeyPatch) -> None:
+    cog = _cog()
+    cog._record_login_failure("10.0.0.1")
+    assert "10.0.0.1" in cog._login_failures
+
+    later = time.monotonic() + web_admin_cog._LOGIN_LOCKOUT_MAX_SECONDS + 1
+    cog._prune_login_failures(later)
+
+    assert cog._login_failures == {}
+
+
+def test_hsts_only_when_served_over_https(monkeypatch: pytest.MonkeyPatch) -> None:
+    """평문 HTTP 에 HSTS 를 붙이면 브라우저가 https 만 고집해 접속이 끊긴다."""
+    monkeypatch.delenv("ADMIN_WEB_COOKIE_SECURE", raising=False)
+    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "http://203.0.113.7:8080")
+    plain = web.Response(text="hi")
+    web_admin_cog._apply_security_headers(plain, "n")
+    assert "Strict-Transport-Security" not in plain.headers
+
+    monkeypatch.setenv("ADMIN_WEB_PUBLIC_URL", "https://admin.example.com")
+    secure = web.Response(text="hi")
+    web_admin_cog._apply_security_headers(secure, "n")
+    assert "max-age=31536000" in secure.headers["Strict-Transport-Security"]

@@ -217,7 +217,8 @@ ADMIN_WEB_PUBLIC_URL=http://<공인IP>:8080
 > `/관리자 키재발급` 을 한 번 실행하면 발급됩니다.
 
 `ADMIN_WEB_TOKEN` 은 **운영자 마스터 키**로 남아 있습니다. 이걸로 로그인하면 봇이
-들어간 모든 서버가 보입니다. 서버별 키만으로 운영하려면 `ADMIN_WEB_TOKEN` 을 비우고
+들어간 모든 서버가 보이고, 서버별 격리가 통째로 우회됩니다. 설정돼 있으면 봇 기동
+로그에 경고가 남습니다. 서버별 키만으로 운영하려면 `ADMIN_WEB_TOKEN` 을 비우고
 `ADMIN_WEB_ENABLED=1` 만 설정하세요. `ADMIN_WEB_GUILD_IDS` 허용 목록은 운영자
 범위에만 적용되고, 서버 주인이 받은 키에는 영향을 주지 않습니다.
 
@@ -232,13 +233,16 @@ ADMIN_WEB_PUBLIC_URL=http://<공인IP>:8080
 | 세션 | 로그인 성공 시 임의 세션 ID 발급. 쿠키에 키 자체를 담지 않는다 |
 | 세션 만료 | 12시간. 로그아웃하면 서버에서 즉시 폐기되어 복사된 쿠키도 무효 |
 | 쿠키 | `HttpOnly`, `SameSite=Strict`. 공개 주소가 https 면 `Secure` 자동 |
-| 로그인 시도 | IP 당 5회 실패 시 15분 차단. 잠금 중에는 올바른 키도 거부 |
+| 로그인 시도 | IP 당 5회 실패부터 잠금. 30초→1분→2분…최대 15분 지수 백오프 |
+| 잠금 기록 | 만료분 정리 + 최대 4096개 상한 (분산 시도로 메모리 고갈 방지) |
 | 키 재발급 | 이전 키 무효 + 그 서버 범위 활성 세션 전부 강제 로그아웃 |
 | 토큰 비교 | `hmac.compare_digest` (타이밍 공격 방어) |
 | 쿼리스트링 인증 | 없음. `?token=` 은 접근 로그·Referer·히스토리에 남아 지원하지 않는다 |
 | 비브라우저 인증 | `Authorization: Bearer <토큰>` 또는 `X-Admin-Token` 헤더 |
+| CSRF | `SameSite=Strict` + 상태 변경 요청의 `Sec-Fetch-Site` 검사 (login CSRF 포함) |
 | CSP | `default-src 'none'`, 인라인 style/script 는 요청별 nonce 로만 허용 |
 | 기타 헤더 | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
+| HSTS | https 로 서비스할 때만 자동 (`max-age=31536000`). 평문에는 붙이지 않는다 |
 
 > ⚠️ **평문 HTTP 로 공개하면 토큰과 세션 쿠키가 그대로 노출됩니다.** 위 방어는
 > 전송 구간을 보호하지 못합니다. 같은 네트워크의 누구나 로그인 폼에 입력한 토큰을

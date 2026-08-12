@@ -29,9 +29,17 @@ _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 _COOKIE_NAME = "koa_admin_session"
 _SESSION_TTL_SECONDS = 12 * 60 * 60
 
-# 토큰 무차별 대입 방어. IP 당 실패 횟수를 세고 잠근다.
+# 무차별 대입 방어. IP 당 실패 횟수를 세고, 임계치를 넘으면 잠금 시간을 2배씩 늘린다.
+# 30s → 1m → 2m → … → 15m. 공용 IP 뒤의 애먼 사용자가 오래 묶이지 않게 하면서
+# 계속 두드리는 쪽은 몇 번 만에 상한에 닿게 한다.
 _LOGIN_MAX_FAILURES = 5
-_LOGIN_LOCKOUT_SECONDS = 15 * 60
+_LOGIN_LOCKOUT_BASE_SECONDS = 30
+_LOGIN_LOCKOUT_MAX_SECONDS = 15 * 60
+# 서로 다른 출발지로 두드려 메모리를 밀어 올리는 것을 막는 상한.
+_LOGIN_FAILURE_MAX_TRACKED = 4096
+
+# CSRF 검사를 적용할 메서드.
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 # 관리자 페이지 HTML 은 파이썬 문자열이 아니라 templates/*.html 에 둔다.
 # 에디터 문법 강조와 diff 가 살아나고, 마크업을 고칠 때 cog 를 건드리지 않는다.
@@ -71,6 +79,12 @@ def _apply_security_headers(response: web.StreamResponse, nonce: str) -> None:
     headers.setdefault("Referrer-Policy", "no-referrer")
     # 설정값과 리더보드가 디스크 캐시나 뒤로가기 버튼에 남지 않게 한다.
     headers.setdefault("Cache-Control", "no-store")
+    if _cookie_secure():
+        # HTTPS 로 서비스할 때만. 평문 HTTP 에 붙이면 브라우저가 그 호스트를
+        # https 로만 접근하려 해서 접속 자체가 끊긴다.
+        headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
 
 
 def _template(name: str) -> str:
@@ -224,6 +238,21 @@ class WebAdminCog(commands.Cog):
         # 공격자가 매 요청 다른 값을 보내 잠금을 그냥 우회한다.
         return request.remote or "unknown"
 
+    def _prune_login_failures(self, now: float) -> None:
+        """만료 기록을 버리고, 그래도 넘치면 오래된 것부터 버린다.
+
+        기록이 IP 별로 쌓이므로 정리하지 않으면 서로 다른 출발지에서 로그인을
+        두드리는 것만으로 메모리를 계속 밀어 올릴 수 있다.
+        """
+        self._login_failures = {
+            ip: record for ip, record in self._login_failures.items() if record[1] > now
+        }
+        overflow = len(self._login_failures) - _LOGIN_FAILURE_MAX_TRACKED
+        if overflow > 0:
+            oldest = sorted(self._login_failures.items(), key=lambda kv: kv[1][1])
+            for ip, _ in oldest[:overflow]:
+                self._login_failures.pop(ip, None)
+
     def _lockout_remaining(self, ip: str) -> int:
         record = self._login_failures.get(ip)
         if record is None:
@@ -237,14 +266,31 @@ class WebAdminCog(commands.Cog):
             return 0
         return int(remaining) + 1
 
+    @staticmethod
+    def _lockout_seconds(failures: int) -> float:
+        """임계치를 넘긴 뒤로 잠금 시간을 2배씩 늘린다.
+
+        평평한 15분 잠금은 공용 IP(회사망·NAT·모바일 캐리어) 뒤의 애먼 관리자가
+        남의 실패 때문에 15분을 통째로 잃게 만든다. 첫 잠금을 30초로 짧게 두면
+        그 피해는 금방 풀리고, 실제로 두드리는 쪽은 몇 번 만에 상한에 닿는다.
+        """
+        steps = max(0, failures - _LOGIN_MAX_FAILURES)
+        return min(_LOGIN_LOCKOUT_BASE_SECONDS * (2**steps), _LOGIN_LOCKOUT_MAX_SECONDS)
+
     def _record_login_failure(self, ip: str) -> None:
+        now = time.monotonic()
         failures = self._login_failures.get(ip, (0, 0.0))[0] + 1
-        self._login_failures[ip] = (
-            failures,
-            time.monotonic() + _LOGIN_LOCKOUT_SECONDS,
-        )
+        self._login_failures[ip] = (failures, now + self._lockout_seconds(failures))
+        # 삽입한 뒤에 정리해야 상한을 실제로 지킨다. 방금 넣은 항목은 만료가
+        # 가장 늦으므로 오래된 것부터 버리는 이 정리에서 살아남는다.
+        self._prune_login_failures(now)
         if failures >= _LOGIN_MAX_FAILURES:
-            log.warning("web admin login locked out for %s after %d failures", ip, failures)
+            log.warning(
+                "web admin login locked out for %s after %d failures (%ds)",
+                ip,
+                failures,
+                int(self._lockout_seconds(failures)),
+            )
 
     async def cog_load(self) -> None:
         if not _web_enabled():
@@ -253,6 +299,12 @@ class WebAdminCog(commands.Cog):
         # 전역 토큰이 없어도 서버별 키만으로 운영할 수 있다 (마스터 키 없는 구성).
         if not self._token:
             log.info("web admin running without a global token — per-guild keys only")
+        else:
+            log.warning(
+                "ADMIN_WEB_TOKEN is set — this master key unlocks EVERY guild the bot "
+                "is in and bypasses per-guild isolation. Unset it and use "
+                "ADMIN_WEB_ENABLED=1 with per-guild keys unless you need it."
+            )
 
         # 템플릿을 미리 읽어 둔다. 여기서 걸러야 첫 접속 때 500 을 보는 대신
         # 기동 로그에서 원인을 알 수 있다 (Rule 03: 봇 전체를 죽이지는 않는다).
@@ -265,7 +317,11 @@ class WebAdminCog(commands.Cog):
 
         # 보안 헤더가 바깥, 인증이 안쪽. 인증 실패로 나가는 401/302 에도 헤더가 붙는다.
         app = web.Application(
-            middlewares=[self._security_headers_middleware, self._auth_middleware]
+            middlewares=[
+                self._security_headers_middleware,
+                self._csrf_middleware,
+                self._auth_middleware,
+            ]
         )
         app.add_routes(
             [
@@ -316,6 +372,31 @@ class WebAdminCog(commands.Cog):
         return response
 
     @web.middleware
+    async def _csrf_middleware(self, request: web.Request, handler):
+        """상태를 바꾸는 요청이 다른 사이트에서 오면 거부한다.
+
+        SameSite=Strict 쿠키가 이미 대부분을 막지만 두 가지 구멍이 남는다.
+        (1) 로그인 POST 는 쿠키가 없어도 성립하므로, 공격자가 피해자를 자기
+        서버 대시보드에 로그인시켜 놓을 수 있다(login CSRF).
+        (2) SameSite 를 모르는 구형 브라우저.
+
+        Sec-Fetch-Site 는 브라우저가 붙이는 값이라 스크립트로 위조할 수 없다.
+        헤더가 아예 없으면(curl 등 비브라우저) 통과시킨다 — 그쪽은 쿠키를
+        자동으로 실어 보내지 않으므로 CSRF 가 성립하지 않는다.
+        """
+        if request.method in _STATE_CHANGING_METHODS:
+            fetch_site = request.headers.get("Sec-Fetch-Site")
+            if fetch_site is not None and fetch_site not in {"same-origin", "none"}:
+                log.warning(
+                    "cross-site %s to %s rejected (Sec-Fetch-Site: %s)",
+                    request.method,
+                    request.path,
+                    fetch_site,
+                )
+                return web.json_response({"error": "cross-site request"}, status=403)
+        return await handler(request)
+
+    @web.middleware
     async def _auth_middleware(self, request: web.Request, handler):
         if request.path == "/login":
             return await handler(request)
@@ -360,11 +441,11 @@ class WebAdminCog(commands.Cog):
         ip = self._client_ip(request)
         locked = self._lockout_remaining(ip)
         if locked:
-            minutes = max(1, locked // 60)
+            wait = f"{locked}초" if locked < 60 else f"{locked // 60}분"
             return self._render(
                 request,
                 _LOGIN_TEMPLATE,
-                error=f"시도 횟수를 초과했습니다. 약 {minutes}분 후 다시 시도하세요.",
+                error=f"시도 횟수를 초과했습니다. 약 {wait} 후 다시 시도하세요.",
                 status=429,
             )
 
