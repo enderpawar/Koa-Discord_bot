@@ -26,3 +26,8 @@ docs/
 .claude/
 README.md
 CLAUDE.md
+AGENTS.md
+
+# 정적 소개 페이지. 봇 런타임과 무관하다 (배너 이미지 때문에 800KB 가 넘는다).
+# 관리자 대시보드 마크업인 templates/ 는 런타임에 읽으므로 제외하지 않는다.
+site/

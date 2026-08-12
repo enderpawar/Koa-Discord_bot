@@ -5,6 +5,7 @@ import hmac
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import discord
@@ -19,6 +20,36 @@ log = logging.getLogger(__name__)
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 _COOKIE_NAME = "koa_admin_token"
+
+# 관리자 페이지 HTML 은 파이썬 문자열이 아니라 templates/*.html 에 둔다.
+# 에디터 문법 강조와 diff 가 살아나고, 마크업을 고칠 때 cog 를 건드리지 않는다.
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+_LOGIN_TEMPLATE = "admin_login.html"
+_DASHBOARD_TEMPLATE = "admin_dashboard.html"
+_template_cache: dict[str, str] = {}
+
+
+def _template_reload() -> bool:
+    return (os.getenv("ADMIN_WEB_TEMPLATE_RELOAD") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _template(name: str) -> str:
+    """templates/<name> 을 읽어 돌려준다.
+
+    기본은 프로세스 수명 동안 1회만 읽는다 (요청마다 디스크를 때리면 이벤트 루프가
+    막힌다). ADMIN_WEB_TEMPLATE_RELOAD 를 켜면 매 요청 다시 읽어, 봇을 재시작하지
+    않고 마크업 수정을 바로 확인할 수 있다.
+    """
+    if _template_reload():
+        return (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
+    if name not in _template_cache:
+        _template_cache[name] = (_TEMPLATE_DIR / name).read_text(encoding="utf-8")
+    return _template_cache[name]
 
 
 def _web_enabled() -> bool:
@@ -110,6 +141,15 @@ class WebAdminCog(commands.Cog):
             log.warning("web admin requested but ADMIN_WEB_TOKEN is not set")
             return
 
+        # 템플릿을 미리 읽어 둔다. 여기서 걸러야 첫 접속 때 500 을 보는 대신
+        # 기동 로그에서 원인을 알 수 있다 (Rule 03: 봇 전체를 죽이지는 않는다).
+        try:
+            _template(_LOGIN_TEMPLATE)
+            _template(_DASHBOARD_TEMPLATE)
+        except OSError:
+            log.exception("web admin templates not readable under %s", _TEMPLATE_DIR)
+            return
+
         app = web.Application(middlewares=[self._auth_middleware])
         app.add_routes(
             [
@@ -157,13 +197,13 @@ class WebAdminCog(commands.Cog):
         return bool(supplied) and hmac.compare_digest(supplied, self._token)
 
     async def _login(self, _: web.Request) -> web.Response:
-        return web.Response(text=_LOGIN_HTML, content_type="text/html")
+        return web.Response(text=_template(_LOGIN_TEMPLATE), content_type="text/html")
 
     async def _login_submit(self, request: web.Request) -> web.Response:
         data = await request.post()
         token = str(data.get("token", ""))
         if not hmac.compare_digest(token, self._token):
-            return web.Response(text=_LOGIN_HTML.replace("<!--ERROR-->", "<p class=\"error\">토큰이 올바르지 않습니다.</p>"), content_type="text/html", status=401)
+            return web.Response(text=_template(_LOGIN_TEMPLATE).replace("<!--ERROR-->", "<p class=\"error\">토큰이 올바르지 않습니다.</p>"), content_type="text/html", status=401)
         response = web.HTTPFound("/")
         response.set_cookie(
             _COOKIE_NAME,
@@ -181,7 +221,7 @@ class WebAdminCog(commands.Cog):
         return response
 
     async def _index(self, _: web.Request) -> web.Response:
-        return web.Response(text=_INDEX_HTML, content_type="text/html")
+        return web.Response(text=_template(_DASHBOARD_TEMPLATE), content_type="text/html")
 
     async def _api_state(self, request: web.Request) -> web.Response:
         guild_id = request.query.get("guild_id")
@@ -354,78 +394,6 @@ class WebAdminCog(commands.Cog):
         if not isinstance(channel, discord.VoiceChannel):
             raise ValueError("invalid voice channel")
         return channel.id
-
-
-_LOGIN_HTML = """<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>코아 관리자</title><style>
-body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#202225;font-family:Inter,Arial,sans-serif}
-main{width:min(420px,calc(100vw - 32px));background:#fff;border:1px solid #d8dce2;border-radius:8px;padding:28px;box-shadow:0 12px 40px rgba(0,0,0,.08)}
-h1{font-size:24px;margin:0 0 8px}.muted{color:#626b78;margin:0 0 22px;line-height:1.5}
-label{display:block;font-size:13px;font-weight:700;margin-bottom:8px}input{box-sizing:border-box;width:100%;height:42px;border:1px solid #c7ccd4;border-radius:6px;padding:0 12px;font-size:15px}
-button{margin-top:16px;width:100%;height:42px;border:0;border-radius:6px;background:#5865f2;color:#fff;font-weight:700;font-size:15px;cursor:pointer}.error{color:#b42318;font-weight:700}
-</style></head><body><main><h1>코아 관리자</h1><p class="muted">관리자 토큰을 입력해 서버 설정 대시보드에 접속합니다.</p><!--ERROR--><form method="post" action="/login"><label for="token">Admin token</label><input id="token" name="token" type="password" autocomplete="current-password" autofocus><button>로그인</button></form></main></body></html>"""
-
-
-_INDEX_HTML = """<!doctype html>
-<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>코아 관리자</title><style>
-:root{--bg:#f4f6f8;--panel:#fff;--line:#d8dee8;--line-strong:#c5ceda;--text:#16181d;--muted:#667085;--brand:#5865f2;--brand-soft:#eef0ff;--ok:#15803d;--ok-soft:#e8f7ee;--warn:#b7791f;--warn-soft:#fff7e6;--danger:#b42318;--gold:#b58105;--gold-soft:#fff7d6}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;font-size:15px}
-header{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-h1{font-size:20px;margin:0}.shell{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 64px)}
-aside{border-right:1px solid var(--line);background:#fff;padding:20px}.content{padding:24px;max-width:1180px;width:100%}
-.section{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px;margin-bottom:16px}.section h2{font-size:17px;margin:0 0 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
-.section .sub{font-size:12px;font-weight:600;color:var(--muted)}
-.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.field label{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:800;color:#4b5563;margin-bottom:7px}
-select,input{width:100%;height:42px;border:1px solid var(--line-strong);border-radius:7px;background:#fff;padding:0 11px;font-size:14px;color:var(--text)}select:focus,input:focus{outline:2px solid rgba(88,101,242,.18);border-color:var(--brand)}
-.toggle{display:flex;align-items:center;justify-content:space-between;gap:16px;border:1px solid var(--line);border-radius:8px;padding:13px 14px;margin-top:14px;background:#fbfcfe}
-.status{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:7px 10px;font-weight:800;font-size:13px;background:var(--warn-soft);color:var(--warn)}.status.on{background:var(--ok-soft);color:var(--ok)}.dot{width:8px;height:8px;border-radius:50%;background:currentColor}
-button{height:40px;border:0;border-radius:7px;background:var(--brand);color:#fff;font-weight:800;padding:0 15px;cursor:pointer}button.secondary{background:#eef1f6;color:#1f2937}button.danger{background:#fff1f0;color:var(--danger);border:1px solid #f3b7b2}button:disabled{opacity:.55;cursor:not-allowed}
-.actions{display:flex;gap:10px;flex-wrap:wrap}.muted{color:var(--muted);line-height:1.55}.list{display:grid;gap:8px}.guild{width:100%;text-align:left;background:#f1f4f8;color:var(--text);border:1px solid transparent;border-radius:7px;padding:10px 12px}.guild.active{background:var(--brand-soft);border-color:var(--brand);color:#2730a8;font-weight:800}
-#message.ok{color:var(--ok);font-weight:800}#message.error{color:var(--danger);font-weight:800}
-.lb-rows{display:grid;gap:8px}
-.lb-row{display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:#fbfcfe}
-.lb-row .rank{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:999px;background:#eef1f6;font-weight:800;font-size:13px;color:#1f2937}
-.lb-row.top1 .rank{background:var(--gold-soft);color:var(--gold)}
-.lb-row.top2 .rank,.lb-row.top3 .rank{background:var(--brand-soft);color:#2730a8}
-.lb-row .name{font-weight:700}.lb-row .meta{font-size:12px;color:var(--muted);margin-top:2px}
-.lb-row .score{font-weight:800;font-variant-numeric:tabular-nums}
-.history{display:grid;gap:10px}
-.history-week{border:1px solid var(--line);border-radius:8px;background:#fbfcfe;overflow:hidden}
-.history-week summary{cursor:pointer;list-style:none;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700}
-.history-week summary::-webkit-details-marker{display:none}
-.history-week summary::after{content:'▾';color:var(--muted);font-size:12px;transition:transform .15s}
-.history-week[open] summary::after{transform:rotate(180deg)}
-.history-week .week-label{display:flex;align-items:center;gap:10px}
-.history-week .top3{font-size:12px;color:var(--muted)}
-.history-week .body{padding:0 14px 14px;display:grid;gap:6px}
-.history-row{display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:10px;font-size:13px;padding:6px 8px;border-radius:6px}
-.history-row .rank{font-weight:800;color:#4b5563}
-.history-row .meta{color:var(--muted);font-size:11px}
-@media(max-width:900px){.shell{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr}.content{padding:16px}}
-</style></head><body><header><h1>코아 관리자</h1><button class="secondary" id="logout">로그아웃</button></header><div class="shell"><aside><div class="section"><h2>서버</h2><div id="guilds" class="list"></div></div><p class="muted">웹 대시보드는 ADMIN_WEB_TOKEN으로 보호됩니다. 토큰은 서버 환경변수에서 관리하세요.</p></aside><main class="content"><div class="section"><h2>운영 상태</h2><div id="status" class="muted">불러오는 중</div></div><div class="section"><h2>이번 주 리더보드 미리보기 <span class="sub" id="lb_anchor"></span></h2><div id="lb_rows" class="lb-rows"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>지난 주차 히스토리 <span class="sub" id="history_count"></span></h2><div id="history" class="history"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>TTS 설정</h2><div class="grid"><div class="field"><label>TTS 입력 채널</label><select id="tts_channel"></select></div><div class="field"><label>음성 출력 채널</label><select id="voice_channel"></select></div></div></div><div class="section"><h2>일일 리더보드</h2><div class="grid"><div class="field"><label>발송 채널</label><select id="leaderboard_channel"></select></div><div class="field"><label>발송 시각 KST</label><input id="post_time" placeholder="00:00" maxlength="5"></div></div><div style="height:14px"></div><label class="toggle"><input id="daily_enabled" type="checkbox" style="width:auto;height:auto"> 매일 자동 발송 사용</label></div><div class="section"><h2>작업</h2><div class="actions"><button id="save">설정 저장</button><button class="secondary" id="post">리더보드 즉시 발송</button><button class="secondary" id="refresh">새로고침</button><button class="danger" id="clear">리더보드 데이터 초기화</button></div><p id="message" class="muted"></p></div></main></div><script>
-let state=null;let guildId=null;
-const $=id=>document.getElementById(id);
-function option(value,name){const o=document.createElement('option');o.value=value;o.textContent=name;return o}
-function setMessage(text,type=''){const el=$('message');el.textContent=text;el.className='muted '+type}
-function fillSelect(el,items,current,empty){el.innerHTML='';el.appendChild(option('0',empty));for(const item of items){el.appendChild(option(String(item.id),'# '+item.name))}el.value=String(current||0)}
-function fmtScore(score){return (Math.max(0,score|0)/100).toFixed(2)+'점'}
-function fmtDuration(secs){const s=Math.max(0,Math.floor(secs|0));const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),r=s%60;if(h)return `${h}시간 ${m}분`;if(m)return `${m}분 ${r}초`;return `${r}초`}
-function fmtAnchorRange(anchor){if(!anchor)return '';const start=new Date(anchor);if(isNaN(start))return anchor;const end=new Date(start.getTime()+6*86400000);const f=d=>`${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`;return `${start.getFullYear()} ${f(start)}–${f(end)}`}
-function rankIcon(i){return i===1?'🥇':i===2?'🥈':i===3?'🥉':String(i)}
-function render(){const g=state.selected;if(!g){$('status').textContent='봇이 접속한 서버가 없습니다.';$('lb_rows').innerHTML='<p class="muted">서버를 선택하세요.</p>';$('history').innerHTML='<p class="muted">서버를 선택하세요.</p>';return}guildId=String(g.id);const cfg=g.config||{};$('guilds').innerHTML='';for(const item of state.guilds){const b=document.createElement('button');b.className='guild'+(String(item.id)===guildId?' active':'');b.textContent=item.name;b.onclick=()=>load(item.id);$('guilds').appendChild(b)}fillSelect($('tts_channel'),g.text_channels,cfg.tts_channel_id,'미설정');fillSelect($('leaderboard_channel'),g.text_channels,cfg.leaderboard_channel_id,'미설정');fillSelect($('voice_channel'),g.voice_channels,cfg.voice_channel_id,'미설정');$('post_time').value=cfg.leaderboard_post_time||'00:00';$('daily_enabled').checked=!!cfg.leaderboard_daily_enabled;const on=cfg.leaderboard_daily_enabled?'on':'';$('status').innerHTML=`<span class="status ${on}"><span class="dot"></span>일일 리더보드 ${cfg.leaderboard_daily_enabled?'켜짐':'꺼짐'}</span><p>TTS 입력: ${cfg.tts_channel_id?'#'+channelName(g.text_channels,cfg.tts_channel_id):'미설정'} · 음성 출력: ${cfg.voice_channel_id?channelName(g.voice_channels,cfg.voice_channel_id):'미설정'}</p>`}
-function channelName(items,id){const found=items.find(x=>String(x.id)===String(id));return found?found.name:id}
-function renderLeaderboard(data){const el=$('lb_rows');$('lb_anchor').textContent=data&&data.anchor?fmtAnchorRange(data.anchor):'';if(!data||!data.rows||!data.rows.length){el.innerHTML='<p class="muted">아직 집계된 활동이 없습니다.</p>';return}el.innerHTML='';data.rows.forEach((row,idx)=>{const i=idx+1;const div=document.createElement('div');div.className='lb-row'+(i<=3?` top${i}`:'');div.innerHTML=`<span class="rank">${rankIcon(i)}</span><div><div class="name"></div><div class="meta">음성 <b></b> · 메시지 <b></b>개</div></div><div class="score"></div>`;div.querySelector('.name').textContent=row.name;const metaB=div.querySelectorAll('.meta b');metaB[0].textContent=fmtDuration(row.voice_seconds);metaB[1].textContent=row.message_count;div.querySelector('.score').textContent=fmtScore(row.score);el.appendChild(div)})}
-function renderHistory(data){const el=$('history');const weeks=(data&&data.weeks)||[];$('history_count').textContent=weeks.length?`${weeks.length}주 보관 중`:'';if(!weeks.length){el.innerHTML='<p class="muted">아직 보관된 주차 기록이 없습니다. 다음 주 금요일 자동 초기화부터 쌓입니다.</p>';return}el.innerHTML='';weeks.forEach((wk,idx)=>{const det=document.createElement('details');det.className='history-week';if(idx===0)det.open=true;const top3=wk.top.slice(0,3).map((r,i)=>`${rankIcon(i+1)} ${escapeHtml(r.name)}`).join(' · ');det.innerHTML=`<summary><span class="week-label">${fmtAnchorRange(wk.anchor)} <span class="top3">${top3||'기록 없음'}</span></span><span class="muted" style="font-size:12px">${wk.top.length}명</span></summary><div class="body"></div>`;const body=det.querySelector('.body');if(!wk.top.length){body.innerHTML='<p class="muted">활동이 없었던 주차입니다.</p>'}else{wk.top.forEach((row,i)=>{const r=document.createElement('div');r.className='history-row';r.innerHTML=`<span class="rank"></span><div><div class="name"></div><div class="meta">음성 <b></b> · 메시지 <b></b>개</div></div><div class="score"></div>`;r.querySelector('.rank').textContent=rankIcon(i+1);r.querySelector('.name').textContent=row.name;const mb=r.querySelectorAll('.meta b');mb[0].textContent=fmtDuration(row.voice_seconds);mb[1].textContent=row.message_count;r.querySelector('.score').textContent=fmtScore(row.score);body.appendChild(r)})}el.appendChild(det)})}
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function load(id){const q=id?`?guild_id=${id}`:'';const r=await fetch('/api/state'+q);if(r.status===401){location.href='/login';return}state=await r.json();render();await loadActivity()}
-async function loadActivity(){if(!guildId)return;try{const [lb,hist]=await Promise.all([fetch('/api/leaderboard?guild_id='+guildId),fetch('/api/leaderboard-history?guild_id='+guildId)]);if(lb.ok)renderLeaderboard(await lb.json());if(hist.ok)renderHistory(await hist.json())}catch(e){console.error(e)}}
-async function save(){const body={guild_id:guildId,tts_channel_id:$('tts_channel').value,voice_channel_id:$('voice_channel').value,leaderboard_channel_id:$('leaderboard_channel').value,leaderboard_post_time:$('post_time').value,leaderboard_daily_enabled:$('daily_enabled').checked};const r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json();setMessage(r.ok?'설정을 저장했습니다.':(data.error||'저장 실패'),r.ok?'ok':'error');await load(guildId)}
-async function post(){const r=await fetch('/api/post-leaderboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guild_id:guildId})});const data=await r.json();setMessage(r.ok?'리더보드를 발송했습니다.':(data.error||'발송 실패'),r.ok?'ok':'error')}
-async function clearLeaderboard(){const answer=prompt('선택한 서버의 리더보드 데이터를 초기화하려면 CLEAR를 입력하세요.');if(answer!=='CLEAR'){setMessage('초기화를 취소했습니다.');return}const r=await fetch('/api/clear-leaderboard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({guild_id:guildId,confirm:'CLEAR'})});const data=await r.json();setMessage(r.ok?`리더보드 데이터를 초기화했습니다. (${data.cleared_users||0}명)`:(data.error||'초기화 실패'),r.ok?'ok':'error');await loadActivity()}
-$('save').onclick=save;$('post').onclick=post;$('refresh').onclick=()=>load(guildId);$('clear').onclick=clearLeaderboard;$('logout').onclick=async()=>{await fetch('/logout',{method:'POST'});location.href='/login'};load();
-</script></body></html>"""
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from cogs import web_admin_cog
 from cogs.web_admin_cog import (
+    _DASHBOARD_TEMPLATE,
+    _LOGIN_TEMPLATE,
     _allowed_guild_ids,
     _bool_value,
     _channel_payload,
     _clean_time,
     _id,
+    _template,
     _web_host,
     _web_port,
 )
@@ -78,3 +82,36 @@ def test_channel_payload_serializes_id_as_string() -> None:
         "id": "123456789012345678",
         "name": "일반",
     }
+
+
+def test_templates_exist_and_are_complete_documents() -> None:
+    login = _template(_LOGIN_TEMPLATE)
+    dashboard = _template(_DASHBOARD_TEMPLATE)
+
+    for html in (login, dashboard):
+        assert html.startswith("<!doctype html>")
+        assert html.rstrip().endswith("</html>")
+
+    # 로그인 실패 문구를 끼워 넣는 자리. 이게 없으면 401 응답이 조용히 안내 없는
+    # 페이지가 된다.
+    assert "<!--ERROR-->" in login
+    # 대시보드는 guild_id 로 서버를 갈아끼우는 API 를 호출해야 한다.
+    assert "/api/state" in dashboard
+
+
+def test_template_is_cached_until_reload_is_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    target = tmp_path / "admin_login.html"
+    target.write_text("<!doctype html>first</html>", encoding="utf-8")
+    monkeypatch.setattr(web_admin_cog, "_TEMPLATE_DIR", tmp_path)
+    monkeypatch.setattr(web_admin_cog, "_template_cache", {})
+    monkeypatch.delenv("ADMIN_WEB_TEMPLATE_RELOAD", raising=False)
+
+    assert _template("admin_login.html") == "<!doctype html>first</html>"
+
+    target.write_text("<!doctype html>second</html>", encoding="utf-8")
+    assert _template("admin_login.html") == "<!doctype html>first</html>"
+
+    monkeypatch.setenv("ADMIN_WEB_TEMPLATE_RELOAD", "1")
+    assert _template("admin_login.html") == "<!doctype html>second</html>"
