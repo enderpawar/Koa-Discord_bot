@@ -22,7 +22,7 @@ import aiohttp
 log = logging.getLogger(__name__)
 
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
-_USER_AGENT = os.getenv("RIOT_API_USER_AGENT", "NothingBot/1.0").strip() or "NothingBot/1.0"
+_USER_AGENT = os.getenv("RIOT_API_USER_AGENT", "KoaBot/1.0").strip() or "KoaBot/1.0"
 
 # 플랫폼(소환사/랭크 호스트) → 대륙(계정/전적 호스트) 매핑.
 _PLATFORM_TO_REGIONAL = {

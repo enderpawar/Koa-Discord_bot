@@ -247,7 +247,7 @@ def _speech_config_body() -> str:
                 "system": {
                     "name": "SpeechSDK",
                     "version": "1.0.0",
-                    "build": "nothing-tts-bot",
+                    "build": "koa-tts-bot",
                 },
                 "os": {"platform": "Python", "name": "asyncio"},
             }
@@ -316,7 +316,7 @@ async def _request_rest_once(text: str, voice: str, path: Path) -> None:
         "Ocp-Apim-Subscription-Key": key,
         "Content-Type": "application/ssml+xml",
         "X-Microsoft-OutputFormat": _OUTPUT_FORMAT,
-        "User-Agent": "nothing-tts-bot",
+        "User-Agent": "koa-tts-bot",
     }
     body = _build_ssml(text, voice).encode("utf-8")
     session = await _get_session()
@@ -334,7 +334,7 @@ async def _stream_rest_once(text: str, voice: str) -> AsyncIterator[bytes]:
         "Ocp-Apim-Subscription-Key": key,
         "Content-Type": "application/ssml+xml",
         "X-Microsoft-OutputFormat": _OUTPUT_FORMAT,
-        "User-Agent": "nothing-tts-bot",
+        "User-Agent": "koa-tts-bot",
     }
     body = _build_ssml(text, voice).encode("utf-8")
     session = await _get_session()

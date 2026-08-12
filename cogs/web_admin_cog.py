@@ -18,7 +18,7 @@ from cogs.rank_store import weekly_reset_anchor
 log = logging.getLogger(__name__)
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-_COOKIE_NAME = "nothing_admin_token"
+_COOKIE_NAME = "koa_admin_token"
 
 
 def _web_enabled() -> bool:
@@ -358,18 +358,18 @@ class WebAdminCog(commands.Cog):
 
 _LOGIN_HTML = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nothing Bot Admin</title><style>
+<title>코아 관리자</title><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#202225;font-family:Inter,Arial,sans-serif}
 main{width:min(420px,calc(100vw - 32px));background:#fff;border:1px solid #d8dce2;border-radius:8px;padding:28px;box-shadow:0 12px 40px rgba(0,0,0,.08)}
 h1{font-size:24px;margin:0 0 8px}.muted{color:#626b78;margin:0 0 22px;line-height:1.5}
 label{display:block;font-size:13px;font-weight:700;margin-bottom:8px}input{box-sizing:border-box;width:100%;height:42px;border:1px solid #c7ccd4;border-radius:6px;padding:0 12px;font-size:15px}
 button{margin-top:16px;width:100%;height:42px;border:0;border-radius:6px;background:#5865f2;color:#fff;font-weight:700;font-size:15px;cursor:pointer}.error{color:#b42318;font-weight:700}
-</style></head><body><main><h1>Nothing Bot Admin</h1><p class="muted">관리자 토큰을 입력해 서버 설정 대시보드에 접속합니다.</p><!--ERROR--><form method="post" action="/login"><label for="token">Admin token</label><input id="token" name="token" type="password" autocomplete="current-password" autofocus><button>로그인</button></form></main></body></html>"""
+</style></head><body><main><h1>코아 관리자</h1><p class="muted">관리자 토큰을 입력해 서버 설정 대시보드에 접속합니다.</p><!--ERROR--><form method="post" action="/login"><label for="token">Admin token</label><input id="token" name="token" type="password" autocomplete="current-password" autofocus><button>로그인</button></form></main></body></html>"""
 
 
 _INDEX_HTML = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nothing Bot Admin</title><style>
+<title>코아 관리자</title><style>
 :root{--bg:#f4f6f8;--panel:#fff;--line:#d8dee8;--line-strong:#c5ceda;--text:#16181d;--muted:#667085;--brand:#5865f2;--brand-soft:#eef0ff;--ok:#15803d;--ok-soft:#e8f7ee;--warn:#b7791f;--warn-soft:#fff7e6;--danger:#b42318;--gold:#b58105;--gold-soft:#fff7d6}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;font-size:15px}
 header{height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
@@ -404,7 +404,7 @@ button{height:40px;border:0;border-radius:7px;background:var(--brand);color:#fff
 .history-row .rank{font-weight:800;color:#4b5563}
 .history-row .meta{color:var(--muted);font-size:11px}
 @media(max-width:900px){.shell{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid var(--line)}.grid{grid-template-columns:1fr}.content{padding:16px}}
-</style></head><body><header><h1>Nothing Bot Admin</h1><button class="secondary" id="logout">로그아웃</button></header><div class="shell"><aside><div class="section"><h2>서버</h2><div id="guilds" class="list"></div></div><p class="muted">웹 대시보드는 ADMIN_WEB_TOKEN으로 보호됩니다. 토큰은 서버 환경변수에서 관리하세요.</p></aside><main class="content"><div class="section"><h2>운영 상태</h2><div id="status" class="muted">불러오는 중</div></div><div class="section"><h2>이번 주 리더보드 미리보기 <span class="sub" id="lb_anchor"></span></h2><div id="lb_rows" class="lb-rows"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>지난 주차 히스토리 <span class="sub" id="history_count"></span></h2><div id="history" class="history"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>TTS 설정</h2><div class="grid"><div class="field"><label>TTS 입력 채널</label><select id="tts_channel"></select></div><div class="field"><label>음성 출력 채널</label><select id="voice_channel"></select></div></div></div><div class="section"><h2>일일 리더보드</h2><div class="grid"><div class="field"><label>발송 채널</label><select id="leaderboard_channel"></select></div><div class="field"><label>발송 시각 KST</label><input id="post_time" placeholder="00:00" maxlength="5"></div></div><div style="height:14px"></div><label class="toggle"><input id="daily_enabled" type="checkbox" style="width:auto;height:auto"> 매일 자동 발송 사용</label></div><div class="section"><h2>작업</h2><div class="actions"><button id="save">설정 저장</button><button class="secondary" id="post">리더보드 즉시 발송</button><button class="secondary" id="refresh">새로고침</button><button class="danger" id="clear">리더보드 데이터 초기화</button></div><p id="message" class="muted"></p></div></main></div><script>
+</style></head><body><header><h1>코아 관리자</h1><button class="secondary" id="logout">로그아웃</button></header><div class="shell"><aside><div class="section"><h2>서버</h2><div id="guilds" class="list"></div></div><p class="muted">웹 대시보드는 ADMIN_WEB_TOKEN으로 보호됩니다. 토큰은 서버 환경변수에서 관리하세요.</p></aside><main class="content"><div class="section"><h2>운영 상태</h2><div id="status" class="muted">불러오는 중</div></div><div class="section"><h2>이번 주 리더보드 미리보기 <span class="sub" id="lb_anchor"></span></h2><div id="lb_rows" class="lb-rows"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>지난 주차 히스토리 <span class="sub" id="history_count"></span></h2><div id="history" class="history"><p class="muted">불러오는 중…</p></div></div><div class="section"><h2>TTS 설정</h2><div class="grid"><div class="field"><label>TTS 입력 채널</label><select id="tts_channel"></select></div><div class="field"><label>음성 출력 채널</label><select id="voice_channel"></select></div></div></div><div class="section"><h2>일일 리더보드</h2><div class="grid"><div class="field"><label>발송 채널</label><select id="leaderboard_channel"></select></div><div class="field"><label>발송 시각 KST</label><input id="post_time" placeholder="00:00" maxlength="5"></div></div><div style="height:14px"></div><label class="toggle"><input id="daily_enabled" type="checkbox" style="width:auto;height:auto"> 매일 자동 발송 사용</label></div><div class="section"><h2>작업</h2><div class="actions"><button id="save">설정 저장</button><button class="secondary" id="post">리더보드 즉시 발송</button><button class="secondary" id="refresh">새로고침</button><button class="danger" id="clear">리더보드 데이터 초기화</button></div><p id="message" class="muted"></p></div></main></div><script>
 let state=null;let guildId=null;
 const $=id=>document.getElementById(id);
 function option(value,name){const o=document.createElement('option');o.value=value;o.textContent=name;return o}

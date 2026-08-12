@@ -13,7 +13,7 @@
       "Bash(python -m pytest tests/unit -q)",
       "Bash(python -m pytest tests/unit/test_config_store.py::test_concurrent_writes_no_corruption -v)",
       "Bash(python -m pytest tests/unit -v --tb=long)",
-      "Bash(/c/Users/user/Desktop/Nothing_bot/.venv/Scripts/python.exe -m pytest tests/unit/test_config_store.py -v)",
+      "Bash(/c/Users/user/Desktop/Koa_bot/.venv/Scripts/python.exe -m pytest tests/unit/test_config_store.py -v)",
       "PowerShell(winget install *)"
     ]
   }

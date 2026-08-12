@@ -69,8 +69,8 @@ sudo systemctl enable --now docker
 ## 4. 코드 배포
 
 ```bash
-git clone https://github.com/enderpawar/Nothing_bot.git
-cd Nothing_bot
+git clone https://github.com/enderpawar/Koa_bot.git
+cd Koa_bot
 cp .env.example .env
 nano .env        # §5 참고해 값 입력
 mkdir -p data    # 볼륨 마운트 지점
@@ -80,7 +80,7 @@ mkdir -p data    # 볼륨 마운트 지점
 
 ```bash
 # 로컬에서 서버로 전송
-scp -i <개인키> config.json ubuntu@<공인IP>:~/Nothing_bot/data/config.json
+scp -i <개인키> config.json ubuntu@<공인IP>:~/Koa_bot/data/config.json
 ```
 
 빌드 및 기동:
@@ -113,7 +113,7 @@ docker compose up -d --build
 
 ### Minecraft 화이트리스트 SSH
 
-Nothing-bot은 Oracle에서 실행되고 Minecraft 서버는 GCP에 있으므로 로컬
+코아는 Oracle에서 실행되고 Minecraft 서버는 GCP에 있으므로 로컬
 `whitelist.json`을 수정하지 않습니다. GCP의 `mc-whitelist.sh`를 전용 SSH
 키로 호출합니다. 이 키에는 셸 권한을 주지 말고 반드시 GCP 서버의
 `authorized_keys`에서 source IP, `restrict`, forced-command를 모두 적용하세요.
@@ -121,10 +121,10 @@ Nothing-bot은 Oracle에서 실행되고 Minecraft 서버는 GCP에 있으므로
 1. Oracle 봇 호스트에서 전용 키를 만듭니다.
 
 ```bash
-mkdir -p ~/nothing-bot/shared/ssh
-ssh-keygen -t ed25519 -N '' -C nothing-bot-whitelist \
-  -f ~/nothing-bot/shared/ssh/mc-whitelist
-cat ~/nothing-bot/shared/ssh/mc-whitelist.pub
+mkdir -p ~/koa-bot/shared/ssh
+ssh-keygen -t ed25519 -N '' -C koa-bot-whitelist \
+  -f ~/koa-bot/shared/ssh/mc-whitelist
+cat ~/koa-bot/shared/ssh/mc-whitelist.pub
 ```
 
 2. `cobblemon-server/gcp/mc-whitelist.sh`와
@@ -141,7 +141,7 @@ mc-whitelist-bot ALL=(root) NOPASSWD: /usr/local/bin/mc-whitelist.sh add *
    적습니다.
 
 ```text
-from="<ORACLE_PUBLIC_IP>",restrict,command="/usr/local/bin/mc-whitelist-discord.sh" ssh-ed25519 AAAA... nothing-bot-whitelist
+from="<ORACLE_PUBLIC_IP>",restrict,command="/usr/local/bin/mc-whitelist-discord.sh" ssh-ed25519 AAAA... koa-bot-whitelist
 ```
 
 4. GCP VM에서 신뢰할 호스트 공개키를 읽습니다. `ssh-keyscan` 결과를 그대로
@@ -154,7 +154,7 @@ sudo cat /etc/ssh/ssh_host_ed25519_key.pub
 5. Oracle의 `.env`에 값을 넣습니다.
 
 ```bash
-base64 -w0 ~/nothing-bot/shared/ssh/mc-whitelist
+base64 -w0 ~/koa-bot/shared/ssh/mc-whitelist
 ```
 
 ```ini
@@ -211,7 +211,7 @@ crontab -e
 ```
 
 ```cron
-0 4 * * * cd ~/Nothing_bot && tar czf ~/backups/data-$(date +\%F).tar.gz data/ && ls -1t ~/backups/data-*.tar.gz | tail -n +15 | xargs -r rm
+0 4 * * * cd ~/Koa_bot && tar czf ~/backups/data-$(date +\%F).tar.gz data/ && ls -1t ~/backups/data-*.tar.gz | tail -n +15 | xargs -r rm
 ```
 
 이것만으로는 인스턴스가 사라지면 백업도 같이 사라집니다. **로컬 PC 로 주기적으로 내려받거나** OCI Object Storage 로 업로드하세요:
@@ -256,8 +256,8 @@ docker stats --no-stream mem-anchor
 저장소의 `.github/workflows/deploy-oracle.yml` 은 `main` 브랜치 push 또는
 GitHub Actions 화면의 수동 실행으로 새 릴리스를 전송하고, Docker 이미지를
 재빌드한 뒤 Discord 로그인과 메모리 앵커 구동까지 확인합니다. 서버의 영구
-데이터는 `~/nothing-bot/shared/data`, 환경변수는
-`~/nothing-bot/shared/.env` 에 보존됩니다.
+데이터는 `~/koa-bot/shared/data`, 환경변수는
+`~/koa-bot/shared/.env` 에 보존됩니다.
 
 GitHub 저장소 **Settings → Secrets and variables → Actions** 에 다음 값을
 등록합니다.
@@ -304,7 +304,7 @@ GitHub Actions를 설정했다면 `main` push마다 자동 재배포됩니다. �
 직접 수동 배포하려면:
 
 ```bash
-cd ~/Nothing_bot
+cd ~/Koa_bot
 git pull
 docker compose up -d --build
 ```

@@ -57,7 +57,7 @@ async def synthesize(text: str, voice: str = "ko-KR-SunHiNeural") -> Path:
         "Ocp-Apim-Subscription-Key": key,
         "Content-Type": "application/ssml+xml",
         "X-Microsoft-OutputFormat": "raw-48khz-16bit-mono-pcm",
-        "User-Agent": "nothing-tts-bot",
+        "User-Agent": "koa-tts-bot",
     }
 
     fd = tempfile.NamedTemporaryFile(prefix="tts_", suffix=".pcm", delete=False)

@@ -7,13 +7,13 @@ if [[ ! "$release_id" =~ ^[0-9a-f]{40}$ ]]; then
   exit 2
 fi
 
-app_root="${HOME}/nothing-bot"
+app_root="${HOME}/koa-bot"
 release_dir="${app_root}/releases/${release_id}"
 shared_dir="${app_root}/shared"
-archive_path="/tmp/nothing-bot-${release_id}.tar.gz"
-env_path="/tmp/nothing-bot-${release_id}.env"
-rank_path="/tmp/nothing-bot-${release_id}-rank-stats.json"
-config_path="/tmp/nothing-bot-${release_id}-config.json"
+archive_path="/tmp/koa-bot-${release_id}.tar.gz"
+env_path="/tmp/koa-bot-${release_id}.env"
+rank_path="/tmp/koa-bot-${release_id}-rank-stats.json"
+config_path="/tmp/koa-bot-${release_id}-config.json"
 
 cleanup() {
   rm -f -- \
@@ -21,7 +21,7 @@ cleanup() {
     "$env_path" \
     "$rank_path" \
     "$config_path" \
-    "/tmp/nothing-bot-${release_id}-deploy.sh"
+    "/tmp/koa-bot-${release_id}-deploy.sh"
 }
 trap cleanup EXIT
 
@@ -77,7 +77,7 @@ ln -sfn "$shared_dir/data" "$release_dir/data"
 
 compose=(
   "${docker_cmd[@]}" compose
-  --project-name nothing-bot
+  --project-name koa-bot
   --file "$release_dir/docker-compose.yml"
 )
 
@@ -93,23 +93,23 @@ ln -sfn "$release_dir" "$app_root/current"
 
 deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
-  bot_state="$("${docker_cmd[@]}" inspect --format '{{.State.Status}}' nothing-bot 2>/dev/null || true)"
+  bot_state="$("${docker_cmd[@]}" inspect --format '{{.State.Status}}' koa-bot 2>/dev/null || true)"
   if [[ "$bot_state" == "running" ]] \
-    && "${docker_cmd[@]}" logs nothing-bot 2>&1 | grep -q "logged in as"; then
+    && "${docker_cmd[@]}" logs koa-bot 2>&1 | grep -q "logged in as"; then
     break
   fi
 
   if [[ "$bot_state" == "exited" || "$bot_state" == "dead" ]]; then
     echo "error: bot container entered state: $bot_state" >&2
-    "${docker_cmd[@]}" logs --tail 100 nothing-bot >&2 || true
+    "${docker_cmd[@]}" logs --tail 100 koa-bot >&2 || true
     exit 4
   fi
   sleep 3
 done
 
-if ! "${docker_cmd[@]}" logs nothing-bot 2>&1 | grep -q "logged in as"; then
+if ! "${docker_cmd[@]}" logs koa-bot 2>&1 | grep -q "logged in as"; then
   echo "error: Discord login was not confirmed within 60 seconds" >&2
-  "${docker_cmd[@]}" logs --tail 100 nothing-bot >&2 || true
+  "${docker_cmd[@]}" logs --tail 100 koa-bot >&2 || true
   exit 5
 fi
 

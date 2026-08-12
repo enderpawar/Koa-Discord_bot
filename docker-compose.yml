@@ -1,8 +1,8 @@
 services:
   bot:
     build: .
-    image: nothing-bot:latest
-    container_name: nothing-bot
+    image: koa-bot:latest
+    container_name: koa-bot
     restart: unless-stopped
 
     # DISCORD_TOKEN, AZURE_SPEECH_*, ADMIN_WEB_* 등은 .env 에서 읽는다.

@@ -93,3 +93,19 @@ Phase 6/7/8 은 단위 테스트로 완전 검증이 불가능합니다. 수동 
 4. 검증은 `pytest tests/unit/test_<phase>.py` 와 `check_phase_status.py` 둘 다 실행. 해당 Phase 가 `DONE` 으로 전환되어야 완료입니다.
 
 새 모듈을 추가할 때는 다음을 **모두** 갱신: `cogs/<module>.py`, `tests/unit/test_<module>.py`, `test_for_file.py` 의 `MAPPING`, `check_phase_status.py` 의 `PHASES`, `docs/pipeline.md` 의 Phase 표, `docs/testing.md` 의 매핑 표.
+
+## 🚫 절대 규칙 — 디스코드 서버(길드)를 변경하지 않는다
+
+코아 봇이 참여 중인 디스코드 **서버는 조회(GET)만 허용**한다. 봇 토큰이든 사용자
+계정이든, Discord REST API·discord.py·브라우저 자동화 무엇을 쓰든 동일하다.
+
+금지: 서버 이름/아이콘/설정 변경, 채널·역할·이모지 생성/수정/삭제, 멤버 별명 변경,
+역할 부여/제거, 킥/밴, 운영과 무관한 메시지 전송/수정/삭제, 웹훅 생성,
+봇을 서버에서 내보내기(`DELETE /users/@me/guilds/{id}`).
+
+봇 계정 자체(username, avatar)는 사용자 소유이므로 요청 시 변경 가능하다. 서버는
+다른 사람들이 함께 쓰는 공간이라 되돌리기 어렵고 영향이 사용자 밖으로 번진다.
+
+일괄 치환·리네임 작업을 할 때는 대상 목록에서 길드 자원을 **먼저 제외**할 것.
+서버 이름에 옛 봇 이름(`NOTHING` 등)이 남아 있어도 치환 대상이 아니다.
+길드 대상 쓰기 작업이 필요해 보이면 실행하지 말고 사용자에게 먼저 확인한다.

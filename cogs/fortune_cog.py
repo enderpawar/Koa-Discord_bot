@@ -74,7 +74,7 @@ def daily_fortune(
     current = (now or datetime.now(KST)).astimezone(KST)
     fortune_date = current.date()
     digest = hashlib.sha256(
-        f"nothing-bot-fortune-v1:{fortune_date.isoformat()}:{user_id}".encode("utf-8")
+        f"koa-bot-fortune-v1:{fortune_date.isoformat()}:{user_id}".encode("utf-8")
     ).digest()
     return DailyFortune(
         fortune_date=fortune_date,

@@ -7,7 +7,7 @@ on:
       - main
 
 concurrency:
-  group: nothing-bot-production
+  group: koa-bot-production
   cancel-in-progress: false
 
 permissions:
@@ -83,7 +83,7 @@ jobs:
 
           git archive \
             --format=tar.gz \
-            --output="/tmp/nothing-bot-${GITHUB_SHA}.tar.gz" \
+            --output="/tmp/koa-bot-${GITHUB_SHA}.tar.gz" \
             "$GITHUB_SHA"
 
           python - <<'PY'
@@ -130,12 +130,12 @@ jobs:
               if value or key in required:
                   lines.append(f"{key}={json.dumps(value)}")
 
-          Path(f"/tmp/nothing-bot-{os.environ['GITHUB_SHA']}.env").write_text(
+          Path(f"/tmp/koa-bot-{os.environ['GITHUB_SHA']}.env").write_text(
               "\n".join(lines) + "\n",
               encoding="utf-8",
           )
           PY
-          chmod 600 "/tmp/nothing-bot-${GITHUB_SHA}.env"
+          chmod 600 "/tmp/koa-bot-${GITHUB_SHA}.env"
 
       - name: Upload release
         env:
@@ -144,8 +144,8 @@ jobs:
         run: |
           set -Eeuo pipefail
           scp -i "${HOME}/.ssh/oracle" \
-            "/tmp/nothing-bot-${GITHUB_SHA}.tar.gz" \
-            "/tmp/nothing-bot-${GITHUB_SHA}.env" \
+            "/tmp/koa-bot-${GITHUB_SHA}.tar.gz" \
+            "/tmp/koa-bot-${GITHUB_SHA}.env" \
             "scripts/remote_deploy.sh" \
             "${OCI_USER}@${OCI_HOST}:/tmp/"
 
@@ -157,4 +157,4 @@ jobs:
           set -Eeuo pipefail
           ssh -i "${HOME}/.ssh/oracle" \
             "${OCI_USER}@${OCI_HOST}" \
-            "mv /tmp/remote_deploy.sh /tmp/nothing-bot-${GITHUB_SHA}-deploy.sh && chmod 700 /tmp/nothing-bot-${GITHUB_SHA}-deploy.sh && /tmp/nothing-bot-${GITHUB_SHA}-deploy.sh ${GITHUB_SHA}"
+            "mv /tmp/remote_deploy.sh /tmp/koa-bot-${GITHUB_SHA}-deploy.sh && chmod 700 /tmp/koa-bot-${GITHUB_SHA}-deploy.sh && /tmp/koa-bot-${GITHUB_SHA}-deploy.sh ${GITHUB_SHA}"

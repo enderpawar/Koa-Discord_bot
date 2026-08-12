@@ -305,7 +305,7 @@ async def test_get_account_uses_regional_host_and_auth(monkeypatch):
     )
     assert capture["headers"] == {
         "X-Riot-Token": "test-key",
-        "User-Agent": "NothingBot/1.0",
+        "User-Agent": "KoaBot/1.0",
     }
 
 

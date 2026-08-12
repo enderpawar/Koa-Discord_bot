@@ -127,7 +127,7 @@ class TTSControlView(discord.ui.View):
         label="TTS 켜기",
         emoji="🔊",
         style=discord.ButtonStyle.secondary,
-        custom_id="nothing_tts:enable",
+        custom_id="koa_tts:enable",
     )
     async def enable_tts(
         self, interaction: discord.Interaction, _: discord.ui.Button
@@ -138,7 +138,7 @@ class TTSControlView(discord.ui.View):
         label="TTS 끄기",
         emoji="🔇",
         style=discord.ButtonStyle.secondary,
-        custom_id="nothing_tts:disable",
+        custom_id="koa_tts:disable",
     )
     async def disable_tts(
         self, interaction: discord.Interaction, _: discord.ui.Button
