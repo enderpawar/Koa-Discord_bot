@@ -49,3 +49,25 @@ def test_web_dashboard_url_hides_unspecified_public_host(monkeypatch) -> None:
     monkeypatch.setenv("ADMIN_WEB_HOST", "0.0.0.0")
 
     assert _web_dashboard_url() is None
+
+
+def test_dashboard_url_survives_without_the_master_token(monkeypatch) -> None:
+    """서버별 키만 쓰는 배포에서도 안내 링크가 나와야 한다.
+
+    ADMIN_WEB_TOKEN 유무로 게이트하면 마스터 키를 없앤 순간 링크가 사라진다.
+    """
+    monkeypatch.delenv("ADMIN_WEB_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_WEB_PUBLIC_URL", raising=False)
+    monkeypatch.setenv("ADMIN_WEB_ENABLED", "1")
+    monkeypatch.setenv("ADMIN_WEB_HOST", "127.0.0.1")
+    monkeypatch.setenv("ADMIN_WEB_PORT", "8080")
+
+    assert _web_dashboard_url() == "http://127.0.0.1:8080"
+
+
+def test_dashboard_url_is_none_when_admin_is_off(monkeypatch) -> None:
+    monkeypatch.delenv("ADMIN_WEB_TOKEN", raising=False)
+    monkeypatch.delenv("ADMIN_WEB_PUBLIC_URL", raising=False)
+    monkeypatch.setenv("ADMIN_WEB_ENABLED", "0")
+
+    assert _web_dashboard_url() is None

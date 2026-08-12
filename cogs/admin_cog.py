@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from cogs.admin_key_store import AdminKeyStore
 from cogs.config_store import ConfigStore
+from cogs.web_admin_cog import _web_enabled
 from cogs.ui import BRAND_COLOR, INFO_COLOR, notice_embed
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,10 @@ def _web_dashboard_url() -> str | None:
     public_url = os.getenv("ADMIN_WEB_PUBLIC_URL", "").strip()
     if public_url:
         return public_url.rstrip("/")
-    if not os.getenv("ADMIN_WEB_TOKEN"):
+    # 어드민이 켜져 있는지로 판단한다. ADMIN_WEB_TOKEN 은 운영자 마스터 키라
+    # 없는 구성이 정상이므로, 그 유무로 게이트하면 서버별 키만 쓰는 배포에서
+    # 안내 링크가 통째로 사라진다.
+    if not _web_enabled():
         return None
     host = os.getenv("ADMIN_WEB_HOST", "127.0.0.1")
     port = os.getenv("ADMIN_WEB_PORT") or os.getenv("PORT") or "8080"
