@@ -127,6 +127,16 @@ class _FakeRequest:
         self.cookies = cookies or {}
         self.headers = headers or {}
         self.remote = remote
+        self._state: dict = {}
+
+    def __setitem__(self, key, value):
+        self._state[key] = value
+
+    def __getitem__(self, key):
+        return self._state[key]
+
+    def get(self, key, default=None):
+        return self._state.get(key, default)
 
 
 def _cog() -> WebAdminCog:
@@ -139,7 +149,7 @@ def test_session_cookie_never_carries_the_admin_token(
     monkeypatch.setenv("ADMIN_WEB_TOKEN", "super-secret")
     cog = _cog()
 
-    sid = cog._issue_session()
+    sid = cog._issue_session(None)
 
     # 쿠키가 새더라도 새는 것은 세션 하나여야 한다. 토큰 자체가 담기면 안 된다.
     assert sid != "super-secret"
@@ -149,11 +159,11 @@ def test_session_cookie_never_carries_the_admin_token(
 
 def test_expired_session_is_rejected_and_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     cog = _cog()
-    sid = cog._issue_session()
+    sid = cog._issue_session(None)
     monkeypatch.setattr(
         web_admin_cog.time,
         "monotonic",
-        lambda: cog._sessions[sid] + 1,
+        lambda: cog._sessions[sid][1] + 1,
     )
 
     assert cog._session_valid(sid) is False
@@ -261,3 +271,132 @@ def test_dashboard_confirms_destructive_reset_in_page() -> None:
     assert 'id="clear_go"' in html
     # 브라우저 prompt() 는 쓰지 않는다 — 봇 자동화와 일부 브라우저에서 막힌다.
     assert "prompt(" not in html
+
+
+class _FakeGuild:
+    def __init__(self, guild_id: int, name: str) -> None:
+        self.id = guild_id
+        self.name = name
+        self.text_channels: list = []
+        self.voice_channels: list = []
+
+
+class _ScopedBot:
+    def __init__(self, *guilds: _FakeGuild) -> None:
+        self.guilds = list(guilds)
+
+    def get_guild(self, guild_id: int):
+        return next((g for g in self.guilds if g.id == guild_id), None)
+
+
+def _scoped_request(scope):
+    request = _FakeRequest()
+    request["scope"] = scope  # type: ignore[index]
+    return request
+
+
+def _req_with_scope(scope):
+    """dict 접근을 흉내내는 최소 요청 객체."""
+
+    class R(dict):
+        cookies: dict = {}
+        headers: dict = {}
+        remote = "10.0.0.1"
+
+    r = R()
+    r["scope"] = scope
+    return r
+
+
+def test_guild_scoped_session_cannot_reach_another_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """서버별 키의 핵심 보증 — 남의 서버 ID 를 직접 넣어도 막혀야 한다."""
+    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
+    monkeypatch.delenv("TEST_GUILD_ID", raising=False)
+    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "내 서버"), _FakeGuild(222, "남의 서버")))
+    request = _req_with_scope(111)
+
+    assert cog._guild(request, 111) is not None
+    assert cog._guild(request, "111") is not None
+    assert cog._guild(request, 222) is None
+    assert cog._guild(request, "222") is None
+
+
+def test_guild_scoped_session_sees_only_its_own_guild(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
+    monkeypatch.delenv("TEST_GUILD_ID", raising=False)
+    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "내 서버"), _FakeGuild(222, "남의 서버")))
+
+    visible = cog._visible_guilds(_req_with_scope(111))
+
+    assert [g.id for g in visible] == [111]
+
+
+def test_operator_scope_sees_every_guild(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ADMIN_WEB_GUILD_IDS", raising=False)
+    monkeypatch.delenv("TEST_GUILD_ID", raising=False)
+    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a"), _FakeGuild(222, "b")))
+
+    visible = cog._visible_guilds(_req_with_scope(None))
+
+    assert [g.id for g in visible] == [111, 222]
+    assert cog._guild(_req_with_scope(None), 222) is not None
+
+
+def test_allowlist_restricts_operator_but_not_guild_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ADMIN_WEB_GUILD_IDS 는 운영자 범위 전용.
+
+    서버 주인이 직접 받은 키가 운영자의 편의 설정 때문에 막히면 안 된다.
+    """
+    monkeypatch.setenv("ADMIN_WEB_GUILD_IDS", "111")
+    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a"), _FakeGuild(222, "b")))
+
+    assert cog._guild(_req_with_scope(None), 222) is None
+    assert cog._guild(_req_with_scope(222), 222) is not None
+
+
+def test_session_scope_is_carried_from_cookie(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADMIN_WEB_TOKEN", "operator-token")
+    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a")))
+    sid = cog._issue_session(111)
+    request = _FakeRequest(cookies={web_admin_cog._COOKIE_NAME: sid})
+
+    assert cog._authorized(request) is True
+    assert request["scope"] == 111
+
+
+def test_header_token_grants_operator_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADMIN_WEB_TOKEN", "operator-token")
+    cog = WebAdminCog(bot=_ScopedBot())
+    request = _FakeRequest(headers={"X-Admin-Token": "operator-token"})
+
+    assert cog._authorized(request) is True
+    assert request["scope"] is None
+
+
+def test_empty_operator_token_never_authorizes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """전역 토큰 없이 운영하는 구성에서 빈 문자열로 뚫리면 안 된다."""
+    monkeypatch.delenv("ADMIN_WEB_TOKEN", raising=False)
+    cog = WebAdminCog(bot=_ScopedBot())
+
+    assert cog._authorized(_FakeRequest(headers={"X-Admin-Token": ""})) is False
+    assert cog._authorized(_FakeRequest(headers={"Authorization": "Bearer "})) is False
+
+
+async def test_reissue_revokes_live_sessions_for_that_guild() -> None:
+    cog = WebAdminCog(bot=_ScopedBot(_FakeGuild(111, "a"), _FakeGuild(222, "b")))
+    mine = cog._issue_session(111)
+    other = cog._issue_session(222)
+    operator = cog._issue_session(None)
+
+    dropped = await cog.revoke_sessions_for_guild(111)
+
+    assert dropped == 1
+    assert cog._session_valid(mine) is False
+    assert cog._session_valid(other) is True
+    assert cog._session_valid(operator) is True

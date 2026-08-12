@@ -2,6 +2,8 @@
 .env
 .deploy/
 config.json
+admin_keys.json
+admin_keys.json.corrupt
 rank_stats.json
 party.db
 party.db-shm

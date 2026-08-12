@@ -34,6 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MAPPING: list[tuple[str, str]] = [
     (r"(^|/)bot\.py$",                "tests/unit/test_smoke.py"),
     (r"cogs/config_store\.py$",       "tests/unit/test_config_store.py"),
+    (r"cogs/admin_key_store\.py$",    "tests/unit/test_admin_keys.py"),
     (r"cogs/preprocess\.py$",         "tests/unit/test_preprocess.py"),
     (r"cogs/tts_engine\.py$",         "tests/unit/test_tts_engine.py"),
     (r"cogs/audio_queue\.py$",        "tests/unit/test_audio_queue.py"),

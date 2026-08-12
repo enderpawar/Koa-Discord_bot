@@ -15,6 +15,7 @@ import discord
 from aiohttp import web
 from discord.ext import commands
 
+from cogs.admin_key_store import AdminKeyStore
 from cogs.config_store import ConfigStore
 from cogs.rank_cog import DEFAULT_LEADERBOARD_POST_TIME
 from cogs.rank_store import weekly_reset_anchor
@@ -175,30 +176,47 @@ class WebAdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.store = ConfigStore()
+        self.keys = AdminKeyStore()
+        # 전역(운영자) 토큰. 비워 두면 서버별 키로만 로그인할 수 있다.
         self._token = os.getenv("ADMIN_WEB_TOKEN", "")
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
-        # 세션 ID -> 만료 시각(monotonic). 프로세스 메모리에만 둔다. 재시작하면
-        # 전부 무효가 되는데, 어드민 세션에서는 그게 올바른 기본값이다.
-        self._sessions: dict[str, float] = {}
+        # 세션 ID -> (범위 guild_id 또는 None, 만료 시각 monotonic).
+        # 범위 None = 운영자 전역. 프로세스 메모리에만 두므로 재시작하면 전부
+        # 무효가 되는데, 어드민 세션에서는 그게 올바른 기본값이다.
+        self._sessions: dict[str, tuple[int | None, float]] = {}
         # 클라이언트 IP -> (연속 실패 횟수, 잠금 해제 시각)
         self._login_failures: dict[str, tuple[int, float]] = {}
 
-    def _issue_session(self) -> str:
+    def _issue_session(self, scope: int | None) -> str:
         now = time.monotonic()
-        self._sessions = {sid: exp for sid, exp in self._sessions.items() if exp > now}
+        self._sessions = {
+            sid: value for sid, value in self._sessions.items() if value[1] > now
+        }
         sid = secrets.token_urlsafe(32)
-        self._sessions[sid] = now + _SESSION_TTL_SECONDS
+        self._sessions[sid] = (scope, now + _SESSION_TTL_SECONDS)
         return sid
 
-    def _session_valid(self, sid: str) -> bool:
-        expiry = self._sessions.get(sid)
-        if expiry is None:
-            return False
+    def _session_scope(self, sid: str) -> tuple[bool, int | None]:
+        """(유효한가, 범위 guild_id). 범위 None 은 전역(운영자)."""
+        record = self._sessions.get(sid)
+        if record is None:
+            return False, None
+        scope, expiry = record
         if expiry <= time.monotonic():
             self._sessions.pop(sid, None)
-            return False
-        return True
+            return False, None
+        return True, scope
+
+    def _session_valid(self, sid: str) -> bool:
+        return self._session_scope(sid)[0]
+
+    async def revoke_sessions_for_guild(self, guild_id: int) -> int:
+        """해당 길드 범위의 활성 세션을 모두 끊는다. 키 재발급 시 호출."""
+        doomed = [sid for sid, (scope, _) in self._sessions.items() if scope == guild_id]
+        for sid in doomed:
+            self._sessions.pop(sid, None)
+        return len(doomed)
 
     @staticmethod
     def _client_ip(request: web.Request) -> str:
@@ -232,9 +250,9 @@ class WebAdminCog(commands.Cog):
         if not _web_enabled():
             log.info("web admin disabled")
             return
+        # 전역 토큰이 없어도 서버별 키만으로 운영할 수 있다 (마스터 키 없는 구성).
         if not self._token:
-            log.warning("web admin requested but ADMIN_WEB_TOKEN is not set")
-            return
+            log.info("web admin running without a global token — per-guild keys only")
 
         # 템플릿을 미리 읽어 둔다. 여기서 걸러야 첫 접속 때 500 을 보는 대신
         # 기동 로그에서 원인을 알 수 있다 (Rule 03: 봇 전체를 죽이지는 않는다).
@@ -308,16 +326,26 @@ class WebAdminCog(commands.Cog):
         raise web.HTTPFound("/login")
 
     def _authorized(self, request: web.Request) -> bool:
+        """인증에 성공하면 request['scope'] 에 범위를 심는다.
+
+        scope 가 None 이면 운영자(전역), 정수면 그 길드 하나로 한정된다.
+        """
         sid = request.cookies.get(_COOKIE_NAME, "")
-        if sid and self._session_valid(sid):
-            return True
+        if sid:
+            valid, scope = self._session_scope(sid)
+            if valid:
+                request["scope"] = scope
+                return True
         # 비브라우저 클라이언트(스크립트·모니터링)용 경로. 헤더로만 받는다.
         # 쿼리스트링(?token=)은 지원하지 않는다 — 접근 로그, Referer 헤더,
         # 브라우저 히스토리, 프록시 캐시에 토큰이 그대로 남기 때문이다.
         header = request.headers.get("Authorization", "")
         bearer = header.removeprefix("Bearer ").strip() if header.startswith("Bearer ") else ""
         supplied = bearer or request.headers.get("X-Admin-Token", "")
-        return bool(supplied) and hmac.compare_digest(supplied, self._token)
+        if supplied and hmac.compare_digest(supplied, self._token):
+            request["scope"] = None
+            return True
+        return False
 
     def _render(self, request: web.Request, name: str, *, error: str = "", status: int = 200) -> web.Response:
         html = _template(name).replace("{{NONCE}}", request.get("csp_nonce", ""))
@@ -342,20 +370,36 @@ class WebAdminCog(commands.Cog):
 
         data = await request.post()
         token = str(data.get("token", ""))
-        if not hmac.compare_digest(token, self._token):
-            self._record_login_failure(ip)
-            return self._render(
-                request,
-                _LOGIN_TEMPLATE,
-                error="토큰이 올바르지 않습니다.",
-                status=401,
-            )
+
+        # 1) 운영자 토큰 — 전역 범위. 2) 서버별 키 — 그 서버 하나로 한정.
+        if self._token and hmac.compare_digest(token, self._token):
+            scope: int | None = None
+        else:
+            scope = await self.keys.find_guild(token)
+            if scope is None:
+                self._record_login_failure(ip)
+                return self._render(
+                    request,
+                    _LOGIN_TEMPLATE,
+                    error="키가 올바르지 않습니다.",
+                    status=401,
+                )
+            # 키는 살아 있는데 봇이 그 서버에서 쫓겨난 경우. 들여보내도 볼 게 없다.
+            if self.bot.get_guild(scope) is None:
+                self._record_login_failure(ip)
+                return self._render(
+                    request,
+                    _LOGIN_TEMPLATE,
+                    error="이 키의 서버에 코아가 없습니다. 다시 초대한 뒤 이용하세요.",
+                    status=401,
+                )
 
         self._login_failures.pop(ip, None)
+        log.info("web admin login: scope=%s", scope if scope is not None else "operator")
         response = web.HTTPFound("/")
         response.set_cookie(
             _COOKIE_NAME,
-            self._issue_session(),
+            self._issue_session(scope),
             httponly=True,
             secure=_cookie_secure(),
             samesite="Strict",
@@ -375,8 +419,8 @@ class WebAdminCog(commands.Cog):
 
     async def _api_state(self, request: web.Request) -> web.Response:
         guild_id = request.query.get("guild_id")
-        guilds = self._visible_guilds()
-        guild = self._guild(guild_id) if guild_id else (guilds[0] if guilds else None)
+        guilds = self._visible_guilds(request)
+        guild = self._guild(request, guild_id) if guild_id else (guilds[0] if guilds else None)
         if guild is None:
             return web.json_response(
                 {
@@ -408,7 +452,7 @@ class WebAdminCog(commands.Cog):
 
     async def _api_config(self, request: web.Request) -> web.Response:
         payload = await request.json()
-        guild = self._guild(payload.get("guild_id"))
+        guild = self._guild(request, payload.get("guild_id"))
         if guild is None:
             return web.json_response({"error": "guild not found"}, status=404)
 
@@ -431,7 +475,7 @@ class WebAdminCog(commands.Cog):
         return web.json_response({"ok": True, "config": await self.store.get(guild.id)})
 
     async def _api_leaderboard(self, request: web.Request) -> web.Response:
-        guild = self._guild(request.query.get("guild_id"))
+        guild = self._guild(request, request.query.get("guild_id"))
         if guild is None:
             return web.json_response({"error": "guild not found"}, status=404)
         rank_cog = self.bot.get_cog("RankCog")
@@ -450,7 +494,7 @@ class WebAdminCog(commands.Cog):
         )
 
     async def _api_leaderboard_history(self, request: web.Request) -> web.Response:
-        guild = self._guild(request.query.get("guild_id"))
+        guild = self._guild(request, request.query.get("guild_id"))
         if guild is None:
             return web.json_response({"error": "guild not found"}, status=404)
         rank_cog = self.bot.get_cog("RankCog")
@@ -473,7 +517,7 @@ class WebAdminCog(commands.Cog):
 
     async def _api_post_leaderboard(self, request: web.Request) -> web.Response:
         payload = await request.json()
-        guild = self._guild(payload.get("guild_id"))
+        guild = self._guild(request, payload.get("guild_id"))
         if guild is None:
             return web.json_response({"error": "guild not found"}, status=404)
         cfg = await self.store.get(guild.id)
@@ -492,7 +536,7 @@ class WebAdminCog(commands.Cog):
 
     async def _api_clear_leaderboard(self, request: web.Request) -> web.Response:
         payload = await request.json()
-        guild = self._guild(payload.get("guild_id"))
+        guild = self._guild(request, payload.get("guild_id"))
         if guild is None:
             return web.json_response({"error": "guild not found"}, status=404)
         if payload.get("confirm") != "CLEAR":
@@ -503,17 +547,37 @@ class WebAdminCog(commands.Cog):
         result = await rank_cog.store.clear_guild(guild.id)
         return web.json_response({"ok": True, **result})
 
-    def _guild(self, guild_id: Any) -> discord.Guild | None:
+    @staticmethod
+    def _scope(request: web.Request) -> int | None:
+        return request.get("scope")
+
+    def _guild(self, request: web.Request, guild_id: Any) -> discord.Guild | None:
+        """요청이 건드려도 되는 길드만 돌려준다.
+
+        세션 범위가 특정 길드면 그 길드 외에는 무조건 None 이다. 범위 밖 ID 를
+        직접 넣어 보내는 요청이 여기서 막힌다 — 모든 API 핸들러의 유일한 관문.
+        """
         try:
             target_id = int(guild_id)
         except (TypeError, ValueError):
             return None
+        scope = self._scope(request)
+        if scope is not None:
+            if target_id != scope:
+                return None
+            return self.bot.get_guild(target_id)
+        # 운영자 범위에서만 ADMIN_WEB_GUILD_IDS 허용 목록을 적용한다. 서버별 키는
+        # 그 서버 주인이 직접 받은 것이므로 운영자 목록과 무관하게 동작해야 한다.
         allowed_ids = _allowed_guild_ids()
         if allowed_ids and target_id not in allowed_ids:
             return None
         return self.bot.get_guild(target_id)
 
-    def _visible_guilds(self) -> list[discord.Guild]:
+    def _visible_guilds(self, request: web.Request) -> list[discord.Guild]:
+        scope = self._scope(request)
+        if scope is not None:
+            guild = self.bot.get_guild(scope)
+            return [guild] if guild is not None else []
         allowed_ids = _allowed_guild_ids()
         if not allowed_ids:
             return list(self.bot.guilds)

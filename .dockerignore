@@ -16,6 +16,7 @@ __pycache__/
 data/
 .agents/
 config.json
+admin_keys.json
 *.mp3
 *.tmp
 .ttsCache/

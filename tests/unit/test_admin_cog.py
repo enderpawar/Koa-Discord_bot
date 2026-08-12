@@ -19,9 +19,12 @@ def test_dashboard_embed_points_to_web_ui(monkeypatch) -> None:
     embed = _dashboard_embed()
 
     assert embed.title == "관리자 대시보드"
-    assert [field.name for field in embed.fields] == ["접속", "관리 항목"]
+    assert [field.name for field in embed.fields] == ["접속", "로그인 키", "관리 항목"]
     assert "웹 대시보드 열기" in embed.fields[0].value
-    assert "TTS 입력 채널" in embed.fields[1].value
+    # 로그인은 서버별 키로 한다. 전역 토큰을 안내하면 안 된다.
+    assert "/관리자 키재발급" in embed.fields[1].value
+    assert "ADMIN_WEB_TOKEN" not in embed.fields[1].value
+    assert "TTS 입력 채널" in embed.fields[2].value
 
 
 def test_web_dashboard_url_prefers_public_url(monkeypatch) -> None:
