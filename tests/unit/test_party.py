@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,7 +16,6 @@ from cogs.party_cog import (
     can_mention_game_role,
     parse_party_start,
     party_embed,
-    resolve_game_role,
 )
 from cogs.party_store import PartyStore
 
@@ -82,59 +82,42 @@ def test_game_role_can_use_role_setting_or_bot_permission() -> None:
     assert not can_mention_game_role(everyone, mention_permissions)
 
 
-class _FakeGuild:
-    def __init__(self, *roles) -> None:
-        self.roles = list(roles)
-
-    def get_role(self, role_id: int):
-        return next((role for role in self.roles if role.id == role_id), None)
+_TEST_BOT = commands.Bot(command_prefix="!", intents=discord.Intents.none())
 
 
-def _role(role_id: int, name: str, *, default: bool = False, position: int = 1):
-    return SimpleNamespace(
-        id=role_id,
-        name=name,
-        position=position,
-        mentionable=True,
-        is_default=lambda: default,
-        mention=f"<@&{role_id}>",
-    )
+def _party_options() -> list[dict]:
+    return PartyCog.create_party.to_dict(_TEST_BOT.tree)["options"]
 
 
-def test_free_text_game_names_are_accepted_without_a_matching_role() -> None:
-    """`롤`, `발로` 처럼 역할이 없는 이름도 그대로 통과해야 한다."""
-    guild = _FakeGuild(_role(1, "옵치"), _role(2, "@everyone", default=True))
+def test_game_name_is_free_text_and_independent_of_any_role() -> None:
+    """게임 이름은 순수 텍스트다.
 
-    assert resolve_game_role(guild, "롤") is None
-    assert resolve_game_role(guild, "발로") is None
-    assert resolve_game_role(guild, "  ") is None
-    assert resolve_game_role(None, "롤") is None
-
-
-def test_matching_role_is_found_by_name_mention_or_id() -> None:
-    lol = _role(4321, "롤")
-    guild = _FakeGuild(lol, _role(2, "@everyone", default=True))
-
-    assert resolve_game_role(guild, "롤") is lol
-    assert resolve_game_role(guild, "  롤  ") is lol
-    assert resolve_game_role(guild, "<@&4321>") is lol
-    assert resolve_game_role(guild, "4321") is lol
-    # 이름 대소문자는 무시한다.
-    valorant = _role(99, "Valorant")
-    guild.roles.append(valorant)
-    assert resolve_game_role(guild, "valorant") is valorant
-    # @everyone 은 후보가 아니다.
-    assert resolve_game_role(guild, "@everyone") is None
-    # 존재하지 않는 ID 는 그냥 이름으로 본다.
-    assert resolve_game_role(guild, "123456789012345678") is None
-
-
-def test_party_command_takes_free_text_not_a_role_object() -> None:
-    """옵션이 역할 타입이면 Discord 가 자유 입력을 거부한다."""
+    역할 타입이면 Discord 가 `롤`, `발로` 를 "올바른 역할이 아닙니다" 로 막고,
+    자동완성을 붙이면 Tab 이 역할 후보를 대신 집어넣는다. 둘 다 없어야 한다.
+    """
     annotations = PartyCog.create_party.callback.__annotations__
-
     assert annotations["game"] == "str"
-    assert "game_role" not in annotations
+
+    game = next(option for option in _party_options() if option["name"] == "게임")
+    assert game["type"] == 3
+    assert game["required"] is True
+    assert not game.get("autocomplete", False)
+
+
+def test_ping_role_is_a_separate_optional_role_option() -> None:
+    tag = next(option for option in _party_options() if option["name"] == "태그")
+
+    assert tag["type"] == 8
+    assert tag["required"] is False
+
+
+def test_unmentionable_tag_does_not_block_party_creation() -> None:
+    """태그를 못 붙여도 파티는 열려야 한다. 예전에는 여기서 끊겼다."""
+    source = inspect.getsource(PartyCog.create_party.callback)
+
+    # 태그 검사가 조기 return 으로 파티 생성을 막지 않는다.
+    assert "태그 생략" in source
+    assert source.index("self.store.create") < source.index("태그 생략")
 
 
 async def test_create_and_bind_message_is_guild_isolated(store: PartyStore) -> None:
