@@ -59,8 +59,20 @@ def test_korean_chat_laughter_repeats_are_speakable():
     assert _clean("ㅋㅋㅋㅋㅋ") == "크크크크크"
 
 
-def test_question_mark_is_spoken_as_um_question():
+def test_question_only_message_is_spoken_once_regardless_of_count():
+    """되묻는 `?` 는 소리가 없어 그냥 두면 침묵이 나간다. 한 번만 읽어 준다."""
     assert _clean("?") == "음?"
+    assert _clean("??") == "음?"
+    assert _clean("????") == "음?"
+    assert _clean("  ???  ") == "음?"
+    assert _clean("? ?") == "음?"
+
+
+def test_question_mark_attached_to_a_sentence_is_left_alone():
+    """문장 뒤 물음표는 TTS 억양이 처리한다. `음` 을 끼우면 읽기가 망가진다."""
+    assert _clean("밥 먹었어?") == "밥 먹었어?"
+    assert _clean("뭐? 진짜??") == "뭐? 진짜??"
+    assert _clean("왜?????") == "왜?????"
 
 
 def test_korean_chat_crying_is_speakable():
@@ -68,4 +80,4 @@ def test_korean_chat_crying_is_speakable():
 
 
 def test_mixed_korean_chat_reactions_are_speakable():
-    assert _clean("ㅋㅋㅋㅋㅋ 나 ㅎㅎ? ㅠㅠ") == "크크크크크 나 하하음? 유유"
+    assert _clean("ㅋㅋㅋㅋㅋ 나 ㅎㅎ? ㅠㅠ") == "크크크크크 나 하하? 유유"
