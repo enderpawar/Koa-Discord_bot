@@ -10,7 +10,13 @@ import pytest
 import discord
 from discord.ext import commands
 
-from cogs.party_cog import can_mention_game_role, parse_party_start, party_embed
+from cogs.party_cog import (
+    PartyCog,
+    can_mention_game_role,
+    parse_party_start,
+    party_embed,
+    resolve_game_role,
+)
 from cogs.party_store import PartyStore
 
 KST = ZoneInfo("Asia/Seoul")
@@ -74,6 +80,61 @@ def test_game_role_can_use_role_setting_or_bot_permission() -> None:
     assert can_mention_game_role(private_role, mention_permissions)
     assert not can_mention_game_role(private_role, no_permissions)
     assert not can_mention_game_role(everyone, mention_permissions)
+
+
+class _FakeGuild:
+    def __init__(self, *roles) -> None:
+        self.roles = list(roles)
+
+    def get_role(self, role_id: int):
+        return next((role for role in self.roles if role.id == role_id), None)
+
+
+def _role(role_id: int, name: str, *, default: bool = False, position: int = 1):
+    return SimpleNamespace(
+        id=role_id,
+        name=name,
+        position=position,
+        mentionable=True,
+        is_default=lambda: default,
+        mention=f"<@&{role_id}>",
+    )
+
+
+def test_free_text_game_names_are_accepted_without_a_matching_role() -> None:
+    """`롤`, `발로` 처럼 역할이 없는 이름도 그대로 통과해야 한다."""
+    guild = _FakeGuild(_role(1, "옵치"), _role(2, "@everyone", default=True))
+
+    assert resolve_game_role(guild, "롤") is None
+    assert resolve_game_role(guild, "발로") is None
+    assert resolve_game_role(guild, "  ") is None
+    assert resolve_game_role(None, "롤") is None
+
+
+def test_matching_role_is_found_by_name_mention_or_id() -> None:
+    lol = _role(4321, "롤")
+    guild = _FakeGuild(lol, _role(2, "@everyone", default=True))
+
+    assert resolve_game_role(guild, "롤") is lol
+    assert resolve_game_role(guild, "  롤  ") is lol
+    assert resolve_game_role(guild, "<@&4321>") is lol
+    assert resolve_game_role(guild, "4321") is lol
+    # 이름 대소문자는 무시한다.
+    valorant = _role(99, "Valorant")
+    guild.roles.append(valorant)
+    assert resolve_game_role(guild, "valorant") is valorant
+    # @everyone 은 후보가 아니다.
+    assert resolve_game_role(guild, "@everyone") is None
+    # 존재하지 않는 ID 는 그냥 이름으로 본다.
+    assert resolve_game_role(guild, "123456789012345678") is None
+
+
+def test_party_command_takes_free_text_not_a_role_object() -> None:
+    """옵션이 역할 타입이면 Discord 가 자유 입력을 거부한다."""
+    annotations = PartyCog.create_party.callback.__annotations__
+
+    assert annotations["game"] == "str"
+    assert "game_role" not in annotations
 
 
 async def test_create_and_bind_message_is_guild_isolated(store: PartyStore) -> None:

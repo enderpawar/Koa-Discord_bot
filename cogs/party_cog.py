@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 MAX_SCHEDULE_DAYS = 30
 _CLOCK_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})$")
+_ROLE_MENTION_RE = re.compile(r"<@&(?P<id>\d{1,20})>")
+MAX_GAME_NAME_LENGTH = 50
 
 
 def parse_party_start(value: str, *, now: datetime | None = None) -> datetime:
@@ -90,6 +92,34 @@ def can_mention_game_role(
     return not role.is_default() and (
         role.mentionable or permissions.mention_everyone
     )
+
+
+def resolve_game_role(guild: discord.Guild | None, text: str) -> discord.Role | None:
+    """자유 입력에서 알림 보낼 역할을 찾아본다. 못 찾으면 None.
+
+    역할 멘션 → 역할 ID → 역할 이름(대소문자·공백 무시) 순으로 본다. 어느 것도
+    아니면 그냥 게임 이름으로 취급한다. `롤`, `발로` 처럼 서버에 해당 역할이
+    없는 이름으로도 파티를 열 수 있어야 하기 때문이다.
+    """
+    if guild is None:
+        return None
+    candidate = " ".join(text.split())
+    if not candidate:
+        return None
+
+    match = _ROLE_MENTION_RE.fullmatch(candidate)
+    if match:
+        return guild.get_role(int(match.group("id")))
+    if candidate.isdigit():
+        role = guild.get_role(int(candidate))
+        if role is not None:
+            return role
+
+    folded = candidate.casefold()
+    for role in guild.roles:
+        if not role.is_default() and role.name.casefold() == folded:
+            return role
+    return None
 
 
 def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Embed:
@@ -220,9 +250,9 @@ class PartyCog(commands.Cog):
         self.party_scheduler.cancel()
 
     @app_commands.command(name="파티모집", description="함께 플레이할 파티원을 모집합니다")
-    @app_commands.rename(game_role="게임", capacity="정원", start="시작", note="메모")
+    @app_commands.rename(game="게임", capacity="정원", start="시작", note="메모")
     @app_commands.describe(
-        game_role="알림을 보낼 게임 역할",
+        game="게임 이름 (롤, 발로 …). 같은 이름의 역할이 있으면 알림도 보냅니다",
         capacity="모집 정원(2~20명, 모집자 포함)",
         start="오늘 21:00, 내일 19:30, 2026-08-01 20:00",
         note="파티 설명이나 조건",
@@ -230,7 +260,7 @@ class PartyCog(commands.Cog):
     async def create_party(
         self,
         interaction: discord.Interaction,
-        game_role: discord.Role,
+        game: str,
         capacity: app_commands.Range[int, 2, 20],
         start: str,
         note: str = "",
@@ -247,22 +277,31 @@ class PartyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        if not can_mention_game_role(game_role, interaction.app_permissions):
+        # 역할은 선택 사항이다. 같은 이름의 역할이 있고 봇이 멘션할 수 있으면
+        # 알림을 함께 보내고, 없으면 그냥 그 이름으로 파티를 연다.
+        game_role = resolve_game_role(interaction.guild, game)
+        game_name = game_role.name if game_role is not None else " ".join(game.split())
+        ping_role = (
+            game_role
+            if game_role is not None
+            and can_mention_game_role(game_role, interaction.app_permissions)
+            else None
+        )
+
+        if not game_name:
             await interaction.response.send_message(
                 embed=notice_embed(
-                    "역할 확인",
-                    "이 역할은 봇이 멘션할 수 없습니다. 역할의 멘션 허용 설정을 "
-                    "켜거나 봇에 `모든 역할 멘션` 권한을 부여해 주세요.",
-                    tone="warn",
+                    "입력 확인", "게임 이름을 입력해 주세요.", tone="warn"
                 ),
                 ephemeral=True,
             )
             return
-        if len(game_role.name) > 50 or len(note.strip()) > 500:
+        if len(game_name) > MAX_GAME_NAME_LENGTH or len(note.strip()) > 500:
             await interaction.response.send_message(
                 embed=notice_embed(
                     "입력 확인",
-                    "게임 역할 이름은 50자, 메모는 500자 이하로 입력해 주세요.",
+                    f"게임 이름은 {MAX_GAME_NAME_LENGTH}자, 메모는 500자 이하로 "
+                    "입력해 주세요.",
                     tone="warn",
                 ),
                 ephemeral=True,
@@ -281,7 +320,7 @@ class PartyCog(commands.Cog):
             interaction.guild_id,
             interaction.channel_id,
             interaction.user.id,
-            game=game_role.name,
+            game=game_name,
             capacity=int(capacity),
             starts_at=starts_at.timestamp(),
             note=note,
@@ -289,12 +328,12 @@ class PartyCog(commands.Cog):
         allowed_mentions = discord.AllowedMentions(
             everyone=False,
             users=False,
-            roles=[game_role],
+            roles=[ping_role] if ping_role is not None else False,
             replied_user=False,
         )
         try:
             await interaction.response.send_message(
-                content=game_role.mention,
+                content=ping_role.mention if ping_role is not None else None,
                 embed=party_embed(party, interaction.guild),
                 view=self.view,
                 allowed_mentions=allowed_mentions,
@@ -321,11 +360,36 @@ class PartyCog(commands.Cog):
                 )
             return
         log.info(
-            "party created: guild_id=%s party_id=%s owner_id=%s",
+            "party created: guild_id=%s party_id=%s owner_id=%s role_ping=%s",
             interaction.guild_id,
             party.id,
             interaction.user.id,
+            ping_role.id if ping_role is not None else None,
         )
+
+    @create_party.autocomplete("game")
+    async def game_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """서버의 역할을 후보로 보여 준다. 목록에 없어도 그대로 입력하면 된다.
+
+        게임 옵션이 자유 입력이라 역할 선택기를 잃었다. 후보를 띄워 주면
+        기존처럼 골라 쓰는 흐름도 그대로 남는다.
+        """
+        guild = interaction.guild
+        if guild is None:
+            return []
+        typed = " ".join(current.split()).casefold()
+        roles = [
+            role
+            for role in sorted(guild.roles, key=lambda r: r.position, reverse=True)
+            if not role.is_default()
+            and len(role.name) <= MAX_GAME_NAME_LENGTH
+            and (not typed or typed in role.name.casefold())
+        ]
+        return [
+            app_commands.Choice(name=role.name, value=role.name) for role in roles[:25]
+        ]
 
     @app_commands.command(name="파티목록", description="현재 모집 중인 파티를 확인합니다")
     async def party_list(self, interaction: discord.Interaction) -> None:
