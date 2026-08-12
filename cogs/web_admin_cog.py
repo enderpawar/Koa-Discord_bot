@@ -344,9 +344,12 @@ class WebAdminCog(commands.Cog):
         log.info("web admin listening on http://%s:%s", _web_host(), _web_port())
         if _web_host() not in {"127.0.0.1", "localhost", "::1"} and not _cookie_secure():
             log.warning(
-                "web admin is exposed on %s over plain HTTP — the admin token and "
-                "session cookie travel unencrypted. Put it behind TLS and set "
-                "ADMIN_WEB_PUBLIC_URL=https://... (see docs/deploy-oracle.md)",
+                "web admin bound to %s over plain HTTP. If this port is reachable "
+                "from outside the host, keys and session cookies travel "
+                "unencrypted — put it behind TLS and set "
+                "ADMIN_WEB_PUBLIC_URL=https://... . Binding 0.0.0.0 inside a "
+                "container is fine as long as the port is published to the host "
+                "loopback only (see docker-compose.yml) and reached via SSH tunnel.",
                 _web_host(),
             )
 

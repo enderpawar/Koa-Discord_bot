@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 from aiohttp import web
@@ -470,3 +471,23 @@ def test_hsts_only_when_served_over_https(monkeypatch: pytest.MonkeyPatch) -> No
     secure = web.Response(text="hi")
     web_admin_cog._apply_security_headers(secure, "n")
     assert "max-age=31536000" in secure.headers["Strict-Transport-Security"]
+
+
+def test_compose_publishes_admin_port_to_loopback_only() -> None:
+    """도커 게시 주소가 0.0.0.0 이면 호스트 방화벽만 믿는 구성이 된다.
+
+    도커는 자체 iptables DOCKER 체인을 끼워 넣어 ufw 같은 호스트 방화벽을
+    우회하는 경우가 있다. 게시 주소 자체를 루프백으로 못박아야 안전하다.
+    """
+    raw = (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+    # 주석에 예시로 적힌 문자열이 걸리지 않게 실제 설정 줄만 본다.
+    lines = [
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    published = [line for line in lines if line.startswith("- ") and ":8080" in line]
+
+    assert published == ['- "127.0.0.1:8080:8080"'], published
