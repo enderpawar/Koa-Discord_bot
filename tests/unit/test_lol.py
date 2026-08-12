@@ -180,7 +180,7 @@ def test_profile_embed_fields():
     assert "자유 랭크" in names
     assert "최근 경기" in names
     recent = next(f for f in embed.fields if f.name == "최근 경기")
-    assert "나띵이" in recent.value
+    assert "코아" in recent.value
     solo = next(f for f in embed.fields if f.name == "솔로 랭크")
     assert "Platinum I" in solo.value
     flex = next(f for f in embed.fields if f.name == "자유 랭크")
@@ -213,22 +213,54 @@ def test_cooldown(monkeypatch):
 async def test_store_roundtrip_and_persistence(tmp_path: Path):
     path = tmp_path / "lol.json"
     store = LolStore(path)
-    await store.set(7, name="nick", tag="KR1", platform="kr")
-    assert await store.get(7) == {"name": "nick", "tag": "KR1", "platform": "kr"}
-    assert await store.get(8) is None
+    await store.set(100, 7, name="nick", tag="KR1", platform="kr")
+    assert await store.get(100, 7) == {"name": "nick", "tag": "KR1", "platform": "kr"}
+    assert await store.get(100, 8) is None
 
     reloaded = LolStore(path)
-    assert (await reloaded.get(7))["platform"] == "kr"
+    assert (await reloaded.get(100, 7))["platform"] == "kr"
 
-    assert await store.remove(7) is True
-    assert await store.remove(7) is False
+    assert await store.remove(100, 7) is True
+    assert await store.remove(100, 7) is False
+
+
+async def test_registration_is_isolated_per_guild(tmp_path: Path):
+    """A 서버에서 등록한 라이엇ID 가 B 서버에서 조회되면 안 된다.
+
+    등록하지 않은 서버의 아무나 `/롤 전적 @멤버` 로 남의 게임 계정을 들여다볼
+    수 있었던 문제. 디스코드 계정과 게임 계정의 연결이 본인이 등록한 서버
+    밖으로 나가지 않아야 한다.
+    """
+    store = LolStore(tmp_path / "lol.json")
+    await store.set(100, 7, name="nick", tag="KR1", platform="kr")
+
+    assert await store.get(200, 7) is None
+    assert await store.remove(200, 7) is False
+    # 원래 서버에서는 그대로 보인다.
+    assert await store.get(100, 7) is not None
+
+
+async def test_legacy_global_registrations_are_dropped(tmp_path: Path):
+    """길드 키가 없던 옛 파일은 백업 후 버린다.
+
+    어느 길드 것이었는지 알 수 없으므로 임의의 길드로 옮기면 그게 곧 유출이다.
+    """
+    path = tmp_path / "lol.json"
+    path.write_text(
+        '{"7": {"name": "nick", "tag": "KR1", "platform": "kr"}}', encoding="utf-8"
+    )
+
+    store = LolStore(path)
+
+    assert await store.get(100, 7) is None
+    assert path.with_suffix(".json.legacy").exists()
 
 
 async def test_store_recovers_from_corrupt(tmp_path: Path):
     path = tmp_path / "lol.json"
     path.write_text("broken", encoding="utf-8")
     store = LolStore(path)
-    assert await store.get(1) is None
+    assert await store.get(100, 1) is None
     assert path.with_suffix(".json.corrupt").exists()
 
 

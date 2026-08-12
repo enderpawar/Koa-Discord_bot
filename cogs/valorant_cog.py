@@ -221,7 +221,7 @@ def _profile_embed(
         )
         recent_value = "\n".join(lines)
         if reaction:
-            recent_value += f"\n\n💬 **나띵이:** {reaction}"
+            recent_value += f"\n\n💬 **코아:** {reaction}"
         embed.add_field(name="최근 경기", value=recent_value, inline=False)
 
     embed.set_footer(text="전적 제공: HenrikDev (비공식 API)")
@@ -237,7 +237,12 @@ class ValorantCog(commands.Cog):
     async def cog_unload(self) -> None:
         await api.close_session()
 
-    valorant = app_commands.Group(name="발로란트", description="발로란트 전적 조회")
+    # 등록은 서버 단위로 격리된다. DM 에서는 대상 서버를 특정할 수 없어
+    # guild_id 가 None 이 되고, 그러면 모든 DM 사용자가 한 버킷을 공유한다.
+    # 서버 전용으로 못박아 그 경로를 없앤다.
+    valorant = app_commands.Group(
+        name="발로란트", description="발로란트 전적 조회", guild_only=True
+    )
 
     # ---- 공통 --------------------------------------------------------------
 
@@ -341,6 +346,7 @@ class ValorantCog(commands.Cog):
         )
         platform_value = platform.value if platform else api.DEFAULT_PLATFORM
         await self.store.set(
+            interaction.guild_id,
             interaction.user.id,
             name=name,
             tag=tag,
@@ -371,7 +377,7 @@ class ValorantCog(commands.Cog):
         if not await self._check_cooldown(interaction):
             return
         target = member or interaction.user
-        reg = await self.store.get(target.id)
+        reg = await self.store.get(interaction.guild_id, target.id)
         if reg is None:
             who = "해당 멤버는" if member else "먼저"
             await interaction.response.send_message(
@@ -437,7 +443,7 @@ class ValorantCog(commands.Cog):
 
     @valorant.command(name="등록해제", description="내 계정에 등록한 라이엇ID를 삭제합니다")
     async def unregister(self, interaction: discord.Interaction) -> None:
-        removed = await self.store.remove(interaction.user.id)
+        removed = await self.store.remove(interaction.guild_id, interaction.user.id)
         if removed:
             embed = notice_embed("삭제 완료", "등록된 라이엇ID를 삭제했습니다.", tone="ok")
         else:

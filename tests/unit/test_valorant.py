@@ -123,7 +123,7 @@ def test_profile_embed_fields():
     assert "최고 랭크" in field_names
     assert "최근 경기" in field_names
     recent = next(f for f in embed.fields if f.name == "최근 경기")
-    assert "나띵이" in recent.value
+    assert "코아" in recent.value
     current_field = next(f for f in embed.fields if f.name == "현재 랭크")
     assert "Immortal 1" in current_field.value
     assert "42 RR" in current_field.value
@@ -170,26 +170,48 @@ def test_cooldown_blocks_then_allows(monkeypatch):
 async def test_store_roundtrip_and_persistence(tmp_path: Path):
     path = tmp_path / "ids.json"
     store = ValorantStore(path)
-    await store.set(42, name="nick", tag="KR1", region="kr", platform="pc")
+    await store.set(100, 42, name="nick", tag="KR1", region="kr", platform="pc")
 
-    got = await store.get(42)
+    got = await store.get(100, 42)
     assert got == {"name": "nick", "tag": "KR1", "region": "kr", "platform": "pc"}
-    assert await store.get(99) is None
+    assert await store.get(100, 99) is None
 
     # 새 인스턴스가 디스크에서 복원해야 한다
     reloaded = ValorantStore(path)
-    assert (await reloaded.get(42))["name"] == "nick"
+    assert (await reloaded.get(100, 42))["name"] == "nick"
 
-    assert await store.remove(42) is True
-    assert await store.remove(42) is False
-    assert await store.get(42) is None
+    assert await store.remove(100, 42) is True
+    assert await store.remove(100, 42) is False
+
+
+async def test_registration_is_isolated_per_guild(tmp_path: Path):
+    """A 서버에서 등록한 라이엇ID 가 B 서버에서 조회되면 안 된다."""
+    store = ValorantStore(tmp_path / "ids.json")
+    await store.set(100, 42, name="nick", tag="KR1", region="kr", platform="pc")
+
+    assert await store.get(200, 42) is None
+    assert await store.remove(200, 42) is False
+    assert await store.get(100, 42) is not None
+
+
+async def test_legacy_global_registrations_are_dropped(tmp_path: Path):
+    path = tmp_path / "ids.json"
+    path.write_text(
+        '{"42": {"name": "nick", "tag": "KR1", "region": "kr", "platform": "pc"}}',
+        encoding="utf-8",
+    )
+
+    store = ValorantStore(path)
+
+    assert await store.get(100, 42) is None
+    assert path.with_suffix(".json.legacy").exists()
 
 
 async def test_store_recovers_from_corrupt_file(tmp_path: Path):
     path = tmp_path / "ids.json"
     path.write_text("{ not json", encoding="utf-8")
     store = ValorantStore(path)  # 손상 파일이어도 예외 없이 빈 상태로 시작
-    assert await store.get(1) is None
+    assert await store.get(100, 1) is None
     assert path.with_suffix(".json.corrupt").exists()
 
 

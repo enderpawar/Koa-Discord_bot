@@ -1,4 +1,4 @@
-"""최근 경기 성과를 나띵이 말투의 짧은 평가로 바꾼다."""
+"""최근 경기 성과를 코아 말투의 짧은 평가로 바꾼다."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,16 +42,16 @@ def cute_recent_reaction(games: list[RecentPerformance]) -> str | None:
     if wins >= 2 and losses == 0 and kda >= 4.0:
         return (
             "오! 최고예요!! 오늘 완전 캐리 머신인데요? "
-            "나띵이도 버스 태워 주세요! ✨"
+            "코아도 버스 태워 주세요! ✨"
         )
     if wins >= 2 and losses == 0:
-        return "연승 냄새가 솔솔 나요! 나띵이가 응원봉부터 챙길게요! 🎉"
+        return "연승 냄새가 솔솔 나요! 코아가 응원봉부터 챙길게요! 🎉"
     if decided and wins / len(decided) >= 2 / 3 and kda >= 2.5:
         return "우와, 완전 잘했어요! 오늘 손에 꿀 발랐나요? 🍯"
     if losses >= 2 and losses > wins and kda >= 3.5:
         return (
             "졌는데 혼자 왜 이렇게 잘했어요? "
-            "나띵이가 몰래 MVP 도장 찍어 줄게요! 🏅"
+            "코아가 몰래 MVP 도장 찍어 줄게요! 🏅"
         )
     if losses >= 2 and wins == 0 and kda < 1.0:
         return (
@@ -66,7 +66,7 @@ def cute_recent_reaction(games: list[RecentPerformance]) -> str | None:
     if losses >= 2 and wins == 0:
         return (
             "으앙... 오늘 게임이 너무 매워요. "
-            "다음 판엔 나띵이가 응원 버프 줄게요! 🌶️"
+            "다음 판엔 코아가 응원 버프 줄게요! 🌶️"
         )
     if kda >= 3.0:
         return "오호, 폼이 꽤 좋은데요? 다음 판엔 진짜 캐리 각이에요! 😎"
@@ -74,4 +74,4 @@ def cute_recent_reaction(games: list[RecentPerformance]) -> str | None:
         return "좋아요~ 승리 저금통이 차곡차곡 쌓이고 있어요! 🐷"
     if kda >= 1.5:
         return "음~ 슬슬 손이 풀리고 있어요! 다음 판엔 더 잘할 수 있겠죠? 👀"
-    return "흐음... 아직 예열 중인가 봐요. 다음 판은 나띵이 믿고 가는 거예요! 🔥"
+    return "흐음... 아직 예열 중인가 봐요. 다음 판은 코아 믿고 가는 거예요! 🔥"
