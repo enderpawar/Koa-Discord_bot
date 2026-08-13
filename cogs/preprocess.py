@@ -42,45 +42,6 @@ MAX_PRONUNCIATION_RULES = 100
 MAX_PRONUNCIATION_KEY = 20
 MAX_PRONUNCIATION_VALUE = 40
 
-# 감정 라벨. Azure 스타일 이름과 철자가 같지만 여기서는 그냥 라벨이다 —
-# 어떤 보이스가 어떤 스타일을 실제로 지원하는지는 tts_engine 이 판단한다.
-TONE_CHEERFUL = "cheerful"
-TONE_SAD = "sad"
-TONE_EXCITED = "excited"
-
-_LAUGH_RE = re.compile(r"[ㅋㅎ]")
-_CRY_RE = re.compile(r"[ㅠㅜ]")
-_BANG_RE = re.compile(r"[!！]")
-# 자음 하나짜리(`ㅋ`, `ㅠ`)는 추임새나 오타일 때가 많다. 두 번은 반복해야
-# 감정으로 친다.
-_TONE_MIN_REPEAT = 2
-_TONE_MIN_BANGS = 2
-
-
-def detect_tone(text: str) -> str | None:
-    """원문에서 감정 신호를 읽는다. 애매하면 None(기본 톤).
-
-    반드시 **정제 전 원문**에 대해 부른다. `clean_message` 는 `ㅋㅋ` 를 `크크` 로
-    바꾸므로, 그 뒤에 부르면 신호가 이미 사라진 뒤다.
-
-    확신이 없으면 감정을 붙이지 않는다. 잘못 얹은 감정은 밋밋한 낭독보다 훨씬
-    귀에 거슬린다.
-    """
-    if not text:
-        return None
-    laughs = len(_LAUGH_RE.findall(text))
-    cries = len(_CRY_RE.findall(text))
-    if laughs >= _TONE_MIN_REPEAT or cries >= _TONE_MIN_REPEAT:
-        if laughs > cries:
-            return TONE_CHEERFUL
-        if cries > laughs:
-            return TONE_SAD
-        # `ㅋㅋㅠㅠ` 처럼 웃음과 울음이 같은 무게면 어느 쪽도 고르지 않는다.
-        return None
-    if len(_BANG_RE.findall(text)) >= _TONE_MIN_BANGS:
-        return TONE_EXCITED
-    return None
-
 
 class _MessageLike(Protocol):
     clean_content: str

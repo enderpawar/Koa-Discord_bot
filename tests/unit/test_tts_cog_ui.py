@@ -14,12 +14,9 @@ from cogs.tts_engine import DEFAULT_VOICE
 def test_voice_choices_include_all_available_korean_voices() -> None:
     values = [choice.value for choice in VOICE_CHOICES]
 
-    assert len(values) == 12
-    assert len(set(values)) == 12
+    assert len(values) == 10
+    assert len(set(values)) == 10
     assert values == [
-        # 감정 톤이 실제로 동작하는 유일한 선택지다. 찾기 쉽게 맨 위에 둔다.
-        "ko-KR-Haena:MAI-Voice-2",
-        "ko-KR-Junho:MAI-Voice-2",
         "ko-KR-SunHiNeural",
         "ko-KR-JiMinNeural",
         "ko-KR-SeoHyeonNeural",
@@ -63,14 +60,13 @@ def test_tts_status_embed_groups_settings() -> None:
         "음성 채널",
         "보이스",
         "발음 사전",
-        "감정 톤",
         "상태",
     ]
     assert embed.fields[0].value == "<#11>"
     assert embed.fields[1].value == "<#22>"
     assert "여성 · 차분" in embed.fields[2].value
     assert embed.fields[3].value == "1개 규칙"
-    assert embed.fields[5].value == "재생 준비됨"
+    assert embed.fields[4].value == "재생 준비됨"
 
 
 def test_tts_status_embed_points_at_join_when_not_connected() -> None:
@@ -78,25 +74,7 @@ def test_tts_status_embed_points_at_join_when_not_connected() -> None:
     embed = _tts_status_embed({"voice": "ko-KR-SunHiNeural"})
 
     assert embed.fields[3].value == "등록된 규칙 없음"
-    assert "/입장" in embed.fields[5].value
-
-
-def test_status_explains_why_emotion_is_silent(monkeypatch) -> None:
-    """서버 로그를 못 볼 때 `/상태` 만으로 원인이 갈려야 한다."""
-    import cogs.tts_engine as engine
-
-    monkeypatch.setattr(engine, "_voice_styles", None)
-    assert "못 받았습니다" in _tts_status_embed({"voice": "v"}).fields[4].value
-
-    monkeypatch.setattr(engine, "_voice_styles", {"v": frozenset()})
-    assert "지원하지 않습니다" in _tts_status_embed({"voice": "v"}).fields[4].value
-
-    monkeypatch.setattr(engine, "_voice_styles", {"other": frozenset({"sad"})})
-    assert "목록에 없습니다" in _tts_status_embed({"voice": "v"}).fields[4].value
-
-    monkeypatch.setattr(engine, "_voice_styles", {"v": frozenset({"cheerful", "sad"})})
-    value = _tts_status_embed({"voice": "v"}).fields[4].value
-    assert "사용 중" in value and "cheerful, sad" in value
+    assert "/입장" in embed.fields[4].value
 
 
 def _make_cog(cfg: dict | None = None) -> TTSCog:
@@ -481,53 +459,6 @@ async def test_handle_tts_message_reads_joined_voice_channel_chat() -> None:
     request = cog.queue.enqueue.await_args.args[1]
     assert request.voice_channel_id == voice_channel.id
     assert request.text == "음성 채널 채팅"
-
-
-@pytest.mark.asyncio
-async def test_handle_tts_message_carries_the_detected_tone() -> None:
-    """톤은 정제 전 원문에서 읽어야 한다. `크크크` 에는 신호가 남지 않는다."""
-    cog = _make_cog({
-        "tts_channel_id": 100,
-        "voice_channel_id": 100,
-        "voice": "ko-KR-SunHiNeural",
-    })
-    voice_channel = _voice_channel(100)
-    voice_channel.members = [_human(10)]
-    message = MagicMock()
-    message.guild = MagicMock()
-    message.guild.id = 1
-    message.guild.get_channel.return_value = voice_channel
-    message.guild.voice_client = _connected_voice(voice_channel)
-    message.channel = voice_channel
-    message.clean_content = "ㅋㅋㅋ 대박"
-
-    await cog._handle_tts_message(message)
-
-    request = cog.queue.enqueue.await_args.args[1]
-    assert request.tone == "cheerful"
-    assert request.text == "크크크 대박"
-
-
-@pytest.mark.asyncio
-async def test_handle_tts_message_leaves_plain_text_without_a_tone() -> None:
-    cog = _make_cog({
-        "tts_channel_id": 100,
-        "voice_channel_id": 100,
-        "voice": "ko-KR-SunHiNeural",
-    })
-    voice_channel = _voice_channel(100)
-    voice_channel.members = [_human(10)]
-    message = MagicMock()
-    message.guild = MagicMock()
-    message.guild.id = 1
-    message.guild.get_channel.return_value = voice_channel
-    message.guild.voice_client = _connected_voice(voice_channel)
-    message.channel = voice_channel
-    message.clean_content = "오늘 회의 3시입니다"
-
-    await cog._handle_tts_message(message)
-
-    assert cog.queue.enqueue.await_args.args[1].tone is None
 
 
 @pytest.mark.asyncio

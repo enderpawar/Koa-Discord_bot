@@ -52,8 +52,8 @@ python bot.py
 
 Cog (각각 = Phase 산출물 1개):
 - `cogs/config_store.py` — guild→설정 JSON. `asyncio.Lock` + `os.replace` 로 원자적 쓰기.
-- `cogs/preprocess.py` — 순수 함수 `clean_message(message, *, pronunciations) -> str`, `detect_tone(text) -> str | None`. 멘션/URL/마크다운 제거, 서버별 발음 사전 치환, 200자 truncate. `detect_tone` 은 **정제 전 원문**에 대해 부른다.
-- `cogs/tts_engine.py` — `synthesize(text, voice, *, tone) -> Path`. Azure Speech REST (`{region}.tts.speech.microsoft.com/cognitiveservices/v1`) + module-level `aiohttp.ClientSession` 재사용. 감정 스타일은 기동 시 `voices/list` 에서 받은 `StyleList` 에 있는 것만 쓴다 — 지원 표를 코드에 박지 말 것.
+- `cogs/preprocess.py` — 순수 함수 `clean_message(message, *, pronunciations) -> str`. 멘션/URL/마크다운 제거, 서버별 발음 사전 치환, 200자 truncate.
+- `cogs/tts_engine.py` — `synthesize(text, voice) -> Path`. Azure Speech REST (`{region}.tts.speech.microsoft.com/cognitiveservices/v1`) + module-level `aiohttp.ClientSession` 재사용.
 - `cogs/audio_queue.py` — guild별 `asyncio.Queue` + worker task. `voice_client.play()` 콜백을 `asyncio.Event` 로 직렬화. 5분 idle 시 자동 disconnect.
 - `cogs/tts_cog.py` — 슬래시 명령 (`/목소리 /입장 /퇴장 /상태`) + 이벤트 핸들러 (`on_message`, `on_voice_state_update`). 읽을 채널은 사용자가 고르지 않는다 — `/입장`과 음성 패널이 `tts_channel_id`/`voice_channel_id`를 현재 음성 채널 ID로 함께 덮어쓴다. 두 값을 따로 고르는 명령을 다시 만들지 말 것 (docs/skills/07 참고).
 

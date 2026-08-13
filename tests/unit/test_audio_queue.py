@@ -732,19 +732,6 @@ def test_pcm_cache_lru_and_item_limit():
     assert cache.get("too-big", "v") is None
 
 
-def test_pcm_cache_keys_include_the_emotion_tone():
-    """같은 문장이라도 톤이 다르면 오디오가 다르다. 키가 겹치면 잘못 재생된다."""
-    from cogs.audio_queue import PCMCache
-
-    cache = PCMCache(max_entries=8, max_bytes=100, max_item_bytes=50)
-    cache.put("대박", "v", b"neutral")
-    cache.put("대박", "v", b"cheerful!", "cheerful")
-
-    assert cache.get("대박", "v") == b"neutral"
-    assert cache.get("대박", "v", "cheerful") == b"cheerful!"
-    assert cache.get("대박", "v", "sad") is None
-
-
 async def test_prefetch_warms_cache_for_next_item():
     """다음 항목 prefetch 가 stream_synthesize 결과를 _cache 에 채운다."""
     from cogs.audio_queue import AudioQueue, AudioRequest
@@ -766,7 +753,7 @@ async def test_prefetch_warms_cache_for_next_item():
 
     chunks_for: dict[str, bytes] = {"second": b"\x10\x20\x30\x40"}
 
-    async def fake_stream(text, voice, *, tone=None):
+    async def fake_stream(text, voice):
         data = chunks_for.get(text)
         if data is None:
             raise RuntimeError(f"unexpected stream_synthesize for {text!r}")

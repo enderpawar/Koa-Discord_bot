@@ -27,27 +27,13 @@ from discord.ext import commands
 
 from cogs.audio_queue import AudioQueue, AudioRequest
 from cogs.config_store import ConfigStore
-from cogs.preprocess import clean_message, detect_tone, normalize_pronunciations
-from cogs.tts_engine import (
-    DEFAULT_VOICE,
-    close_session,
-    load_voice_styles,
-    start_keepalive,
-    voice_style_status,
-    warm_up,
-)
+from cogs.preprocess import clean_message, normalize_pronunciations
+from cogs.tts_engine import DEFAULT_VOICE, close_session, start_keepalive, warm_up
 from cogs.ui import BRAND_COLOR, channel_ref, notice_embed
 
 log = logging.getLogger(__name__)
 
-# 감정 톤(`<mstts:express-as>`)이 실제로 동작하는 한국어 보이스는 매우 적다.
-# 아래 9종은 Azure 가 스타일을 지원하지 않고, InJoon 도 `sad` 하나뿐이다.
-# MAI-Voice-2 계열만 여러 감정을 낸다 — 감정을 쓰려면 이쪽을 골라야 하므로
-# 목록 맨 위에 둔다. 리전/구독에 따라 없을 수 있고, 그 경우 `/상태` 가
-# "목록에 없습니다" 로 알려 준다.
 VOICE_CHOICES = [
-    app_commands.Choice(name="여성 · 감정 표현", value="ko-KR-Haena:MAI-Voice-2"),
-    app_commands.Choice(name="남성 · 감정 표현", value="ko-KR-Junho:MAI-Voice-2"),
     app_commands.Choice(name="여성 · 차분", value="ko-KR-SunHiNeural"),
     app_commands.Choice(name="여성 · 또렷", value="ko-KR-JiMinNeural"),
     app_commands.Choice(name="여성 · 부드러움", value="ko-KR-SeoHyeonNeural"),
@@ -102,22 +88,6 @@ def _connected_voice_client(
     return vc
 
 
-def _emotion_status_text(voice: str) -> str:
-    """`/상태` 에서 감정 톤이 왜 안 들리는지 바로 알 수 있게 한다.
-
-    서버 로그를 볼 수 없는 상황에서도 원인이 (1) 카탈로그 미확인인지
-    (2) 이 목소리가 감정을 지원하지 않는 것인지 구분되어야 한다.
-    """
-    state, styles = voice_style_status(voice)
-    if state == "ready":
-        return f"사용 중 · 이 목소리 지원: {', '.join(styles)}"
-    if state == "unsupported":
-        return "이 목소리는 감정을 지원하지 않습니다. `/목소리` 로 다른 목소리를 골라 보세요."
-    if state == "unknown_voice":
-        return "이 목소리가 Azure 목록에 없습니다. `/목소리` 로 다시 골라 주세요."
-    return "목소리 목록을 아직 못 받았습니다. 잠시 뒤 다시 확인해 주세요."
-
-
 def _tts_status_embed(cfg: dict) -> discord.Embed:
     tts_ch = cfg.get("tts_channel_id")
     vc_ch = cfg.get("voice_channel_id")
@@ -138,7 +108,6 @@ def _tts_status_embed(cfg: dict) -> discord.Embed:
         value=f"{len(rules)}개 규칙" if rules else "등록된 규칙 없음",
         inline=False,
     )
-    embed.add_field(name="감정 톤", value=_emotion_status_text(voice), inline=False)
     embed.add_field(
         name="상태",
         value="재생 준비됨" if ready else "`/입장` 으로 음성 채널에 연결해 주세요",
@@ -229,9 +198,6 @@ class TTSCog(commands.Cog):
             log.info("tts azure connection warmed")
         except Exception:
             log.debug("tts warm-up failed", exc_info=True)
-        # 감정 스타일 카탈로그. 실패해도 내부에서 빈 표로 떨어지므로 읽기는
-        # 그대로 동작한다 (스타일만 안 붙는다).
-        await load_voice_styles()
 
     # ---------- Phase 6: Slash Commands ----------
 
@@ -570,9 +536,6 @@ class TTSCog(commands.Cog):
         ):
             return
 
-        # 톤은 정제 전 원문에서 읽는다. clean_message 가 `ㅋㅋ` 를 `크크` 로
-        # 바꾸고 나면 감정 신호가 남지 않는다.
-        tone = detect_tone(message.clean_content)
         text = clean_message(message, pronunciations=cfg.get("pronunciations"))
         if not text:
             return
@@ -583,7 +546,6 @@ class TTSCog(commands.Cog):
                 text=text,
                 voice=cfg.get("voice", DEFAULT_VOICE),
                 voice_channel_id=voice_channel_id,
-                tone=tone,
             ),
         )
 

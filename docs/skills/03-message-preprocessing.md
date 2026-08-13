@@ -17,9 +17,6 @@ def clean_message(
 def normalize_pronunciations(rules: Mapping[str, str] | None) -> dict[str, str]:
     """저장된 원시 값을 한도 안의 검증된 사전으로 좁힌다. 어긋난 항목은 버린다."""
 
-
-def detect_tone(text: str) -> str | None:
-    """원문의 감정 라벨. 애매하면 None. **정제 전 원문**에 대해 부를 것."""
 ```
 
 ## 처리 순서 (순서 중요)
@@ -55,28 +52,6 @@ ConfigStore 를 읽지 않는다 — 호출자가 dict 를 넘겨야 순수 함�
   `normalize_pronunciations` 가 조용히 버린다 (규칙 하나로 서버 TTS 전체가 멈추면 안 됨,
   Rule 03). 대시보드가 지금 보낸 값은 `web_admin_cog._pronunciation_rules` 가 400 으로
   거절해 이유를 알려 준다.
-
-## 감정 톤
-
-`detect_tone(text)` 이 `TONE_CHEERFUL` / `TONE_SAD` / `TONE_EXCITED` / `None` 을
-돌려준다. 판정 규칙:
-
-| 신호 | 라벨 |
-|------|------|
-| `ㅋㅎ` 가 `ㅠㅜ` 보다 많고 2개 이상 | `cheerful` |
-| `ㅠㅜ` 가 `ㅋㅎ` 보다 많고 2개 이상 | `sad` |
-| 위 신호 없이 `!` 2개 이상 | `excited` |
-| 그 외 (동점 포함) | `None` |
-
-계약:
-
-- **정제 전 원문에 대해 부른다.** `clean_message` 가 `ㅋㅋ` → `크크` 로 바꾸므로
-  순서가 뒤바뀌면 신호가 사라진다. 회귀 가드:
-  `test_tone_is_read_from_raw_text_before_cleaning`.
-- **애매하면 감정을 붙이지 않는다.** 단독 `ㅋ` 은 추임새/오타가 많고, `ㅋㅋㅠㅠ` 는
-  어느 쪽도 아니다. 잘못 얹은 감정은 밋밋한 낭독보다 귀에 거슬린다.
-- 이 모듈은 **라벨만** 정한다. 라벨 → Azure 스타일 매핑과 보이스별 지원 여부
-  판단은 `tts_engine.style_for` 의 몫이다 (Skill 04).
 
 ## Implementation Sketch
 ```python
