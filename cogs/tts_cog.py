@@ -1,13 +1,19 @@
 """Phase 6 + 7 — 슬래시 명령 + 이벤트 핸들러.
 
 본 cog 는 봇의 사용자 인터페이스 전체를 담당한다.
-- Phase 6: `/읽기채널 /음성채널 /목소리 /입장 /퇴장 /상태` 6개 슬래시 명령
+- Phase 6: `/목소리 /입장 /퇴장 /상태` 슬래시 명령
 - Phase 7: `on_message` (TTS 합성), `on_voice_state_update` (입/퇴장 알림)
+
+읽을 채널은 사용자가 고르지 않는다. `/입장` 과 음성 패널의 `TTS 켜기` 가
+`tts_channel_id` / `voice_channel_id` 를 현재 음성 채널 ID 로 함께 써 넣는다
+(음성 채널 채팅의 ID 는 음성 채널 ID 와 같다). 두 값을 따로 고르는 명령이
+있던 시절이 있었지만, 연결 경로가 항상 둘을 덮어쓰므로 분리된 조합은 단
+한 문장도 재생되지 않았다 — 그래서 명령을 남기지 않는다.
 
 Rule 01 (봇 루프 방지): on_message / on_voice_state_update 첫 줄에 봇 가드.
 Rule 02 (guild 격리): 모든 처리는 interaction.guild_id / message.guild.id 기준.
 Rule 03 (복원력): 핸들러는 `log.exception` 으로 잡고 사용자에겐 무응답 또는 ephemeral 안내.
-Rule 04 (시크릿/권한): 민감 명령(읽기채널/음성채널/목소리)에 manage_channels 권한 체크.
+Rule 04 (시크릿/권한): 민감 명령(목소리)에 manage_channels 권한 체크.
 """
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ from discord.ext import commands
 
 from cogs.audio_queue import AudioQueue, AudioRequest
 from cogs.config_store import ConfigStore
-from cogs.preprocess import clean_message
+from cogs.preprocess import clean_message, normalize_pronunciations
 from cogs.tts_engine import DEFAULT_VOICE, close_session, start_keepalive, warm_up
 from cogs.ui import BRAND_COLOR, channel_ref, notice_embed
 
@@ -86,19 +92,25 @@ def _tts_status_embed(cfg: dict) -> discord.Embed:
     tts_ch = cfg.get("tts_channel_id")
     vc_ch = cfg.get("voice_channel_id")
     voice = cfg.get("voice", DEFAULT_VOICE)
+    rules = normalize_pronunciations(cfg.get("pronunciations"))
     ready = bool(tts_ch and vc_ch)
 
     embed = discord.Embed(
         title="TTS 상태",
-        description="메시지를 읽을 채널과 음성을 출력할 채널 설정입니다.",
+        description="`/입장` 으로 연결한 음성 채널과 그 채널 채팅을 읽습니다.",
         color=BRAND_COLOR if ready else discord.Color.dark_grey(),
     )
     embed.add_field(name="입력 채널", value=channel_ref(tts_ch), inline=True)
     embed.add_field(name="음성 채널", value=channel_ref(vc_ch), inline=True)
     embed.add_field(name="보이스", value=f"`{_voice_label(voice)}`", inline=False)
     embed.add_field(
+        name="발음 사전",
+        value=f"{len(rules)}개 규칙" if rules else "등록된 규칙 없음",
+        inline=False,
+    )
+    embed.add_field(
         name="상태",
-        value="재생 준비됨" if ready else "채널 설정 필요",
+        value="재생 준비됨" if ready else "`/입장` 으로 음성 채널에 연결해 주세요",
         inline=False,
     )
     return embed
@@ -324,48 +336,6 @@ class TTSCog(commands.Cog):
             embed=notice_embed("TTS 비활성화", "이 채널의 TTS를 껐습니다.", tone="ok"),
         )
 
-    @app_commands.command(name="읽기채널", description="TTS로 읽을 채팅 채널을 설정합니다")
-    @app_commands.rename(channel="채널")
-    @app_commands.describe(channel="봇이 메시지를 읽을 채팅 채널")
-    @app_commands.checks.has_permissions(manage_channels=True)
-    async def settts(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        await self.store.set(interaction.guild_id, tts_channel_id=channel.id)
-        log.info(
-            "settts: guild_id=%s channel_id=%s by user_id=%s",
-            interaction.guild_id, channel.id, interaction.user.id,
-        )
-        await interaction.response.send_message(
-            embed=notice_embed(
-                "TTS 입력 채널 설정",
-                f"이제 {channel.mention} 메시지를 읽습니다.",
-                tone="ok",
-            ),
-            ephemeral=True,
-        )
-
-    @app_commands.command(name="음성채널", description="봇이 말할 음성 채널을 설정합니다")
-    @app_commands.rename(channel="채널")
-    @app_commands.describe(channel="봇 음성을 재생할 음성 채널")
-    @app_commands.checks.has_permissions(manage_channels=True)
-    async def setvc(
-        self, interaction: discord.Interaction, channel: discord.VoiceChannel
-    ) -> None:
-        await self.store.set(interaction.guild_id, voice_channel_id=channel.id)
-        log.info(
-            "setvc: guild_id=%s channel_id=%s by user_id=%s",
-            interaction.guild_id, channel.id, interaction.user.id,
-        )
-        await interaction.response.send_message(
-            embed=notice_embed(
-                "음성 출력 채널 설정",
-                f"봇 음성을 {channel.mention}에서 재생합니다.",
-                tone="ok",
-            ),
-            ephemeral=True,
-        )
-
     @app_commands.command(name="목소리", description="TTS 목소리를 변경합니다")
     @app_commands.rename(voice="종류")
     @app_commands.describe(voice="사용할 한국어 TTS 목소리")
@@ -566,7 +536,7 @@ class TTSCog(commands.Cog):
         ):
             return
 
-        text = clean_message(message)
+        text = clean_message(message, pronunciations=cfg.get("pronunciations"))
         if not text:
             return
 

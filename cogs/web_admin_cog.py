@@ -19,6 +19,12 @@ from yarl import URL
 
 from cogs.admin_login_store import OneTimeLoginStore
 from cogs.config_store import ConfigStore
+from cogs.preprocess import (
+    MAX_PRONUNCIATION_KEY,
+    MAX_PRONUNCIATION_RULES,
+    MAX_PRONUNCIATION_VALUE,
+    normalize_pronunciations,
+)
 from cogs.rank_cog import DEFAULT_LEADERBOARD_POST_TIME
 from cogs.rank_store import weekly_reset_anchor
 
@@ -205,10 +211,43 @@ def _channel_payload(channel: discord.abc.GuildChannel) -> dict[str, str]:
 def _config_payload(config: dict[str, Any]) -> dict[str, Any]:
     """Discord snowflake를 브라우저에서 반올림되지 않는 문자열로 직렬화한다."""
     payload = dict(config)
+    # tts/voice 채널은 대시보드가 고르지 않고 `/입장` 이 써 넣지만, 지금 어디에
+    # 붙어 있는지를 읽기 전용으로 보여 주므로 계속 내려보낸다.
     for name in ("tts_channel_id", "voice_channel_id", "leaderboard_channel_id"):
         if name in payload:
             payload[name] = _id(int(payload[name] or 0))
+    payload["pronunciations"] = normalize_pronunciations(payload.get("pronunciations"))
     return payload
+
+
+def _pronunciation_rules(value: Any) -> dict[str, str]:
+    """대시보드가 보낸 발음 사전을 검증한다.
+
+    저장된 값을 읽을 때(normalize_pronunciations)는 조용히 버리지만, 사람이 지금
+    입력한 값은 왜 안 들어갔는지 알려 줘야 하므로 여기서는 예외를 던진다.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("발음 사전 형식이 올바르지 않습니다.")
+    if len(value) > MAX_PRONUNCIATION_RULES:
+        raise ValueError(
+            f"발음 규칙은 최대 {MAX_PRONUNCIATION_RULES}개까지 저장할 수 있습니다."
+        )
+    for raw_key, raw_value in value.items():
+        key = str(raw_key).strip()
+        read_as = "" if raw_value is None else str(raw_value).strip()
+        if not key:
+            raise ValueError("바꿀 말을 비워 둘 수 없습니다.")
+        if len(key) > MAX_PRONUNCIATION_KEY:
+            raise ValueError(
+                f"바꿀 말은 {MAX_PRONUNCIATION_KEY}자 이하로 입력해 주세요: {key[:20]}"
+            )
+        if len(read_as) > MAX_PRONUNCIATION_VALUE:
+            raise ValueError(
+                f"읽을 말은 {MAX_PRONUNCIATION_VALUE}자 이하로 입력해 주세요: {key}"
+            )
+    return normalize_pronunciations(value)
 
 
 def _row_with_name(guild: discord.Guild, row: dict[str, Any]) -> dict[str, Any]:
@@ -657,12 +696,14 @@ class WebAdminCog(commands.Cog):
         if denied is not None:
             return denied
 
+        # tts_channel_id / voice_channel_id 는 의도적으로 받지 않는다. `/입장` 과
+        # 음성 패널이 연결할 때마다 둘을 현재 음성 채널로 덮어쓰므로, 여기서
+        # 무엇을 저장하든 다음 연결에서 지워진다. 저장되는 척하는 입력을 두느니
+        # 아예 받지 않는다.
         fields: dict[str, Any] = {}
         try:
-            if "tts_channel_id" in payload:
-                fields["tts_channel_id"] = self._text_channel_id(guild, payload["tts_channel_id"])
-            if "voice_channel_id" in payload:
-                fields["voice_channel_id"] = self._voice_channel_id(guild, payload["voice_channel_id"])
+            if "pronunciations" in payload:
+                fields["pronunciations"] = _pronunciation_rules(payload["pronunciations"])
             if "leaderboard_channel_id" in payload:
                 fields["leaderboard_channel_id"] = self._text_channel_id(guild, payload["leaderboard_channel_id"])
             if "leaderboard_daily_enabled" in payload:
@@ -795,19 +836,6 @@ class WebAdminCog(commands.Cog):
         channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
             raise ValueError("invalid text channel")
-        return channel.id
-
-    @staticmethod
-    def _voice_channel_id(guild: discord.Guild, value: Any) -> int:
-        if value in (None, "", 0, "0"):
-            return 0
-        try:
-            channel_id = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("invalid voice channel") from exc
-        channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.VoiceChannel):
-            raise ValueError("invalid voice channel")
         return channel.id
 
 

@@ -63,7 +63,17 @@ def test_discord_ids_are_serialized_as_strings() -> None:
         "voice_channel_id": str(snowflake + 1),
         "leaderboard_channel_id": str(snowflake + 2),
         "leaderboard_daily_enabled": True,
+        "pronunciations": {},
     }
+
+
+def test_config_payload_normalizes_the_pronunciation_dictionary() -> None:
+    """손으로 고친 config.json 이 대시보드를 깨뜨리지 않아야 한다."""
+    payload = _config_payload({"pronunciations": {" ㅇㅈ ": " 인정 ", "": "버려짐"}})
+
+    assert payload["pronunciations"] == {"ㅇㅈ": "인정"}
+    assert _config_payload({})["pronunciations"] == {}
+    assert _config_payload({"pronunciations": "쓰레기"})["pronunciations"] == {}
 
 
 def test_login_template_exchanges_fragment_without_exposing_guild() -> None:
@@ -89,6 +99,20 @@ def test_dashboard_never_sends_client_selected_guild_id() -> None:
     assert "?guild_id=" not in html
     assert "guild_id:guildId" not in html
     assert "fetch('/api/state')" in html
+
+
+def test_dashboard_dropped_the_tts_channel_pickers_for_the_dictionary() -> None:
+    """저장해도 다음 `/입장` 이 덮어쓰는 컨트롤을 되살리지 않기 위한 가드."""
+    html = _template(_DASHBOARD_TEMPLATE)
+
+    assert "id=\"tts_channel\"" not in html
+    assert "id=\"voice_channel\"" not in html
+    assert "tts_channel_id:$(" not in html
+    assert "voice_channel_id:$(" not in html
+    # 현재 붙어 있는 채널은 읽기 전용으로 계속 보여 준다.
+    assert "cfg.tts_channel_id" in html
+    assert "id=\"dict_rows\"" in html
+    assert "pronunciations:collectDict()" in html
 
 
 def test_template_cache_can_be_reloaded(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
@@ -471,6 +495,87 @@ async def test_malformed_json_body_is_a_client_error_not_a_crash() -> None:
         response = await handler(request)  # type: ignore[arg-type]
 
         assert response.status == 400
+
+
+def _config_request(cog: WebAdminCog, payload: dict) -> _Request:
+    request = _Request(payload=payload)
+    request["scope"] = 111
+    request["user_id"] = 222
+    return request
+
+
+def _stub_store(cog: WebAdminCog) -> AsyncMock:
+    """실제 config.json 을 건드리지 않도록 저장소를 대역으로 세운다."""
+    store = AsyncMock()
+    store.get = AsyncMock(return_value={})
+    cog.store = store
+    return store
+
+
+async def test_config_api_no_longer_accepts_tts_channel_fields() -> None:
+    """대시보드가 TTS 채널을 저장할 수 있으면 저장되는 척만 하게 된다.
+
+    `/입장` 과 음성 패널이 연결할 때마다 두 값을 현재 음성 채널로 덮어쓴다.
+    """
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+    store = _stub_store(cog)
+
+    response = await cog._api_config(  # type: ignore[arg-type]
+        _config_request(cog, {"tts_channel_id": "123", "voice_channel_id": "456"})
+    )
+
+    assert response.status == 200
+    store.set.assert_awaited_once_with(111)
+
+
+async def test_pronunciation_rules_are_trimmed_before_they_are_stored() -> None:
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+    store = _stub_store(cog)
+
+    response = await cog._api_config(  # type: ignore[arg-type]
+        _config_request(cog, {"pronunciations": {" ㅇㅈ ": " 인정 "}})
+    )
+
+    assert response.status == 200
+    store.set.assert_awaited_once_with(111, pronunciations={"ㅇㅈ": "인정"})
+
+
+async def test_emptying_the_dictionary_clears_the_stored_rules() -> None:
+    """빈 dict 는 None 이 아니므로 ConfigStore 의 None 필터를 통과해야 한다."""
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+    store = _stub_store(cog)
+
+    response = await cog._api_config(  # type: ignore[arg-type]
+        _config_request(cog, {"pronunciations": {}})
+    )
+
+    assert response.status == 200
+    store.set.assert_awaited_once_with(111, pronunciations={})
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        "문자열은 사전이 아니다",
+        ["목록도 아니다"],
+        {"": "빈 원문"},
+        {"   ": "공백만 있는 원문"},
+        {"가" * (web_admin_cog.MAX_PRONUNCIATION_KEY + 1): "너무 긴 원문"},
+        {"가": "나" * (web_admin_cog.MAX_PRONUNCIATION_VALUE + 1)},
+        {f"k{i}": "v" for i in range(web_admin_cog.MAX_PRONUNCIATION_RULES + 1)},
+    ],
+)
+async def test_bad_pronunciation_rules_are_reported_not_silently_dropped(rules) -> None:
+    """지금 사람이 입력한 값이니 왜 안 들어갔는지 알려 줘야 한다."""
+    cog = _cog(_FakeGuild(111, "내 서버", admin_user_id=222))
+    store = _stub_store(cog)
+
+    response = await cog._api_config(  # type: ignore[arg-type]
+        _config_request(cog, {"pronunciations": rules})
+    )
+
+    assert response.status == 400
+    store.set.assert_not_awaited()
 
 
 async def test_non_object_json_body_is_rejected() -> None:

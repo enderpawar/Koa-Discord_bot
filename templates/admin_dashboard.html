@@ -162,6 +162,27 @@ button:disabled{opacity:.5; cursor:not-allowed}
 #guild_name{margin:0; font-weight:700; color:var(--text)}
 .note{font-size:12px}
 .note-lg{font-size:13px; margin:0}
+code{
+  background:var(--panel-soft); border:1px solid var(--line);
+  border-radius:5px; padding:1px 5px; font-size:12.5px;
+}
+.dict-head,.dict-row{
+  display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) 40px;
+  gap:9px; align-items:center;
+}
+.dict-head{
+  margin:16px 0 8px; font-size:11.5px; font-weight:800;
+  color:var(--muted); letter-spacing:.03em;
+}
+.dict-rows{display:grid; gap:8px}
+.dict-rows:empty+.dict-actions{margin-top:0}
+.dict-row .remove{
+  height:42px; padding:0; background:var(--panel-soft); color:var(--muted);
+  border:1px solid var(--line-strong); font-size:17px; line-height:1;
+}
+.dict-row .remove:hover:not(:disabled){color:var(--danger); border-color:var(--danger-line)}
+.dict-empty{color:var(--muted); font-size:13.5px; margin:0}
+.dict-actions{margin-top:12px}
 [hidden]{display:none !important}
 @media(max-width:900px){
   .shell{grid-template-columns:1fr}
@@ -213,16 +234,19 @@ button:disabled{opacity:.5; cursor:not-allowed}
     </div>
 
     <div class="section">
-      <h2>TTS 설정</h2>
-      <div class="grid">
-        <div class="field">
-          <label for="tts_channel">TTS 입력 채널</label>
-          <select id="tts_channel"></select>
-        </div>
-        <div class="field">
-          <label for="voice_channel">음성 출력 채널</label>
-          <select id="voice_channel"></select>
-        </div>
+      <h2>발음 사전 <span class="sub" id="dict_count"></span></h2>
+      <p class="muted note-lg">
+        읽기 전에 바꿀 말을 정합니다. <code>ㅇㅈ</code> → <code>인정</code> 처럼
+        줄임말을 풀거나 닉네임 발음을 교정할 때 씁니다.
+        읽을 말을 비우면 그 말을 소리 내지 않고 건너뜁니다.
+        대소문자는 구분하지 않고, 규칙끼리 연쇄 적용되지 않습니다.
+      </p>
+      <div class="dict-head" aria-hidden="true">
+        <span>바꿀 말</span><span>읽을 말</span><span></span>
+      </div>
+      <div id="dict_rows" class="dict-rows"></div>
+      <div class="actions dict-actions">
+        <button class="secondary" id="dict_add" type="button">규칙 추가</button>
       </div>
     </div>
 
@@ -291,11 +315,10 @@ function render(){
   $('guild_name_box').hidden=false;
   $('guild_name').textContent=g.name;
   $('guilds').innerHTML='';
-  fillSelect($('tts_channel'),g.text_channels,cfg.tts_channel_id,'미설정');
   fillSelect($('leaderboard_channel'),g.text_channels,cfg.leaderboard_channel_id,'미설정');
-  fillSelect($('voice_channel'),g.voice_channels,cfg.voice_channel_id,'미설정');
   $('post_time').value=cfg.leaderboard_post_time||'00:00';
   $('daily_enabled').checked=!!cfg.leaderboard_daily_enabled;
+  renderDict(cfg.pronunciations);
   // 서버 이름·채널 이름은 사용자 입력이다. innerHTML 로 넣지 않고 노드로 조립한다.
   const box=$('status');
   box.textContent='';
@@ -304,12 +327,68 @@ function render(){
   const dot=document.createElement('span');dot.className='dot';
   pill.appendChild(dot);
   pill.appendChild(document.createTextNode('일일 리더보드 '+(cfg.leaderboard_daily_enabled?'켜짐':'꺼짐')));
+  // TTS 채널은 여기서 고르지 않는다. /입장 이 써 넣은 현재 위치를 읽기만 한다.
   const line=document.createElement('p');
-  line.textContent='TTS 입력: '+(cfg.tts_channel_id?'#'+channelName(g.text_channels,cfg.tts_channel_id):'미설정')
-    +' · 음성 출력: '+(cfg.voice_channel_id?channelName(g.voice_channels,cfg.voice_channel_id):'미설정');
+  line.textContent=hasChannel(cfg.voice_channel_id)
+    ?'읽는 채널: #'+channelName(g.text_channels,cfg.tts_channel_id)
+      +' · 음성 채널: '+channelName(g.voice_channels,cfg.voice_channel_id)
+    :'음성 채널에 연결되어 있지 않습니다. 서버에서 /입장 을 실행하세요.';
   box.appendChild(pill);box.appendChild(line);
 }
+// 설정을 지우면 "0" 이 내려온다. JS 에서 "0" 은 참이라 그냥 쓰면 `#0` 이 찍힌다.
+function hasChannel(id){return !!id&&String(id)!=='0'}
 function channelName(items,id){const found=items.find(x=>String(x.id)===String(id));return found?found.name:id}
+
+const DICT_KEY_MAX=20,DICT_VALUE_MAX=40,DICT_MAX=100;
+function dictRow(from,to){
+  const row=document.createElement('div');row.className='dict-row';
+  const key=document.createElement('input');
+  key.className='dict-from';key.value=from||'';key.maxLength=DICT_KEY_MAX;
+  key.placeholder='ㅇㅈ';key.setAttribute('aria-label','바꿀 말');key.autocomplete='off';
+  const read=document.createElement('input');
+  read.className='dict-to';read.value=to||'';read.maxLength=DICT_VALUE_MAX;
+  read.placeholder='인정';read.setAttribute('aria-label','읽을 말');read.autocomplete='off';
+  const del=document.createElement('button');
+  del.type='button';del.className='remove';del.textContent='×';
+  del.setAttribute('aria-label','이 규칙 삭제');
+  del.onclick=()=>{row.remove();updateDictCount()};
+  row.appendChild(key);row.appendChild(read);row.appendChild(del);
+  return row;
+}
+function renderDict(rules){
+  const el=$('dict_rows');el.textContent='';
+  for(const [from,to] of Object.entries(rules||{}))el.appendChild(dictRow(from,to));
+  updateDictCount();
+}
+function updateDictCount(){
+  const el=$('dict_rows');
+  const count=el.querySelectorAll('.dict-row').length;
+  $('dict_count').textContent=count?count+'개':'';
+  const note=el.querySelector('.dict-empty');
+  if(count&&note)note.remove();
+  if(!count&&!note){
+    const p=document.createElement('p');p.className='dict-empty';
+    p.textContent='등록된 규칙이 없습니다. 규칙 추가를 눌러 시작하세요.';
+    el.appendChild(p);
+  }
+}
+function collectDict(){
+  const rules={};
+  for(const row of $('dict_rows').querySelectorAll('.dict-row')){
+    // 추가만 하고 채우지 않은 줄은 저장하지 않는다.
+    const from=row.querySelector('.dict-from').value.trim();
+    if(from)rules[from]=row.querySelector('.dict-to').value.trim();
+  }
+  return rules;
+}
+function addDictRow(){
+  const el=$('dict_rows');
+  if(el.querySelectorAll('.dict-row').length>=DICT_MAX){
+    setMessage('발음 규칙은 최대 '+DICT_MAX+'개까지 저장할 수 있습니다.','error');return;
+  }
+  const row=dictRow('','');el.appendChild(row);updateDictCount();
+  row.querySelector('.dict-from').focus();
+}
 
 function activityRow(cls,label,row){
   const div=document.createElement('div');
@@ -384,8 +463,7 @@ async function send(url,body){
 }
 async function save(){
   const res=await send('/api/config',{
-    tts_channel_id:$('tts_channel').value,
-    voice_channel_id:$('voice_channel').value,
+    pronunciations:collectDict(),
     leaderboard_channel_id:$('leaderboard_channel').value,
     leaderboard_post_time:$('post_time').value,
     leaderboard_daily_enabled:$('daily_enabled').checked
@@ -414,6 +492,7 @@ async function clearLeaderboard(){
 }
 
 $('save').onclick=save;
+$('dict_add').onclick=addDictRow;
 $('post').onclick=post;
 $('refresh').onclick=load;
 $('clear').onclick=()=>showClearConfirm(true);

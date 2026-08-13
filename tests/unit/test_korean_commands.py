@@ -25,8 +25,6 @@ def _option_names(command) -> list[str]:
 
 def test_top_level_commands_are_friendly_korean() -> None:
     assert {
-        TTSCog.settts.name,
-        TTSCog.setvc.name,
         TTSCog.setvoice.name,
         TTSCog.join.name,
         TTSCog.leave.name,
@@ -36,10 +34,9 @@ def test_top_level_commands_are_friendly_korean() -> None:
         PartyCog.create_party.name,
         PartyCog.party_list.name,
         PartyCog.my_parties.name,
+        PartyCog.cancel_party.name,
         FortuneCog.today_fortune.name,
     } == {
-        "읽기채널",
-        "음성채널",
         "목소리",
         "입장",
         "퇴장",
@@ -49,6 +46,7 @@ def test_top_level_commands_are_friendly_korean() -> None:
         "파티모집",
         "파티목록",
         "내파티",
+        "파티취소",
         "오늘의운세",
     }
 
@@ -86,12 +84,20 @@ def test_command_groups_and_subcommands_are_korean() -> None:
     }
 
 
+def test_tts_channel_pickers_are_gone() -> None:
+    """`/입장` 이 두 채널 ID 를 항상 덮어써서 분리 설정은 재생되지 않았다.
+
+    저장되는 척하지만 다음 연결에서 지워지는 명령을 되살리지 않기 위한 회귀 가드다.
+    """
+    assert not hasattr(TTSCog, "settts")
+    assert not hasattr(TTSCog, "setvc")
+
+
 def test_user_facing_option_names_are_korean() -> None:
-    assert _option_names(TTSCog.settts) == ["채널"]
-    assert _option_names(TTSCog.setvc) == ["채널"]
     assert _option_names(TTSCog.setvoice) == ["종류"]
     assert _option_names(RankCog.rank) == ["멤버"]
     assert _option_names(PartyCog.create_party) == ["게임", "정원", "시작", "메모", "태그"]
+    assert _option_names(PartyCog.cancel_party) == ["파티"]
     # 게임은 자유 입력(STRING=3)이다. 역할(ROLE=8)이면 Discord 가 `롤`, `발로`
     # 같은 입력을 "올바른 역할이 아닙니다" 로 막아 버린다. 알림 대상은 별도
     # `태그` 옵션(ROLE=8, 선택)에서만 받는다.

@@ -50,15 +50,31 @@ def test_tts_status_embed_groups_settings() -> None:
             "tts_channel_id": 11,
             "voice_channel_id": 22,
             "voice": "ko-KR-SunHiNeural",
+            "pronunciations": {"ㅇㅈ": "인정"},
         }
     )
 
     assert embed.title == "TTS 상태"
-    assert [field.name for field in embed.fields] == ["입력 채널", "음성 채널", "보이스", "상태"]
+    assert [field.name for field in embed.fields] == [
+        "입력 채널",
+        "음성 채널",
+        "보이스",
+        "발음 사전",
+        "상태",
+    ]
     assert embed.fields[0].value == "<#11>"
     assert embed.fields[1].value == "<#22>"
     assert "여성 · 차분" in embed.fields[2].value
-    assert embed.fields[3].value == "재생 준비됨"
+    assert embed.fields[3].value == "1개 규칙"
+    assert embed.fields[4].value == "재생 준비됨"
+
+
+def test_tts_status_embed_points_at_join_when_not_connected() -> None:
+    """채널을 고르는 명령이 없으므로 `/입장` 말고는 안내할 것이 없다."""
+    embed = _tts_status_embed({"voice": "ko-KR-SunHiNeural"})
+
+    assert embed.fields[3].value == "등록된 규칙 없음"
+    assert "/입장" in embed.fields[4].value
 
 
 def _make_cog(cfg: dict | None = None) -> TTSCog:
@@ -443,6 +459,29 @@ async def test_handle_tts_message_reads_joined_voice_channel_chat() -> None:
     request = cog.queue.enqueue.await_args.args[1]
     assert request.voice_channel_id == voice_channel.id
     assert request.text == "음성 채널 채팅"
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_applies_the_guild_pronunciation_dictionary() -> None:
+    cog = _make_cog({
+        "tts_channel_id": 100,
+        "voice_channel_id": 100,
+        "voice": "ko-KR-SunHiNeural",
+        "pronunciations": {"ㅇㅈ": "인정"},
+    })
+    voice_channel = _voice_channel(100)
+    voice_channel.members = [_human(10)]
+    message = MagicMock()
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.guild.get_channel.return_value = voice_channel
+    message.guild.voice_client = _connected_voice(voice_channel)
+    message.channel = voice_channel
+    message.clean_content = "그거 ㅇㅈ"
+
+    await cog._handle_tts_message(message)
+
+    assert cog.queue.enqueue.await_args.args[1].text == "그거 인정"
 
 
 @pytest.mark.asyncio
