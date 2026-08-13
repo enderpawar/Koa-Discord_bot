@@ -5,13 +5,44 @@
 
 ## API
 ```python
-async def synthesize(text: str, voice: str = "ko-KR-SunHiNeural") -> Path:
+async def synthesize(
+    text: str, voice: str = DEFAULT_VOICE, *, tone: str | None = None
+) -> Path:
     """TTS 합성 후 임시 raw PCM 파일 경로 반환 (48kHz / 16-bit / mono).
     호출 측에서 사용 후 삭제 책임."""
+
+async def stream_synthesize(
+    text: str, voice: str = DEFAULT_VOICE, *, tone: str | None = None
+) -> AsyncIterator[bytes]: ...
+
+async def load_voice_styles(*, force: bool = False) -> dict[str, frozenset[str]]:
+    """보이스별 지원 감정 스타일 목록을 Azure 에서 받아 캐시한다."""
+
+def style_for(voice: str, tone: str | None) -> str | None:
+    """그 보이스가 실제로 지원하는 스타일만. 없으면 None."""
 
 async def close_session() -> None:
     """봇 종료 시 호출. 모듈 재사용 ClientSession 정리."""
 ```
+
+## 감정 스타일 (`<mstts:express-as>`)
+
+`tone` 은 `preprocess.detect_tone` 이 정한 라벨이며(Skill 03), 이 모듈이 Azure
+스타일로 옮긴다.
+
+- **지원 여부를 코드에 박지 않는다.** 어떤 보이스가 어떤 스타일을 지원하는지는
+  보이스마다 다르고 Azure 가 수시로 바꾼다. 기동 시
+  `{region}.tts.speech.microsoft.com/cognitiveservices/voices/list` 의 `StyleList`
+  를 받아 캐시하고, 그 목록에 있는 스타일만 SSML 에 넣는다.
+- **폴백 체인.** `_TONE_STYLE_CHAIN` 이 라벨마다 시도 순서를 정한다
+  (`excited → cheerful`). 끝까지 없으면 스타일 없이 읽는다.
+- **실패 시 조용히 꺼진다.** 카탈로그를 못 받으면 빈 표가 되어 `style_for` 가 항상
+  None 을 돌려주고, 읽기는 그대로 동작한다 (Rule 03).
+- **스타일 없는 SSML 은 손대지 않는다.** `mstts` 네임스페이스는 스타일을 실제로
+  붙일 때만 선언한다. 카탈로그를 못 받았을 때 예전과 **완전히 동일한** 요청이
+  나가야 하기 때문. 회귀 가드: `test_ssml_without_style_is_unchanged`.
+- **캐시 키에 톤이 들어간다.** 같은 문장·같은 보이스라도 톤이 다르면 오디오가
+  다르다. `audio_queue.PCMCache` 의 키는 `(voice, tone, text)` 다.
 
 ## 백엔드 — Azure Speech REST
 - 엔드포인트: `https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`

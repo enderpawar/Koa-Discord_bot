@@ -9,10 +9,19 @@ guild별 설정(TTS 채널, 음성 채널, 보이스 등)을 JSON 파일에 영�
   "<guild_id>": {
     "tts_channel_id": 123,
     "voice_channel_id": 456,
-    "voice": "ko-KR-SunHiNeural"
+    "voice": "ko-KR-SunHiNeural",
+    "pronunciations": { "ㅇㅈ": "인정" }
   }
 }
 ```
+
+`tts_channel_id` / `voice_channel_id` 는 사용자가 고르는 설정이 아니라 **런타임
+상태**다. `/입장` 과 음성 패널이 연결할 때마다 둘을 현재 음성 채널 ID 로 함께
+덮어쓴다. 대시보드는 읽기만 하고 쓰지 않는다 (docs/skills/07 참고).
+
+`pronunciations` 는 서버별 발음 사전이며 형식·한도는 Skill 03 이 정의한다.
+빈 dict `{}` 는 "규칙 없음"이라는 유효한 값이므로 `set()` 의 `None` 필터에
+걸리지 않아야 사전을 비울 수 있다.
 
 ## API
 ```python

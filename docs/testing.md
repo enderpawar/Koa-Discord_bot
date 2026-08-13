@@ -127,6 +127,7 @@ tests/unit/test_X.py      →  자기 자신
 | LoL Stats | `test_lol.py` | 실제 키가 있을 때 Discord에서 `/롤 검색` | 자동 + 선택 라이브 |
 | VALORANT Stats | `test_valorant.py` | 실제 키가 있을 때 Discord에서 `/발로란트 검색` | 자동 + 선택 라이브 |
 | Party Recruitment | `test_party.py` | Discord에서 생성·참가·취소·마감·재시작 복원 | 자동 + 수동 |
+| Party Cleanup | `test_party.py` | 7일 경과 후 실제 정리 (`party_cleanup` 6시간 주기) | 자동 + 장기 수동 |
 | Daily Fortune | `test_fortune.py` | Discord에서 개인 표시·공유 버튼 | 자동 + 수동 |
 
 `check_phase_status.py` 가 자동 단위 테스트의 ✅/❌/·를 출력하므로,

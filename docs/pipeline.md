@@ -63,8 +63,8 @@
 | 적용 Skill | [`07-slash-commands`](skills/07-slash-commands.md) |
 | 적용 Rule | [`04-secrets-and-security`](rules/04-secrets-and-security.md), [`02-guild-isolation`](rules/02-guild-isolation.md) |
 | 산출물 | `cogs/tts_cog.py` (명령어 부분) |
-| 핵심 작업 | `/읽기채널`, `/음성채널`, `/목소리`, `/입장`, `/퇴장`, `/상태` 6개. `Manage Channels` 권한 체크 |
-| 검증 | 테스트 서버에서 6개 명령어 실행 → 응답·설정 반영 확인 |
+| 핵심 작업 | `/목소리`, `/입장`, `/퇴장`, `/상태`. `Manage Channels` 권한 체크. 읽을 채널은 `/입장`이 정하므로 채널 선택 명령을 두지 않는다 |
+| 검증 | 테스트 서버에서 각 명령어 실행 → 응답·설정 반영 확인 |
 
 ## Phase 7 — Event Handlers
 | 항목 | 내용 |
@@ -105,7 +105,22 @@
 
 파티 모집은 메시지별 잠금과 SQLite 트랜잭션으로 참가·대기열 경쟁을 직렬화한다.
 30초 공용 스케줄러 하나가 시작 전 알림과 자동 마감을 처리하며, 파티별 타이머를
-생성하지 않는다. 오늘의 운세는 외부 API를 사용하지 않고 기본 응답을 ephemeral로
+생성하지 않는다.
+
+두 스캔(`claim_due_reminders`, `claim_expired`)은 길드를 가리지 않고
+`status='open'` 으로만 훑으므로, `idx_parties_guild_status_start` (guild_id 선두)
+대신 부분 인덱스 `idx_parties_open_start ON parties(starts_at) WHERE status='open'`
+을 탄다. 마감된 파티가 아무리 쌓여도 30초 스캔 비용이 늘지 않는다.
+
+마감·취소된 행은 6시간마다 도는 `party_cleanup` 이 시작 시각 + `PARTY_RETENTION_DAYS`
+(7일) 이후에 지운다. 열린 파티는 대상이 아니다. 정리를 30초 스케줄러에 얹지 않는
+이유는 이 DELETE 가 테이블 전체를 훑기 때문이다.
+
+**마감(`close`)과 취소(`delete_owned`)는 다른 동작이다.** 마감은 상태만 바꿔 행을
+남기고 모집자·`manage_messages` 권한자가 할 수 있다. 취소는 행을 지우며(참가자 행은
+FK CASCADE) 모집자 본인만 할 수 있다 — 되돌릴 수 없으므로 권한을 더 좁게 잡았다.
+
+오늘의 운세는 외부 API를 사용하지 않고 기본 응답을 ephemeral로
 보내 TTS 채널과 일반 채팅을 불필요하게 채우지 않는다.
 
 ## 의존 그래프
