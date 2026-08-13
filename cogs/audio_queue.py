@@ -135,6 +135,9 @@ class AudioRequest:
     text: str
     voice: str
     voice_channel_id: int
+    # 감정 라벨(preprocess.detect_tone). 캐시 키에 함께 들어간다 — 같은 문장을
+    # 다른 톤으로 읽으면 오디오가 달라지기 때문이다.
+    tone: str | None = None
     enqueued_at: float = field(default_factory=time.perf_counter)
 
 
@@ -344,24 +347,26 @@ class PCMCache:
         self.max_entries = max_entries
         self.max_bytes = max_bytes
         self.max_item_bytes = max_item_bytes
-        self._items: OrderedDict[tuple[str, str], bytes] = OrderedDict()
+        self._items: OrderedDict[tuple[str, str | None, str], bytes] = OrderedDict()
         self._total_bytes = 0
 
-    def get(self, text: str, voice: str) -> bytes | None:
-        key = (voice, text)
+    def get(self, text: str, voice: str, tone: str | None = None) -> bytes | None:
+        key = (voice, tone, text)
         item = self._items.get(key)
         if item is None:
             return None
         self._items.move_to_end(key)
         return item
 
-    def put(self, text: str, voice: str, audio: bytes) -> None:
+    def put(
+        self, text: str, voice: str, audio: bytes, tone: str | None = None
+    ) -> None:
         if self.max_entries <= 0 or self.max_bytes <= 0 or not audio:
             return
         if len(audio) > self.max_item_bytes:
             return
 
-        key = (voice, text)
+        key = (voice, tone, text)
         old = self._items.pop(key, None)
         if old is not None:
             self._total_bytes -= len(old)
@@ -736,6 +741,7 @@ class AudioQueue:
                                 vc,
                                 req.text,
                                 req.voice,
+                                tone=req.tone,
                                 guild_id=guild.id,
                                 queued_ms=queued_ms,
                                 ensure_ms=ensure_ms,
@@ -779,14 +785,14 @@ class AudioQueue:
 
     async def _prefetch(self, req: AudioRequest) -> None:
         """다음 요청을 백그라운드로 합성해 PCM/Opus 캐시에 채운다."""
-        if self._opus_cache.get(req.text, req.voice) is not None:
+        if self._opus_cache.get(req.text, req.voice, req.tone) is not None:
             return
-        if self._cache.get(req.text, req.voice) is not None:
+        if self._cache.get(req.text, req.voice, req.tone) is not None:
             return
 
         collected = bytearray()
         try:
-            async for chunk in stream_synthesize(req.text, req.voice):
+            async for chunk in stream_synthesize(req.text, req.voice, tone=req.tone):
                 if len(collected) + len(chunk) > CACHE_MAX_ITEM_BYTES:
                     return  # 너무 커서 캐시 불가, prefetch 포기
                 collected.extend(chunk)
@@ -797,9 +803,11 @@ class AudioQueue:
         pcm_audio = bytes(collected)
         if not pcm_audio:
             return
-        await self._store_synthesis(req.text, req.voice, pcm_audio)
+        await self._store_synthesis(req.text, req.voice, pcm_audio, req.tone)
 
-    async def _store_synthesis(self, text: str, voice: str, pcm_audio: bytes) -> int:
+    async def _store_synthesis(
+        self, text: str, voice: str, pcm_audio: bytes, tone: str | None = None
+    ) -> int:
         """합성 결과를 캐시에 적재한다.
 
         무음 트리밍과 Opus 인코딩은 발화 전체 프레임을 도는 CPU 작업이므로 함께
@@ -810,9 +818,9 @@ class AudioQueue:
             _prepare_cached_audio,
             pcm_audio,
         )
-        self._cache.put(text, voice, trimmed_pcm)
+        self._cache.put(text, voice, trimmed_pcm, tone)
         if opus_stream is not None:
-            self._opus_cache.put(text, voice, opus_stream)
+            self._opus_cache.put(text, voice, opus_stream, tone)
         return len(trimmed_pcm)
 
     async def _ensure_voice(
@@ -1155,13 +1163,14 @@ class AudioQueue:
         text: str,
         voice: str,
         *,
+        tone: str | None = None,
         guild_id: int | None = None,
         queued_ms: float = 0.0,
         ensure_ms: float = 0.0,
         trace_start: float | None = None,
     ) -> None:
         trace_start = trace_start if trace_start is not None else time.perf_counter()
-        opus_audio = self._opus_cache.get(text, voice)
+        opus_audio = self._opus_cache.get(text, voice, tone)
         if opus_audio is not None:
             play_start = time.perf_counter()
             await self._play_source(vc, CachedOpusSource(opus_audio))
@@ -1179,7 +1188,7 @@ class AudioQueue:
         loop = asyncio.get_running_loop()
         done = asyncio.Event()
         source = StreamingMonoPCMToStereo()
-        cached_audio = self._cache.get(text, voice)
+        cached_audio = self._cache.get(text, voice, tone)
         cache_kind = "pcm" if cached_audio is not None else "miss"
         play_called_at = 0.0
         first_chunk_at: float | None = None
@@ -1198,7 +1207,7 @@ class AudioQueue:
             should_cache = True
             activity = PCMActivityTracker() if TRIM_SILENCE else None
             try:
-                async for chunk in stream_synthesize(text, voice):
+                async for chunk in stream_synthesize(text, voice, tone=tone):
                     if first_chunk_at is None:
                         first_chunk_at = time.perf_counter()
                     raw_bytes += len(chunk)
@@ -1223,6 +1232,7 @@ class AudioQueue:
                         text,
                         voice,
                         pcm_audio,
+                        tone,
                     )
             except Exception:
                 source.abort()

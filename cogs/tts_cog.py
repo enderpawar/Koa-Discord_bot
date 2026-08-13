@@ -27,8 +27,14 @@ from discord.ext import commands
 
 from cogs.audio_queue import AudioQueue, AudioRequest
 from cogs.config_store import ConfigStore
-from cogs.preprocess import clean_message, normalize_pronunciations
-from cogs.tts_engine import DEFAULT_VOICE, close_session, start_keepalive, warm_up
+from cogs.preprocess import clean_message, detect_tone, normalize_pronunciations
+from cogs.tts_engine import (
+    DEFAULT_VOICE,
+    close_session,
+    load_voice_styles,
+    start_keepalive,
+    warm_up,
+)
 from cogs.ui import BRAND_COLOR, channel_ref, notice_embed
 
 log = logging.getLogger(__name__)
@@ -198,6 +204,9 @@ class TTSCog(commands.Cog):
             log.info("tts azure connection warmed")
         except Exception:
             log.debug("tts warm-up failed", exc_info=True)
+        # 감정 스타일 카탈로그. 실패해도 내부에서 빈 표로 떨어지므로 읽기는
+        # 그대로 동작한다 (스타일만 안 붙는다).
+        await load_voice_styles()
 
     # ---------- Phase 6: Slash Commands ----------
 
@@ -536,6 +545,9 @@ class TTSCog(commands.Cog):
         ):
             return
 
+        # 톤은 정제 전 원문에서 읽는다. clean_message 가 `ㅋㅋ` 를 `크크` 로
+        # 바꾸고 나면 감정 신호가 남지 않는다.
+        tone = detect_tone(message.clean_content)
         text = clean_message(message, pronunciations=cfg.get("pronunciations"))
         if not text:
             return
@@ -546,6 +558,7 @@ class TTSCog(commands.Cog):
                 text=text,
                 voice=cfg.get("voice", DEFAULT_VOICE),
                 voice_channel_id=voice_channel_id,
+                tone=tone,
             ),
         )
 

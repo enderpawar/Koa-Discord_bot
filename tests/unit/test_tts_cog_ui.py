@@ -462,6 +462,53 @@ async def test_handle_tts_message_reads_joined_voice_channel_chat() -> None:
 
 
 @pytest.mark.asyncio
+async def test_handle_tts_message_carries_the_detected_tone() -> None:
+    """톤은 정제 전 원문에서 읽어야 한다. `크크크` 에는 신호가 남지 않는다."""
+    cog = _make_cog({
+        "tts_channel_id": 100,
+        "voice_channel_id": 100,
+        "voice": "ko-KR-SunHiNeural",
+    })
+    voice_channel = _voice_channel(100)
+    voice_channel.members = [_human(10)]
+    message = MagicMock()
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.guild.get_channel.return_value = voice_channel
+    message.guild.voice_client = _connected_voice(voice_channel)
+    message.channel = voice_channel
+    message.clean_content = "ㅋㅋㅋ 대박"
+
+    await cog._handle_tts_message(message)
+
+    request = cog.queue.enqueue.await_args.args[1]
+    assert request.tone == "cheerful"
+    assert request.text == "크크크 대박"
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_leaves_plain_text_without_a_tone() -> None:
+    cog = _make_cog({
+        "tts_channel_id": 100,
+        "voice_channel_id": 100,
+        "voice": "ko-KR-SunHiNeural",
+    })
+    voice_channel = _voice_channel(100)
+    voice_channel.members = [_human(10)]
+    message = MagicMock()
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.guild.get_channel.return_value = voice_channel
+    message.guild.voice_client = _connected_voice(voice_channel)
+    message.channel = voice_channel
+    message.clean_content = "오늘 회의 3시입니다"
+
+    await cog._handle_tts_message(message)
+
+    assert cog.queue.enqueue.await_args.args[1].tone is None
+
+
+@pytest.mark.asyncio
 async def test_handle_tts_message_applies_the_guild_pronunciation_dictionary() -> None:
     cog = _make_cog({
         "tts_channel_id": 100,

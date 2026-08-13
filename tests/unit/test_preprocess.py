@@ -133,6 +133,51 @@ def test_replacement_happens_before_truncation():
     assert out.startswith("다" * 30)
 
 
+# ---------- 감정 톤 감지 ----------
+
+
+def _tone(text: str):
+    from cogs.preprocess import detect_tone  # noqa: WPS433
+    return detect_tone(text)
+
+
+def test_laughter_reads_cheerful_and_crying_reads_sad():
+    assert _tone("ㅋㅋㅋ 대박") == "cheerful"
+    assert _tone("ㅎㅎ 좋다") == "cheerful"
+    assert _tone("ㅠㅠ 망했다") == "sad"
+    assert _tone("ㅜㅜ") == "sad"
+
+
+def test_single_consonant_is_not_enough_to_be_an_emotion():
+    """`ㅋ` 하나는 추임새나 오타일 때가 많다."""
+    assert _tone("ㅋ") is None
+    assert _tone("ㅠ") is None
+
+
+def test_repeated_exclamation_reads_excited():
+    assert _tone("와 진짜!!") == "excited"
+    assert _tone("대박!") is None
+
+
+def test_mixed_signals_stay_neutral():
+    """웃음과 울음이 같은 무게면 감정을 고르지 않는다."""
+    assert _tone("ㅋㅋㅠㅠ") is None
+    assert _tone("ㅋㅋㅋ ㅠㅠ") == "cheerful"
+
+
+def test_plain_text_has_no_tone():
+    assert _tone("오늘 회의 3시입니다") is None
+    assert _tone("") is None
+
+
+def test_tone_is_read_from_raw_text_before_cleaning():
+    """clean_message 가 `ㅋㅋ` 를 `크크` 로 바꾸므로 순서가 뒤바뀌면 안 된다."""
+    raw = "ㅋㅋㅋ 대박"
+
+    assert _tone(raw) == "cheerful"
+    assert _tone(_clean(raw)) is None
+
+
 def test_malformed_rules_are_dropped_not_raised():
     from cogs.preprocess import (  # noqa: WPS433
         MAX_PRONUNCIATION_KEY,
