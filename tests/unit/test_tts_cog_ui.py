@@ -30,6 +30,30 @@ def test_voice_choices_include_all_available_korean_voices() -> None:
     ]
 
 
+def test_join_greeting_embeds_the_gif_by_url() -> None:
+    """1.4MB 파일을 입장할 때마다 올리지 않고 공개 저장소 raw URL 을 쓴다."""
+    from cogs.tts_cog import JOIN_GIF_URL, _join_greeting_embed
+
+    channel = _voice_channel(100)
+    embed = _join_greeting_embed(channel)
+
+    assert embed.title == "코아 왔어요"
+    assert embed.image.url == JOIN_GIF_URL
+    assert JOIN_GIF_URL.startswith("https://raw.githubusercontent.com/")
+    assert JOIN_GIF_URL.endswith(".gif")
+
+
+def test_join_gif_asset_is_small_enough_to_load_fast() -> None:
+    """원본 6.7MB 를 그대로 두면 임베드가 늦게 뜬다. 최적화본을 유지한다."""
+    from pathlib import Path
+
+    gif = Path(__file__).resolve().parents[2] / "assets" / "koa-join.gif"
+
+    assert gif.exists(), "assets/koa-join.gif 가 저장소에 있어야 URL 이 살아 있다"
+    assert gif.read_bytes()[:6] == b"GIF89a"
+    assert gif.stat().st_size < 2 * 1024 * 1024
+
+
 def test_default_voice_is_the_soft_female_choice() -> None:
     """서버가 따로 고르기 전 기본 목소리는 `여성 · 부드러움` 이다."""
     assert DEFAULT_VOICE == "ko-KR-SeoHyeonNeural"
@@ -213,6 +237,41 @@ async def test_join_uses_callers_voice_channel_for_input_and_output() -> None:
     interaction.response.send_message.assert_not_awaited()
     embed = interaction.edit_original_response.await_args.kwargs["embed"]
     assert "이 음성 채널의 채팅을 읽습니다" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_join_greets_the_channel_only_when_it_actually_arrives() -> None:
+    """명령 응답은 ephemeral 이라 채널의 다른 사람은 봇이 온 걸 모른다.
+
+    그래서 인사는 공개로 따로 보내되, 이미 들어와 있는데 `/입장` 을 또 누른
+    경우에는 GIF 가 두 번 뜨지 않아야 한다.
+    """
+    channel = _voice_channel(100)
+    guild = MagicMock()
+    guild.id = 1
+
+    def _interaction():
+        itx = MagicMock()
+        itx.guild = guild
+        itx.guild_id = guild.id
+        itx.user = SimpleNamespace(id=7, voice=SimpleNamespace(channel=channel))
+        itx.response.defer = AsyncMock()
+        itx.edit_original_response = AsyncMock()
+        return itx
+
+    # 아직 연결 전 — 인사한다.
+    guild.voice_client = None
+    cog = _make_cog()
+    cog._announce_join = AsyncMock()
+    await TTSCog.join.callback(cog, _interaction())
+    cog._announce_join.assert_awaited_once_with(channel)
+
+    # 이미 같은 채널에 있음 — 인사하지 않는다.
+    guild.voice_client = _connected_voice(channel)
+    cog = _make_cog()
+    cog._announce_join = AsyncMock()
+    await TTSCog.join.callback(cog, _interaction())
+    cog._announce_join.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,25 @@ VOICE_CHOICES = [
 
 PANEL_COOLDOWN_SEC = 300  # unused — kept for reference
 
+# 입장 인사에 띄울 GIF. 매번 1.4MB 를 올리는 대신 공개 저장소의 raw URL 을 쓴다
+# (Discord 가 CDN 으로 캐시하므로 두 번째부터는 즉시 뜬다).
+# 저장소 이름이나 기본 브랜치가 바뀌면 이 주소도 같이 고쳐야 한다 — 그때는
+# 이미지만 안 뜨고 인사 임베드 자체는 그대로 나간다.
+JOIN_GIF_URL = (
+    "https://raw.githubusercontent.com/enderpawar/Koa-Discord_bot/"
+    "main/assets/koa-join.gif"
+)
+
+
+def _join_greeting_embed(channel: discord.VoiceChannel) -> discord.Embed:
+    embed = discord.Embed(
+        title="코아 왔어요",
+        description=f"이제 {channel.mention} 채팅을 읽어드릴게요.",
+        color=BRAND_COLOR,
+    )
+    embed.set_image(url=JOIN_GIF_URL)
+    return embed
+
 
 def _voice_label(voice: str) -> str:
     for choice in VOICE_CHOICES:
@@ -271,6 +290,10 @@ class TTSCog(commands.Cog):
         channel: discord.VoiceChannel,
     ) -> None:
         guild_id = interaction.guild.id
+        already_here = (
+            _connected_voice_client(interaction.guild, channel.id) is not None
+        )
+        greet = False
         try:
             await self.queue.ensure_voice(interaction.guild, channel.id)
         except discord.Forbidden:
@@ -292,13 +315,17 @@ class TTSCog(commands.Cog):
                 f"{channel.mention} 채널 채팅을 TTS 입력으로 사용합니다.",
                 tone="ok",
             )
+            greet = not already_here
         try:
-            await interaction.edit_original_response(embed=embed)
-        except discord.HTTPException:
-            log.debug(
-                "panel connection result response expired: guild_id=%s",
-                guild_id,
-            )
+            try:
+                await interaction.edit_original_response(embed=embed)
+            except discord.HTTPException:
+                log.debug(
+                    "panel connection result response expired: guild_id=%s",
+                    guild_id,
+                )
+            if greet:
+                await self._announce_join(channel)
         finally:
             current = asyncio.current_task()
             if self._panel_connect_tasks.get(guild_id) is current:
@@ -376,6 +403,11 @@ class TTSCog(commands.Cog):
             )
             return
         await interaction.response.defer(thinking=True, ephemeral=True)
+        # 이미 그 채널에 있으면 인사를 다시 하지 않는다. `/입장` 을 두 번 눌렀다고
+        # 채팅에 GIF 가 두 번 뜨면 곤란하다.
+        already_here = (
+            _connected_voice_client(interaction.guild, channel.id) is not None
+        )
         try:
             await self.queue.ensure_voice(interaction.guild, channel.id)
         except discord.Forbidden:
@@ -409,6 +441,8 @@ class TTSCog(commands.Cog):
                 tone="ok",
             ),
         )
+        if not already_here:
+            await self._announce_join(channel)
 
     @app_commands.command(name="퇴장", description="봇을 음성 채널에서 퇴장시킵니다")
     async def leave(self, interaction: discord.Interaction) -> None:
@@ -548,6 +582,26 @@ class TTSCog(commands.Cog):
                 voice_channel_id=voice_channel_id,
             ),
         )
+
+    async def _announce_join(self, channel: discord.VoiceChannel) -> None:
+        """음성 채널 채팅에 입장 인사를 남긴다.
+
+        명령 응답은 실행한 사람에게만 보이는 ephemeral 이라, 채널에 있는 다른
+        사람들은 봇이 들어온 걸 모른다. 인사는 따로 공개로 보낸다.
+
+        실패해도 입장 자체는 이미 끝났으므로 조용히 넘어간다 (Rule 03).
+        """
+        try:
+            await channel.send(
+                embed=_join_greeting_embed(channel),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.Forbidden:
+            log.debug("join greeting forbidden: channel_id=%s", channel.id)
+        except discord.HTTPException:
+            log.debug(
+                "join greeting failed: channel_id=%s", channel.id, exc_info=True
+            )
 
     async def _send_voice_panel(self, channel: discord.VoiceChannel) -> None:
         if channel.id in self._panel_sent:
