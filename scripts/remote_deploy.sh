@@ -44,8 +44,18 @@ fi
 
 sudo systemctl enable --now docker
 
+# `grep -q` 는 매치하는 즉시 끝나면서 앞 명령에 SIGPIPE(141) 를 준다. 이 스크립트는
+# `set -o pipefail` 이라 그 141 이 파이프라인 실패로 잡히고, 결국 "찾았는데 못 찾은
+# 것으로" 판정된다. 매치 뒤에도 쓸 내용이 남아 있을 때만 터지는 경합이라 평소엔
+# 멀쩡하다가 로그가 길어지면 실패한다. 프로세스 치환으로 넘겨 grep 자신의 상태만 본다.
+has_line() {
+  local pattern="$1"
+  shift
+  grep -q -- "$pattern" < <("$@" 2>&1)
+}
+
 mem_total_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
-if (( mem_total_kb < 2097152 )) && ! swapon --show=NAME --noheadings | grep -q .; then
+if (( mem_total_kb < 2097152 )) && ! has_line . swapon --show=NAME --noheadings; then
   if [[ ! -f /swapfile ]]; then
     sudo fallocate -l 2G /swapfile
     sudo chmod 600 /swapfile
@@ -97,7 +107,7 @@ deadline=$((SECONDS + 60))
 while (( SECONDS < deadline )); do
   bot_state="$("${docker_cmd[@]}" inspect --format '{{.State.Status}}' koa-bot 2>/dev/null || true)"
   if [[ "$bot_state" == "running" ]] \
-    && "${docker_cmd[@]}" logs koa-bot 2>&1 | grep -q "logged in as"; then
+    && has_line "logged in as" "${docker_cmd[@]}" logs koa-bot; then
     break
   fi
 
@@ -109,7 +119,7 @@ while (( SECONDS < deadline )); do
   sleep 3
 done
 
-if ! "${docker_cmd[@]}" logs koa-bot 2>&1 | grep -q "logged in as"; then
+if ! has_line "logged in as" "${docker_cmd[@]}" logs koa-bot; then
   echo "error: Discord login was not confirmed within 60 seconds" >&2
   "${docker_cmd[@]}" logs --tail 100 koa-bot >&2 || true
   exit 5
