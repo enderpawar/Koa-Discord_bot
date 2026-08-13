@@ -17,11 +17,10 @@ from cogs.party_cog import (
     PartyCog,
     PartyCreateModal,
     can_mention_game_role,
-    capacity_options,
     format_headcount,
+    parse_capacity,
     parse_party_start,
     party_embed,
-    start_options,
 )
 from cogs.party_store import PartyStore
 
@@ -134,7 +133,7 @@ def test_party_command_takes_no_options_and_opens_the_form() -> None:
 
 
 def test_modal_asks_five_things_with_only_the_title_required() -> None:
-    """제목만 필수다. 나머지는 기본값이 이미 선택된 채로 뜬다."""
+    """제목만 필수다. 나머지를 비우면 지금 바로 · 제한 없음으로 열린다."""
     fields = _modal_fields()
 
     assert [field["label"] for field in fields] == [
@@ -147,61 +146,73 @@ def test_modal_asks_five_things_with_only_the_title_required() -> None:
     required = {
         field["label"] for field in fields if field["component"].get("required")
     }
-    assert required == {"제목", "시작", "정원"}
-    # 시작·정원은 드롭다운이라 기본값이 이미 골라져 있다. 사용자가 손댈 필요가 없다.
-    assert _default_value(fields[1]) == "지금"
-    assert _default_value(fields[2]) == "0"
+    assert required == {"제목"}
+    # 비워 두면 무엇이 되는지 칸 옆에 적혀 있어야 한다.
+    assert fields[1]["component"]["placeholder"] == "지금"
+    assert fields[2]["component"]["placeholder"] == "제한 없음"
 
 
-def _default_value(field: dict) -> str:
-    return next(
-        option["value"]
-        for option in field["component"]["options"]
-        if option.get("default")
-    )
+def test_modal_start_and_capacity_are_free_text() -> None:
+    """드롭다운이면 `2026-08-01 20:00` 이나 7명 같은 값을 아예 못 넣는다.
 
-
-def test_modal_start_and_capacity_are_dropdowns_and_role_is_a_role_picker() -> None:
-    """자유 텍스트로 두면 오타가 나고, 자동완성으로 두면 봇 왕복이 생긴다."""
+    목록을 넉넉히 채워도 결국 누군가는 목록 밖을 원한다.
+    """
     fields = _modal_fields()
 
     assert fields[0]["component"]["type"] == 4  # 제목: 텍스트
-    assert fields[1]["component"]["type"] == 3  # 시작: 드롭다운
-    assert fields[2]["component"]["type"] == 3  # 정원: 드롭다운
+    assert fields[1]["component"]["type"] == 4  # 시작: 자유 입력
+    assert fields[2]["component"]["type"] == 4  # 정원: 자유 입력
     assert fields[3]["component"]["type"] == 4  # 메모: 텍스트
     assert fields[4]["component"]["type"] == 6  # 알림 역할: 역할 선택기
     assert fields[4]["component"]["required"] is False
 
 
-def test_start_options_drop_slots_that_already_passed() -> None:
-    """밤 11시에 `오늘 20:00` 을 고르면 "현재보다 이후" 로 튕긴다.
+def test_modal_refills_what_the_user_already_typed() -> None:
+    """모달은 제출과 동시에 닫힌다. 되물을 때 친 것이 날아가면 안 된다."""
+    draft = {"title": "롤 칼바람", "start": "25시", "capacity": "5", "note": "즐겜"}
 
-    고정 목록이면 그 항목이 계속 남지만, 이 목록은 부를 때마다 다시 만든다.
-    """
-    evening = start_options(datetime(2026, 7, 26, 19, 0, tzinfo=KST))
-    late = start_options(datetime(2026, 7, 26, 23, 30, tzinfo=KST))
+    fields = PartyCreateModal(cog=None, draft=draft).to_dict()["components"]
 
-    assert [option.value for option in evening][0] == "지금"
-    assert "오늘 20:00" in {option.value for option in evening}
-    assert not any(option.value.startswith("오늘") for option in late)
-    assert "내일 21:00" in {option.value for option in late}
-
-
-def test_capacity_options_offer_unlimited_first() -> None:
-    options = capacity_options()
-
-    assert options[0].value == "0" and options[0].default is True
-    assert [option.value for option in options[1:]] == [
-        "2",
-        "3",
-        "4",
+    assert [field["component"].get("value") for field in fields[:4]] == [
+        "롤 칼바람",
+        "25시",
         "5",
-        "6",
-        "8",
-        "10",
+        "즐겜",
     ]
-    # 1명짜리 파티는 없다. 드롭다운이면 애초에 못 고른다.
-    assert "1" not in {option.value for option in options}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("", 0),
+        ("   ", 0),
+        ("제한 없음", 0),
+        ("무제한", 0),
+        ("0", 0),
+        ("5", 5),
+        ("5명", 5),
+        (" 12 인 ", 12),
+        ("20", 20),
+    ],
+)
+def test_parse_capacity_accepts_what_people_actually_type(
+    text: str, expected: int
+) -> None:
+    assert parse_capacity(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("1", "2명 이상"),
+        ("21", "최대"),
+        ("네 명", "숫자"),
+        ("많이", "숫자"),
+    ],
+)
+def test_parse_capacity_rejects_impossible_values(text: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_capacity(text)
 
 
 def test_unmentionable_tag_does_not_block_party_creation() -> None:

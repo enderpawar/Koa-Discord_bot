@@ -249,46 +249,31 @@ def disabled_party_view() -> discord.ui.View:
     return view
 
 
-def start_options(now: datetime | None = None) -> list[discord.SelectOption]:
-    """모달 `시작` 드롭다운. 이미 지난 시간대는 빼고 `지금` 을 기본으로 둔다."""
-    current = now or datetime.now(KST)
-    options = [
-        discord.SelectOption(label="지금 바로", value="지금", default=True),
-    ]
-    for label, delta in (
-        ("30분 뒤", timedelta(minutes=30)),
-        ("1시간 뒤", timedelta(hours=1)),
-        ("2시간 뒤", timedelta(hours=2)),
-    ):
-        options.append(
-            discord.SelectOption(
-                label=label, value=label, description=f"{(current + delta):%H:%M}"
-            )
-        )
-    for hour in (20, 21, 22, 23):
-        if current.replace(hour=hour, minute=0, second=0, microsecond=0) > current:
-            options.append(
-                discord.SelectOption(label=f"오늘 {hour}:00", value=f"오늘 {hour}:00")
-            )
-    options.append(discord.SelectOption(label="내일 21:00", value="내일 21:00"))
-    return options
+MAX_CAPACITY = 20
+_CAPACITY_RE = re.compile(r"^(?P<size>\d{1,3})\s*(?:명|인)?$")
+_UNLIMITED_WORDS = {"제한 없음", "제한없음", "무제한", "없음", "자유", "0"}
 
 
-def capacity_options() -> list[discord.SelectOption]:
-    """모달 `정원` 드롭다운. 실제 모집의 절반 이상이 인원을 안 적는다."""
-    options = [
-        discord.SelectOption(
-            label="제한 없음",
-            value="0",
-            description="대기열 없이 계속 받습니다",
-            default=True,
+def parse_capacity(value: str) -> int:
+    """`5`, `5명`, `제한 없음`, 빈칸을 정원 숫자로. 0 은 제한 없음이다."""
+    normalized = " ".join(value.strip().split())
+    if not normalized or normalized in _UNLIMITED_WORDS:
+        return 0
+
+    match = _CAPACITY_RE.fullmatch(normalized)
+    if match is None:
+        raise ValueError(
+            "정원은 `5`, `5명` 처럼 숫자로 적거나, 비워 두면 제한 없음이 됩니다."
         )
-    ]
-    options.extend(
-        discord.SelectOption(label=f"{size}명", value=str(size))
-        for size in (2, 3, 4, 5, 6, 8, 10)
-    )
-    return options
+    size = int(match.group("size"))
+    if size == 1:
+        raise ValueError(
+            "정원은 모집자를 포함해 2명 이상이어야 합니다. "
+            "인원을 정하지 않으려면 비워 두세요."
+        )
+    if size > MAX_CAPACITY:
+        raise ValueError(f"정원은 최대 {MAX_CAPACITY}명까지 정할 수 있습니다.")
+    return size
 
 
 class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
@@ -296,34 +281,59 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
 
     슬래시 옵션으로 받던 것을 한 화면으로 옮겼다. 옵션 방식은 제목을 넣고 나면
     남은 항목이 이름만 나열돼서 흐름이 끊겼고, `시작`·`정원` 후보를 보려면 항목을
-    하나씩 눌러 봇에 왕복해야 했다. 모달은 다섯 칸이 기본값과 함께 한 번에 뜨고,
-    제출하면 저절로 닫힌다.
+    하나씩 눌러 봇에 왕복해야 했다. 모달은 다섯 칸이 한 번에 뜨고, 제출하면
+    저절로 닫힌다.
+
+    `시작`·`정원` 은 자유 입력이다. 드롭다운이면 `2026-08-01 20:00` 이나 7명 같은
+    값을 아예 못 넣는데, 목록을 넉넉히 채워도 결국 누군가는 목록 밖을 원한다.
+    대신 잘못 적으면 되물어야 해서, 그때 쓰라고 `draft` 로 다시 채워 연다.
     """
 
-    def __init__(self, cog: "PartyCog", *, recent_title: str = "") -> None:
+    def __init__(
+        self,
+        cog: "PartyCog",
+        *,
+        recent_title: str = "",
+        draft: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(timeout=600)
         self.cog = cog
+        filled = draft or {}
         self.title_field = discord.ui.Label(
             text="제목",
             description="무엇을 하는 모집인지",
             component=discord.ui.TextInput(
                 placeholder=recent_title or "리썰 하실분",
+                default=filled.get("title") or None,
                 max_length=MAX_TITLE_LENGTH,
             ),
         )
         self.start_field = discord.ui.Label(
             text="시작",
-            component=discord.ui.Select(options=start_options()),
+            description="비워 두면 지금 바로 (21:00, 내일 19:30, 30분 뒤 …)",
+            component=discord.ui.TextInput(
+                placeholder="지금",
+                default=filled.get("start") or None,
+                required=False,
+                max_length=32,
+            ),
         )
         self.capacity_field = discord.ui.Label(
             text="정원",
-            component=discord.ui.Select(options=capacity_options()),
+            description="비워 두면 제한 없음 (2~20명)",
+            component=discord.ui.TextInput(
+                placeholder="제한 없음",
+                default=filled.get("capacity") or None,
+                required=False,
+                max_length=8,
+            ),
         )
         self.note_field = discord.ui.Label(
             text="메모",
             description="파티 설명이나 조건 (선택)",
             component=discord.ui.TextInput(
                 style=discord.TextStyle.paragraph,
+                default=filled.get("note") or None,
                 required=False,
                 max_length=500,
             ),
@@ -342,20 +352,26 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
         ):
             self.add_item(field)
 
-    @staticmethod
-    def _selected(field: discord.ui.Label, fallback: str) -> str:
-        values = getattr(field.component, "values", None) or []
-        return str(values[0]) if values else fallback
+    def draft(self) -> dict[str, str]:
+        """사용자가 방금 친 값. 입력을 되물을 때 그대로 다시 채운다."""
+        return {
+            "title": str(self.title_field.component.value or ""),
+            "start": str(self.start_field.component.value or ""),
+            "capacity": str(self.capacity_field.component.value or ""),
+            "note": str(self.note_field.component.value or ""),
+        }
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         roles = getattr(self.role_field.component, "values", None) or []
+        entered = self.draft()
         await self.cog.open_party(
             interaction,
-            title=str(self.title_field.component.value or ""),
-            start=self._selected(self.start_field, "지금"),
-            capacity=int(self._selected(self.capacity_field, "0")),
-            note=str(self.note_field.component.value or ""),
+            title=entered["title"],
+            start=entered["start"],
+            capacity=entered["capacity"],
+            note=entered["note"],
             ping_role=roles[0] if roles else None,
+            draft=entered,
         )
 
     async def on_error(
@@ -374,6 +390,27 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
                 await interaction.response.send_message(embed=embed, ephemeral=True)
         except discord.HTTPException:
             log.exception("party modal error reply failed: guild_id=%s", interaction.guild_id)
+
+
+class PartyRetryView(discord.ui.View):
+    """입력이 반려됐을 때 쓰는 `다시 입력` 버튼.
+
+    모달은 제출과 동시에 닫혀서, 되물으면 사용자가 친 것이 전부 날아간다. 이
+    버튼은 방금 친 값을 그대로 채운 폼을 다시 연다.
+    """
+
+    def __init__(self, cog: "PartyCog", draft: dict[str, str]) -> None:
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.draft = draft
+
+    @discord.ui.button(label="다시 입력", style=discord.ButtonStyle.primary)
+    async def retry(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        await interaction.response.send_modal(
+            PartyCreateModal(self.cog, draft=self.draft)
+        )
 
 
 class PartyView(discord.ui.View):
@@ -459,17 +496,33 @@ class PartyCog(commands.Cog):
             )
         )
 
+    async def _reject(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        description: str,
+        draft: dict[str, str] | None = None,
+    ) -> None:
+        """입력을 되묻는다. 친 값이 있으면 그대로 채워 다시 열 버튼을 붙인다."""
+        view = PartyRetryView(self, draft) if draft else discord.utils.MISSING
+        await interaction.response.send_message(
+            embed=notice_embed(title, description, tone="warn"),
+            view=view,
+            ephemeral=True,
+        )
+
     async def open_party(
         self,
         interaction: discord.Interaction,
         *,
         title: str,
         start: str,
-        capacity: int,
+        capacity: str,
         note: str,
         ping_role: discord.Role | None,
+        draft: dict[str, str] | None = None,
     ) -> None:
-        """모달 제출을 받아 모집글을 연다."""
+        """모달 제출을 받아 모집글을 연다. `시작`·`정원` 은 자유 입력이라 여기서 판다."""
         if (
             interaction.guild is None
             or interaction.guild_id is None
@@ -492,40 +545,25 @@ class PartyCog(commands.Cog):
         )
 
         if not party_title:
-            await interaction.response.send_message(
-                embed=notice_embed("입력 확인", "제목을 입력해 주세요.", tone="warn"),
-                ephemeral=True,
-            )
+            await self._reject(interaction, "입력 확인", "제목을 입력해 주세요.", draft)
             return
         if len(party_title) > MAX_TITLE_LENGTH or len(note.strip()) > 500:
-            await interaction.response.send_message(
-                embed=notice_embed(
-                    "입력 확인",
-                    f"제목은 {MAX_TITLE_LENGTH}자, 메모는 500자 이하로 입력해 주세요.",
-                    tone="warn",
-                ),
-                ephemeral=True,
+            await self._reject(
+                interaction,
+                "입력 확인",
+                f"제목은 {MAX_TITLE_LENGTH}자, 메모는 500자 이하로 입력해 주세요.",
+                draft,
             )
             return
-        # 드롭다운은 1을 안 주지만, 이 메서드는 폼 밖에서도 부를 수 있다.
-        if int(capacity) == 1:
-            await interaction.response.send_message(
-                embed=notice_embed(
-                    "입력 확인",
-                    "정원은 모집자를 포함해 2명 이상이어야 합니다. "
-                    "인원을 정하지 않으려면 `제한 없음` 을 골라 주세요.",
-                    tone="warn",
-                ),
-                ephemeral=True,
-            )
+        try:
+            party_capacity = parse_capacity(capacity)
+        except ValueError as exc:
+            await self._reject(interaction, "정원 확인", str(exc), draft)
             return
         try:
             starts_at = parse_party_start(start)
         except ValueError as exc:
-            await interaction.response.send_message(
-                embed=notice_embed("시간 확인", str(exc), tone="warn"),
-                ephemeral=True,
-            )
+            await self._reject(interaction, "시간 확인", str(exc), draft)
             return
 
         # 지금 시작하는 모집은 시작 시각에 닫으면 올리자마자 마감된다.
@@ -537,7 +575,7 @@ class PartyCog(commands.Cog):
             interaction.channel_id,
             interaction.user.id,
             title=party_title,
-            capacity=int(capacity),
+            capacity=party_capacity,
             starts_at=starts_at.timestamp(),
             expires_at=expires_at.timestamp(),
             note=note,
