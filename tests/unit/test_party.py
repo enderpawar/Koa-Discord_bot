@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import sqlite3
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from discord.ext import commands
 from cogs.party_cog import (
     PartyCog,
     can_mention_game_role,
+    format_headcount,
     parse_party_start,
     party_embed,
 )
@@ -40,7 +42,7 @@ async def _bound_party(
         guild_id,
         100,
         owner_id,
-        game="롤",
+        title="롤",
         capacity=capacity,
         starts_at=starts_at,
         note="즐겜",
@@ -70,6 +72,32 @@ def test_parse_party_start_rejects_past_explicit_time() -> None:
         parse_party_start("오늘 19:00", now=now)
 
 
+def test_parse_party_start_defaults_to_now() -> None:
+    """실제 모집 글은 시간을 안 적고 올린 즉시 시작한다. 그게 기본값이어야 한다.
+
+    예전에는 `시작` 이 필수인 데다 과거 시각을 전부 거부해서, "지금 하실 분" 을
+    입력할 방법 자체가 없었다.
+    """
+    now = datetime(2026, 7, 26, 20, 0, tzinfo=KST)
+
+    assert parse_party_start("", now=now) == now
+    assert parse_party_start("지금", now=now) == now
+    assert parse_party_start("  바로 ", now=now) == now
+
+
+def test_parse_party_start_supports_relative_offsets() -> None:
+    now = datetime(2026, 7, 26, 20, 0, tzinfo=KST)
+
+    assert parse_party_start("30분 뒤", now=now) == datetime(
+        2026, 7, 26, 20, 30, tzinfo=KST
+    )
+    assert parse_party_start("2시간 후", now=now) == datetime(
+        2026, 7, 26, 22, 0, tzinfo=KST
+    )
+    with pytest.raises(ValueError, match="최대"):
+        parse_party_start("999시간 뒤", now=now)
+
+
 def test_game_role_can_use_role_setting_or_bot_permission() -> None:
     public_role = SimpleNamespace(is_default=lambda: False, mentionable=True)
     private_role = SimpleNamespace(is_default=lambda: False, mentionable=False)
@@ -90,19 +118,32 @@ def _party_options() -> list[dict]:
     return PartyCog.create_party.to_dict(_TEST_BOT.tree)["options"]
 
 
-def test_game_name_is_free_text_and_independent_of_any_role() -> None:
-    """게임 이름은 순수 텍스트다.
+def test_title_is_free_text_and_independent_of_any_role() -> None:
+    """제목은 순수 텍스트다.
 
-    역할 타입이면 Discord 가 `롤`, `발로` 를 "올바른 역할이 아닙니다" 로 막고,
-    자동완성을 붙이면 Tab 이 역할 후보를 대신 집어넣는다. 둘 다 없어야 한다.
+    역할 타입이면 Discord 가 `롤`, `발로` 를 "올바른 역할이 아닙니다" 로 막는다.
+    자동완성은 붙어 있지만 후보는 이 서버가 예전에 쓴 제목이지 역할이 아니다.
     """
     annotations = PartyCog.create_party.callback.__annotations__
-    assert annotations["game"] == "str"
+    assert annotations["title"] == "str"
 
-    game = next(option for option in _party_options() if option["name"] == "게임")
-    assert game["type"] == 3
-    assert game["required"] is True
-    assert not game.get("autocomplete", False)
+    title = next(option for option in _party_options() if option["name"] == "제목")
+    assert title["type"] == 3
+    assert title["required"] is True
+    assert title.get("autocomplete") is True
+
+
+def test_title_is_the_only_required_option() -> None:
+    """한 줄 채팅만큼 빨라야 쓴다.
+
+    실사용 모집 글에서 시간을 적는 사람은 없고 인원도 절반이 안 적는다. 그런
+    항목이 필수면 명령이 채팅보다 느려서 아무도 안 쓴다.
+    """
+    required = {
+        option["name"] for option in _party_options() if option.get("required")
+    }
+
+    assert required == {"제목"}
 
 
 def test_ping_role_is_a_separate_optional_role_option() -> None:
@@ -222,7 +263,7 @@ async def test_remove_guild_does_not_touch_other_guilds(store: PartyStore) -> No
         2,
         200,
         20,
-        game="마인크래프트",
+        title="마인크래프트",
         capacity=4,
         starts_at=3000,
         now_ts=1000,
@@ -241,7 +282,8 @@ async def test_party_embed_shows_capacity_and_status(store: PartyStore) -> None:
 
     embed = party_embed(party)
 
-    assert embed.title == "🎮 롤 파티 모집"
+    # 제목은 자유 입력이라("리썰 3/4 급구") 뒤에 "파티 모집"을 붙이면 겹쳐 읽힌다.
+    assert embed.title == "🎮 롤"
     assert embed.fields[0].value == "<t:2000:t> (<t:2000:R>)"
     assert embed.fields[1].value == "**1 / 4명**"
     assert embed.fields[2].value == "🟢 모집 중"
@@ -313,7 +355,7 @@ async def _party_at(
         guild_id,
         100,
         owner_id,
-        game="롤",
+        title="롤",
         capacity=4,
         starts_at=starts_at,
         now_ts=1000,
@@ -392,17 +434,188 @@ async def test_purge_old_removes_finished_parties_but_never_open_ones(
     assert await store.get(1, still_open.id) is not None
 
 
-async def test_scheduler_scan_uses_the_open_party_index(store: PartyStore) -> None:
-    """마감 파티가 쌓여도 30초 스캔이 전체 테이블을 훑지 않아야 한다."""
+@pytest.mark.parametrize(
+    ("column", "index"),
+    [
+        ("starts_at", "idx_parties_open_start"),
+        ("expires_at", "idx_parties_open_expiry"),
+    ],
+)
+async def test_scheduler_scans_use_the_open_party_indexes(
+    store: PartyStore, column: str, index: str
+) -> None:
+    """마감 파티가 쌓여도 30초 스캔이 전체 테이블을 훑지 않아야 한다.
+
+    리마인더는 starts_at, 자동 마감은 expires_at 을 훑는다. 둘 다 부분 인덱스가
+    필요하다 — 한쪽만 있으면 나머지 스캔이 조용히 전체 테이블로 돌아간다.
+    """
     await _bound_party(store)
 
     with store._connect() as conn:
         plan = conn.execute(
             "EXPLAIN QUERY PLAN SELECT id FROM parties "
-            "WHERE status = 'open' AND starts_at <= 1"
+            f"WHERE status = 'open' AND {column} <= 1"
         ).fetchall()
 
-    assert any("idx_parties_open_start" in str(tuple(row)) for row in plan), plan
+    assert any(index in str(tuple(row)) for row in plan), plan
+
+
+# ---------- 즉시 모집("지금") ----------
+
+
+async def test_instant_party_is_not_closed_the_moment_it_opens(
+    store: PartyStore,
+) -> None:
+    """`지금` 파티는 시작 시각이 곧 생성 시각이다.
+
+    마감을 starts_at 으로 잡으면 올린 즉시 30초 스케줄러가 닫아 버린다. 실제
+    모집 글은 전부 즉시 시작이라, 이게 막히면 명령을 쓸 이유가 없어진다.
+    """
+    party = await store.create(
+        1,
+        100,
+        10,
+        title="리썰 하실분",
+        starts_at=1000,
+        expires_at=1000 + 7200,
+        now_ts=1000,
+    )
+    await store.bind_message(1, party.id, 500)
+
+    assert await store.claim_expired(now_ts=1000) == []
+    assert await store.claim_expired(now_ts=1000 + 7199) == []
+
+    expired = await store.claim_expired(now_ts=1000 + 7200)
+    assert [p.id for p in expired] == [party.id]
+
+
+async def test_instant_party_embed_says_now_and_shows_its_close_window(
+    store: PartyStore,
+) -> None:
+    party = await store.create(
+        1,
+        100,
+        10,
+        title="리썰 하실분",
+        starts_at=1000,
+        expires_at=1000 + 7200,
+        now_ts=1000,
+    )
+
+    embed = party_embed(party)
+
+    # "0분 전 시작" 같은 소리 대신 사실을 적는다.
+    assert embed.fields[0].value == "**지금 바로**"
+    assert "2시간 뒤 자동 마감" in embed.footer.text
+
+
+# ---------- 정원 제한 없음 ----------
+
+
+async def test_capacity_zero_means_unlimited_and_never_waitlists(
+    store: PartyStore,
+) -> None:
+    """모집 글의 절반 이상이 인원을 안 적는다. 그 경우 대기열이 생기면 안 된다."""
+    party = await store.create(
+        1, 100, 10, title="배그 하실분", capacity=0, starts_at=2000, now_ts=1000
+    )
+    await store.bind_message(1, party.id, 500)
+
+    for user_id in range(20, 30):
+        mutation = await store.join(1, 500, user_id, now_ts=1001)
+        assert mutation.outcome == "joined"
+
+    latest = await store.get(1, party.id)
+    assert latest is not None
+    assert len(latest.members) == 11
+    assert latest.waitlist == ()
+    assert format_headcount(latest) == "**11명** · 제한 없음"
+
+
+async def test_capacity_of_one_is_rejected(store: PartyStore) -> None:
+    """혼자 하는 파티는 없다. 0(제한 없음)과 1(오타)은 구분해야 한다."""
+    with pytest.raises(ValueError):
+        await store.create(
+            1, 100, 10, title="롤", capacity=1, starts_at=2000, now_ts=1000
+        )
+
+
+# ---------- 제목 자동완성 ----------
+
+
+async def test_recent_titles_are_deduped_newest_first_and_guild_isolated(
+    store: PartyStore,
+) -> None:
+    for index, (guild_id, title, ts) in enumerate(
+        [
+            (1, "롤 칼바람", 1000),
+            (1, "리썰 하실분", 2000),
+            (1, "롤 칼바람", 3000),
+            (2, "발로 5인", 4000),
+        ]
+    ):
+        party = await store.create(
+            guild_id, 100, 10, title=title, starts_at=ts + 10, now_ts=ts
+        )
+        await store.bind_message(guild_id, party.id, 500 + index)
+
+    assert await store.recent_titles(1) == ["롤 칼바람", "리썰 하실분"]
+    assert await store.recent_titles(1, keyword="리썰") == ["리썰 하실분"]
+    assert await store.recent_titles(2) == ["발로 5인"]
+
+
+# ---------- 스키마 마이그레이션 ----------
+
+
+async def test_store_upgrades_a_pre_title_database(tmp_path: Path) -> None:
+    """운영 중인 party.db 는 `game` 컬럼에 expires_at 이 없는 옛 스키마다.
+
+    `CREATE TABLE IF NOT EXISTS` 는 기존 테이블을 안 건드리므로, 마이그레이션이
+    없으면 배포 직후 모든 파티 조회가 터진다.
+    """
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE parties (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL DEFAULT 0,
+                owner_id INTEGER NOT NULL,
+                game TEXT NOT NULL,
+                capacity INTEGER NOT NULL,
+                starts_at REAL NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at REAL NOT NULL,
+                reminder_sent INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE party_members (
+                party_id INTEGER NOT NULL REFERENCES parties(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                joined_at REAL NOT NULL,
+                PRIMARY KEY (party_id, user_id)
+            );
+            INSERT INTO parties (
+                guild_id, channel_id, message_id, owner_id, game,
+                capacity, starts_at, created_at
+            ) VALUES (1, 100, 500, 10, '롤', 5, 2000, 1000);
+            INSERT INTO party_members (party_id, user_id, role, joined_at)
+            VALUES (1, 10, 'member', 1000);
+            """
+        )
+
+    upgraded = PartyStore(path)
+    party = await upgraded.get(1, 1)
+
+    assert party is not None
+    assert party.title == "롤"
+    # 옛 파티는 시작 시각에 닫히던 것들이다. 그 동작이 그대로 옮겨져야 한다.
+    assert party.expires_at == party.starts_at
+    # 두 번째 기동에서도 조용히 통과해야 한다.
+    assert (await PartyStore(path).get(1, 1)) is not None
 
 
 async def test_party_extension_registers_commands_and_persistent_view(

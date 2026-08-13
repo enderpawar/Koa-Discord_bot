@@ -16,9 +16,13 @@ class Party:
     channel_id: int
     message_id: int
     owner_id: int
-    game: str
+    title: str
+    # 0 = 정원 제한 없음. 실사용에서 인원을 안 적는 모집이 절반을 넘는다.
     capacity: int
     starts_at: float
+    # 모집이 자동으로 닫히는 시각. 예약 파티는 시작 시각과 같고, "지금" 파티는
+    # 시작 시각이 곧 생성 시각이라 그대로 두면 올리자마자 마감된다.
+    expires_at: float
     note: str
     status: str
     created_at: float
@@ -64,27 +68,15 @@ class PartyStore:
                     channel_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL DEFAULT 0,
                     owner_id INTEGER NOT NULL,
-                    game TEXT NOT NULL,
+                    title TEXT NOT NULL,
                     capacity INTEGER NOT NULL,
                     starts_at REAL NOT NULL,
+                    expires_at REAL NOT NULL DEFAULT 0,
                     note TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'open',
                     created_at REAL NOT NULL,
                     reminder_sent INTEGER NOT NULL DEFAULT 0
                 );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_parties_message
-                ON parties(message_id) WHERE message_id > 0;
-
-                CREATE INDEX IF NOT EXISTS idx_parties_guild_status_start
-                ON parties(guild_id, status, starts_at);
-
-                -- 스케줄러(claim_due_reminders / claim_expired)는 길드를 가리지 않고
-                -- `status='open' AND starts_at …` 로만 훑는다. 위 인덱스는 guild_id 가
-                -- 선두라 그 조건에 쓸 수 없어서 30초마다 parties 전체를 스캔했다.
-                -- 부분 인덱스라 마감된 파티가 아무리 쌓여도 크기가 늘지 않는다.
-                CREATE INDEX IF NOT EXISTS idx_parties_open_start
-                ON parties(starts_at) WHERE status = 'open';
 
                 CREATE TABLE IF NOT EXISTS party_members (
                     party_id INTEGER NOT NULL REFERENCES parties(id) ON DELETE CASCADE,
@@ -93,11 +85,53 @@ class PartyStore:
                     joined_at REAL NOT NULL,
                     PRIMARY KEY (party_id, user_id)
                 );
+                """
+            )
+            # 인덱스보다 먼저다. 아래 인덱스가 새 컬럼을 참조한다.
+            self._migrate_sync(conn)
+            conn.executescript(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_parties_message
+                ON parties(message_id) WHERE message_id > 0;
+
+                CREATE INDEX IF NOT EXISTS idx_parties_guild_status_start
+                ON parties(guild_id, status, starts_at);
+
+                -- 스케줄러(claim_due_reminders / claim_expired)는 길드를 가리지 않고
+                -- `status='open' AND …` 로만 훑는다. 위 인덱스는 guild_id 가
+                -- 선두라 그 조건에 쓸 수 없어서 30초마다 parties 전체를 스캔했다.
+                -- 부분 인덱스라 마감된 파티가 아무리 쌓여도 크기가 늘지 않는다.
+                -- 리마인더는 starts_at, 자동 마감은 expires_at 을 훑으므로 둘 다 둔다.
+                CREATE INDEX IF NOT EXISTS idx_parties_open_start
+                ON parties(starts_at) WHERE status = 'open';
+
+                CREATE INDEX IF NOT EXISTS idx_parties_open_expiry
+                ON parties(expires_at) WHERE status = 'open';
 
                 CREATE INDEX IF NOT EXISTS idx_party_members_order
                 ON party_members(party_id, role, joined_at);
                 """
             )
+
+    @staticmethod
+    def _migrate_sync(conn: sqlite3.Connection) -> None:
+        """이미 배포된 DB 를 현재 스키마로 끌어올린다.
+
+        `CREATE TABLE IF NOT EXISTS` 는 기존 테이블을 건드리지 않으므로, 운영 중인
+        party.db 는 여기서만 갱신된다. 두 변경 모두 한 번 적용되면 이후로는 no-op 다.
+        """
+        columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(parties)")
+        }
+        if "game" in columns and "title" not in columns:
+            # 모집 대상이 게임 이름이 아니라 자유 제목이 됐다.
+            conn.execute("ALTER TABLE parties RENAME COLUMN game TO title")
+        if "expires_at" not in columns:
+            conn.execute(
+                "ALTER TABLE parties ADD COLUMN expires_at REAL NOT NULL DEFAULT 0"
+            )
+            # 기존 파티는 전부 시작 시각에 닫히던 것들이다. 그 동작을 그대로 옮긴다.
+            conn.execute("UPDATE parties SET expires_at = starts_at")
 
     async def create(
         self,
@@ -105,16 +139,17 @@ class PartyStore:
         channel_id: int,
         owner_id: int,
         *,
-        game: str,
-        capacity: int,
+        title: str,
+        capacity: int = 0,
         starts_at: float,
+        expires_at: float | None = None,
         note: str = "",
         now_ts: float | None = None,
     ) -> Party:
-        if capacity < 2:
-            raise ValueError("capacity must be at least 2")
-        if not game.strip():
-            raise ValueError("game is required")
+        if capacity == 1 or capacity < 0:
+            raise ValueError("capacity must be 0 (unlimited) or at least 2")
+        if not title.strip():
+            raise ValueError("title is required")
         created_at = now_ts if now_ts is not None else time.time()
         async with self._lock:
             return await asyncio.to_thread(
@@ -122,9 +157,10 @@ class PartyStore:
                 guild_id,
                 channel_id,
                 owner_id,
-                game.strip(),
+                title.strip(),
                 capacity,
                 starts_at,
+                starts_at if expires_at is None else expires_at,
                 note.strip(),
                 created_at,
             )
@@ -134,9 +170,10 @@ class PartyStore:
         guild_id: int,
         channel_id: int,
         owner_id: int,
-        game: str,
+        title: str,
         capacity: int,
         starts_at: float,
+        expires_at: float,
         note: str,
         created_at: float,
     ) -> Party:
@@ -144,17 +181,18 @@ class PartyStore:
             cursor = conn.execute(
                 """
                 INSERT INTO parties (
-                    guild_id, channel_id, owner_id, game, capacity,
-                    starts_at, note, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    guild_id, channel_id, owner_id, title, capacity,
+                    starts_at, expires_at, note, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     guild_id,
                     channel_id,
                     owner_id,
-                    game,
+                    title,
                     capacity,
                     starts_at,
+                    expires_at,
                     note,
                     created_at,
                 ),
@@ -336,7 +374,13 @@ class PartyStore:
                     (party_id,),
                 ).fetchone()[0]
             )
-            role = "member" if member_count < party.capacity else "waitlist"
+            # capacity 0 은 "제한 없음" 이라 대기열이 생기지 않는다.
+            unlimited = party.capacity == 0
+            role = (
+                "member"
+                if unlimited or member_count < party.capacity
+                else "waitlist"
+            )
             conn.execute(
                 """
                 INSERT INTO party_members (party_id, user_id, role, joined_at)
@@ -500,6 +544,36 @@ class PartyStore:
                 self._get_party_sync(conn, guild_id, int(row["id"])) for row in rows
             ]
 
+    async def recent_titles(
+        self, guild_id: int, *, keyword: str = "", limit: int = 25
+    ) -> list[str]:
+        """이 서버에서 최근에 쓴 모집 제목을 새 것부터.
+
+        `/파티모집` 제목 자동완성이 쓴다. 같은 제목("리썰", "발로 3인")이 반복되는
+        서버에서 매번 다시 타이핑하지 않게 하는 게 목적이다.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._recent_titles_sync, guild_id, keyword.strip(), max(1, limit)
+            )
+
+    def _recent_titles_sync(
+        self, guild_id: int, keyword: str, limit: int
+    ) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT title, MAX(created_at) AS last_used
+                FROM parties
+                WHERE guild_id = ? AND (? = '' OR title LIKE '%' || ? || '%')
+                GROUP BY title COLLATE NOCASE
+                ORDER BY last_used DESC
+                LIMIT ?
+                """,
+                (guild_id, keyword, keyword, limit),
+            ).fetchall()
+            return [str(row["title"]) for row in rows]
+
     async def list_for_user(
         self, guild_id: int, user_id: int, *, limit: int = 10
     ) -> list[Party]:
@@ -575,8 +649,8 @@ class PartyStore:
             rows = conn.execute(
                 """
                 SELECT id, guild_id FROM parties
-                WHERE status = 'open' AND starts_at <= ?
-                ORDER BY starts_at
+                WHERE status = 'open' AND expires_at <= ?
+                ORDER BY expires_at
                 """,
                 (now_ts,),
             ).fetchall()
@@ -632,9 +706,10 @@ class PartyStore:
             channel_id=int(row["channel_id"]),
             message_id=int(row["message_id"]),
             owner_id=int(row["owner_id"]),
-            game=str(row["game"]),
+            title=str(row["title"]),
             capacity=int(row["capacity"]),
             starts_at=float(row["starts_at"]),
+            expires_at=float(row["expires_at"]),
             note=str(row["note"]),
             status=str(row["status"]),
             created_at=float(row["created_at"]),

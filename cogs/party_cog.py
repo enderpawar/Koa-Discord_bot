@@ -20,7 +20,14 @@ log = logging.getLogger(__name__)
 KST = ZoneInfo("Asia/Seoul")
 MAX_SCHEDULE_DAYS = 30
 _CLOCK_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})$")
-MAX_GAME_NAME_LENGTH = 50
+_RELATIVE_RE = re.compile(r"^(?P<amount>\d{1,3})\s*(?P<unit>분|시간)\s*(?:뒤|후)$")
+MAX_TITLE_LENGTH = 50
+# "지금"으로 연 파티는 시작 시각이 곧 생성 시각이다. 시작 시각에 자동 마감하면
+# 올리자마자 닫히므로, 즉시 모집에는 별도의 모집 창을 준다.
+INSTANT_PARTY_WINDOW = timedelta(hours=2)
+# 이 안쪽으로 시작하는 파티는 예약이 아니라 "지금 하자"로 본다.
+INSTANT_START_SLACK = timedelta(minutes=1)
+_NOW_WORDS = {"지금", "바로", "즉시", "now"}
 # 마감/취소된 파티를 지우기까지 남겨 두는 기간. 시작 시각 기준이다.
 # 짧게 두면 "어제 그 파티 누구 왔었지" 를 못 보고, 길게 두면 행이 계속 쌓인다.
 PARTY_RETENTION_DAYS = 7
@@ -28,11 +35,29 @@ PARTY_CLEANUP_INTERVAL_HOURS = 6
 
 
 def parse_party_start(value: str, *, now: datetime | None = None) -> datetime:
-    """Parse a compact Korean party time into a future KST datetime."""
+    """Parse a compact Korean party time into a KST datetime.
+
+    빈 문자열과 `지금` 은 "지금 바로" 다. 실제 모집 글의 대부분이 시간을 안 적고
+    올린 즉시 시작하므로, 그게 기본값이어야 한다.
+    """
     current = (now or datetime.now(KST)).astimezone(KST)
     normalized = " ".join(value.strip().split())
-    if not normalized:
-        raise ValueError("시작 시간을 입력해 주세요.")
+    if not normalized or normalized.lower() in _NOW_WORDS:
+        return current
+
+    relative = _RELATIVE_RE.fullmatch(normalized)
+    if relative is not None:
+        amount = int(relative.group("amount"))
+        delta = (
+            timedelta(minutes=amount)
+            if relative.group("unit") == "분"
+            else timedelta(hours=amount)
+        )
+        if delta > timedelta(days=MAX_SCHEDULE_DAYS):
+            raise ValueError(
+                f"파티는 최대 {MAX_SCHEDULE_DAYS}일 뒤까지만 모집할 수 있습니다."
+            )
+        return current + delta
 
     day_offset: int | None = None
     clock_text = normalized
@@ -73,7 +98,7 @@ def parse_party_start(value: str, *, now: datetime | None = None) -> datetime:
             break
         if parsed is None:
             raise ValueError(
-                "시작 시간은 `오늘 21:00`, `내일 19:30`, `21:00`, "
+                "시작 시간은 `지금`, `30분 뒤`, `오늘 21:00`, `내일 19:30`, "
                 "`2026-08-01 20:00` 형식으로 입력해 주세요."
             )
 
@@ -105,24 +130,42 @@ _STATUS_LABELS = {
 _CLOSED_LABEL = "⚫ 모집 마감"
 
 
+def is_instant_party(party: Party) -> bool:
+    """올리자마자 시작하는 모집인지. 예약 파티와 마감·표시 방식이 다르다."""
+    return party.starts_at <= party.created_at + INSTANT_START_SLACK.total_seconds()
+
+
+def format_headcount(party: Party) -> str:
+    if party.capacity <= 0:
+        return f"**{len(party.members)}명** · 제한 없음"
+    return f"**{len(party.members)} / {party.capacity}명**"
+
+
+def _start_label(party: Party) -> str:
+    """평문 시작 시각. 자동완성 항목처럼 `<t:…>` 가 안 통하는 곳에서 쓴다."""
+    if is_instant_party(party):
+        return "지금"
+    return datetime.fromtimestamp(party.starts_at, KST).strftime("%m/%d %H:%M")
+
+
 def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Embed:
     is_open = party.status == "open"
     embed = discord.Embed(
-        title=f"🎮 {party.game} 파티 모집",
+        title=f"🎮 {party.title}",
         description=party.note or "같이 플레이할 파티원을 모집합니다.",
         color=BRAND_COLOR if is_open else INFO_COLOR,
     )
     timestamp = int(party.starts_at)
     embed.add_field(
         name="시작",
-        value=f"<t:{timestamp}:t> (<t:{timestamp}:R>)",
+        value=(
+            "**지금 바로**"
+            if is_instant_party(party)
+            else f"<t:{timestamp}:t> (<t:{timestamp}:R>)"
+        ),
         inline=True,
     )
-    embed.add_field(
-        name="인원",
-        value=f"**{len(party.members)} / {party.capacity}명**",
-        inline=True,
-    )
+    embed.add_field(name="인원", value=format_headcount(party), inline=True)
     embed.add_field(
         name="상태",
         value=_STATUS_LABELS.get(party.status, _CLOSED_LABEL),
@@ -147,8 +190,14 @@ def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Emb
             value="\n".join(wait_lines),
             inline=False,
         )
+    if party.expires_at > party.starts_at:
+        # 즉시 모집. footer 는 <t:…> 를 렌더링하지 않아서 상대 시간으로 적는다.
+        hours = max(1, round((party.expires_at - party.starts_at) / 3600))
+        open_note = f"{hours}시간 뒤 자동 마감"
+    else:
+        open_note = "시작 시 자동 마감"
     footer_note = {
-        "open": "시작 시 자동 마감",
+        "open": open_note,
         "cancelled": "모집자가 취소함",
     }.get(party.status, "모집 종료")
 
@@ -252,23 +301,70 @@ class PartyCog(commands.Cog):
         self.party_scheduler.cancel()
         self.party_cleanup.cancel()
 
+    async def _title_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """이 서버에서 최근에 쓴 제목을 제안한다. 반복 타이핑을 없애는 게 목적이다."""
+        if interaction.guild_id is None:
+            return []
+        try:
+            titles = await self.store.recent_titles(
+                interaction.guild_id, keyword=current, limit=25
+            )
+        except Exception:
+            # 자동완성이 실패해도 명령 자체는 살아 있어야 한다 (Rule 03).
+            log.exception(
+                "party title autocomplete failed: guild_id=%s", interaction.guild_id
+            )
+            return []
+        return [
+            app_commands.Choice(name=title[:100], value=title[:100])
+            for title in titles
+        ]
+
+    async def _start_choices(
+        self, _interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """`지금` 을 첫 줄에 세운다. 실제 모집의 대부분이 즉시 시작이다."""
+        now = datetime.now(KST)
+        suggestions: list[tuple[str, str]] = [("지금 바로 시작", "지금")]
+        for label, delta in (
+            ("30분 뒤", timedelta(minutes=30)),
+            ("1시간 뒤", timedelta(hours=1)),
+            ("2시간 뒤", timedelta(hours=2)),
+        ):
+            suggestions.append((f"{label} ({(now + delta):%H:%M})", label))
+        for hour in (20, 21, 22, 23):
+            slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+            if slot > now:
+                suggestions.append((f"오늘 {hour}:00", f"오늘 {hour}:00"))
+        suggestions.append(("내일 21:00", "내일 21:00"))
+
+        keyword = current.strip().lower()
+        return [
+            app_commands.Choice(name=name[:100], value=value)
+            for name, value in suggestions
+            if not keyword or keyword in name.lower()
+        ][:25]
+
     @app_commands.command(name="파티모집", description="함께 플레이할 파티원을 모집합니다")
     @app_commands.rename(
-        game="게임", capacity="정원", start="시작", note="메모", ping_role="태그"
+        title="제목", capacity="정원", start="시작", note="메모", ping_role="태그"
     )
     @app_commands.describe(
-        game="게임 이름 (롤, 발로 …)",
-        capacity="모집 정원(2~20명, 모집자 포함)",
-        start="오늘 21:00, 내일 19:30, 2026-08-01 20:00",
+        title="무엇을 하는 모집인지 (롤 칼바람, 리썰 컴퍼니 …)",
+        start="비워 두면 지금 바로 시작합니다",
+        capacity="정원 (비워 두면 제한 없음, 2~20명)",
         note="파티 설명이나 조건",
         ping_role="알림을 보낼 역할 (선택)",
     )
+    @app_commands.autocomplete(title=_title_choices, start=_start_choices)
     async def create_party(
         self,
         interaction: discord.Interaction,
-        game: str,
-        capacity: app_commands.Range[int, 2, 20],
-        start: str,
+        title: str,
+        start: str = "",
+        capacity: app_commands.Range[int, 0, 20] = 0,
         note: str = "",
         ping_role: discord.Role | None = None,
     ) -> None:
@@ -284,8 +380,8 @@ class PartyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        # 게임 이름은 순수 텍스트다. 알림 대상은 `태그` 옵션에서만 온다.
-        game_name = " ".join(game.split())
+        # 제목은 순수 텍스트다. 알림 대상은 `태그` 옵션에서만 온다.
+        party_title = " ".join(title.split())
         mention_role = (
             ping_role
             if ping_role is not None
@@ -293,20 +389,28 @@ class PartyCog(commands.Cog):
             else None
         )
 
-        if not game_name:
+        if not party_title:
+            await interaction.response.send_message(
+                embed=notice_embed("입력 확인", "제목을 입력해 주세요.", tone="warn"),
+                ephemeral=True,
+            )
+            return
+        if len(party_title) > MAX_TITLE_LENGTH or len(note.strip()) > 500:
             await interaction.response.send_message(
                 embed=notice_embed(
-                    "입력 확인", "게임 이름을 입력해 주세요.", tone="warn"
+                    "입력 확인",
+                    f"제목은 {MAX_TITLE_LENGTH}자, 메모는 500자 이하로 입력해 주세요.",
+                    tone="warn",
                 ),
                 ephemeral=True,
             )
             return
-        if len(game_name) > MAX_GAME_NAME_LENGTH or len(note.strip()) > 500:
+        if int(capacity) == 1:
             await interaction.response.send_message(
                 embed=notice_embed(
                     "입력 확인",
-                    f"게임 이름은 {MAX_GAME_NAME_LENGTH}자, 메모는 500자 이하로 "
-                    "입력해 주세요.",
+                    "정원은 모집자를 포함해 2명 이상이어야 합니다. "
+                    "인원을 정하지 않으려면 비워 두세요.",
                     tone="warn",
                 ),
                 ephemeral=True,
@@ -321,13 +425,18 @@ class PartyCog(commands.Cog):
             )
             return
 
+        # 지금 시작하는 모집은 시작 시각에 닫으면 올리자마자 마감된다.
+        instant = starts_at <= datetime.now(KST) + INSTANT_START_SLACK
+        expires_at = starts_at + INSTANT_PARTY_WINDOW if instant else starts_at
+
         party = await self.store.create(
             interaction.guild_id,
             interaction.channel_id,
             interaction.user.id,
-            game=game_name,
+            title=party_title,
             capacity=int(capacity),
             starts_at=starts_at.timestamp(),
+            expires_at=expires_at.timestamp(),
             note=note,
         )
         allowed_mentions = discord.AllowedMentions(
@@ -436,11 +545,12 @@ class PartyCog(commands.Cog):
         keyword = current.strip().lower()
         return [
             app_commands.Choice(
-                name=f"{party.game} · <t:{int(party.starts_at)}:t>"[:100],
+                # 자동완성 항목은 평문이다. `<t:…>` 는 여기서 렌더링되지 않는다.
+                name=f"{party.title} · {_start_label(party)}"[:100],
                 value=str(party.id),
             )
             for party in parties
-            if not keyword or keyword in party.game.lower()
+            if not keyword or keyword in party.title.lower()
         ][:25]
 
     @app_commands.command(name="파티취소", description="내가 연 파티 모집을 취소합니다")
@@ -526,7 +636,7 @@ class PartyCog(commands.Cog):
         try:
             await channel.send(
                 " ".join(f"<@{user_id}>" for user_id in others)
-                + f"\n🚫 **{party.game}** 파티 모집이 취소됐습니다.",
+                + f"\n🚫 **{party.title}** 파티 모집이 취소됐습니다.",
                 allowed_mentions=discord.AllowedMentions(
                     users=True, roles=False, everyone=False
                 ),
@@ -635,7 +745,7 @@ class PartyCog(commands.Cog):
             try:
                 await interaction.channel.send(
                     (
-                        f"<@{mutation.promoted_user_id}>님, **{mutation.party.game}** "
+                        f"<@{mutation.promoted_user_id}>님, **{mutation.party.title}** "
                         "파티의 빈자리가 생겨 대기에서 참가로 변경됐습니다."
                     ),
                     allowed_mentions=discord.AllowedMentions(
@@ -692,12 +802,19 @@ class PartyCog(commands.Cog):
                 f"https://discord.com/channels/{party.guild_id}/"
                 f"{party.channel_id}/{party.message_id}"
             )
+            headcount = (
+                f"{len(party.members)}명"
+                if party.capacity <= 0
+                else f"{len(party.members)}/{party.capacity}명"
+            )
+            when = (
+                "지금 진행 중"
+                if is_instant_party(party)
+                else f"<t:{int(party.starts_at)}:R>"
+            )
             embed.add_field(
-                name=f"{party.game} · {len(party.members)}/{party.capacity}명",
-                value=(
-                    f"<t:{int(party.starts_at)}:R> · "
-                    f"[모집 메시지로 이동]({url})"
-                ),
+                name=f"{party.title} · {headcount}",
+                value=f"{when} · [모집 메시지로 이동]({url})",
                 inline=False,
             )
         embed.set_footer(text="최대 10개까지 표시합니다.")
@@ -775,7 +892,7 @@ class PartyCog(commands.Cog):
             f"{party.channel_id}/{party.message_id}"
         )
         await channel.send(
-            f"{mentions}\n⏰ **{party.game}** 파티 시작까지 30분 이하 남았습니다.\n{url}",
+            f"{mentions}\n⏰ **{party.title}** 파티 시작까지 30분 이하 남았습니다.\n{url}",
             allowed_mentions=discord.AllowedMentions(
                 users=True, roles=False, everyone=False
             ),
