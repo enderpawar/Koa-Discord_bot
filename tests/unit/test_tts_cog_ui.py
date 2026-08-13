@@ -60,13 +60,14 @@ def test_tts_status_embed_groups_settings() -> None:
         "음성 채널",
         "보이스",
         "발음 사전",
+        "감정 톤",
         "상태",
     ]
     assert embed.fields[0].value == "<#11>"
     assert embed.fields[1].value == "<#22>"
     assert "여성 · 차분" in embed.fields[2].value
     assert embed.fields[3].value == "1개 규칙"
-    assert embed.fields[4].value == "재생 준비됨"
+    assert embed.fields[5].value == "재생 준비됨"
 
 
 def test_tts_status_embed_points_at_join_when_not_connected() -> None:
@@ -74,7 +75,25 @@ def test_tts_status_embed_points_at_join_when_not_connected() -> None:
     embed = _tts_status_embed({"voice": "ko-KR-SunHiNeural"})
 
     assert embed.fields[3].value == "등록된 규칙 없음"
-    assert "/입장" in embed.fields[4].value
+    assert "/입장" in embed.fields[5].value
+
+
+def test_status_explains_why_emotion_is_silent(monkeypatch) -> None:
+    """서버 로그를 못 볼 때 `/상태` 만으로 원인이 갈려야 한다."""
+    import cogs.tts_engine as engine
+
+    monkeypatch.setattr(engine, "_voice_styles", None)
+    assert "못 받았습니다" in _tts_status_embed({"voice": "v"}).fields[4].value
+
+    monkeypatch.setattr(engine, "_voice_styles", {"v": frozenset()})
+    assert "지원하지 않습니다" in _tts_status_embed({"voice": "v"}).fields[4].value
+
+    monkeypatch.setattr(engine, "_voice_styles", {"other": frozenset({"sad"})})
+    assert "목록에 없습니다" in _tts_status_embed({"voice": "v"}).fields[4].value
+
+    monkeypatch.setattr(engine, "_voice_styles", {"v": frozenset({"cheerful", "sad"})})
+    value = _tts_status_embed({"voice": "v"}).fields[4].value
+    assert "사용 중" in value and "cheerful, sad" in value
 
 
 def _make_cog(cfg: dict | None = None) -> TTSCog:

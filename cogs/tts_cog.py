@@ -33,6 +33,7 @@ from cogs.tts_engine import (
     close_session,
     load_voice_styles,
     start_keepalive,
+    voice_style_status,
     warm_up,
 )
 from cogs.ui import BRAND_COLOR, channel_ref, notice_embed
@@ -94,6 +95,22 @@ def _connected_voice_client(
     return vc
 
 
+def _emotion_status_text(voice: str) -> str:
+    """`/상태` 에서 감정 톤이 왜 안 들리는지 바로 알 수 있게 한다.
+
+    서버 로그를 볼 수 없는 상황에서도 원인이 (1) 카탈로그 미확인인지
+    (2) 이 목소리가 감정을 지원하지 않는 것인지 구분되어야 한다.
+    """
+    state, styles = voice_style_status(voice)
+    if state == "ready":
+        return f"사용 중 · 이 목소리 지원: {', '.join(styles)}"
+    if state == "unsupported":
+        return "이 목소리는 감정을 지원하지 않습니다. `/목소리` 로 다른 목소리를 골라 보세요."
+    if state == "unknown_voice":
+        return "이 목소리가 Azure 목록에 없습니다. `/목소리` 로 다시 골라 주세요."
+    return "목소리 목록을 아직 못 받았습니다. 잠시 뒤 다시 확인해 주세요."
+
+
 def _tts_status_embed(cfg: dict) -> discord.Embed:
     tts_ch = cfg.get("tts_channel_id")
     vc_ch = cfg.get("voice_channel_id")
@@ -114,6 +131,7 @@ def _tts_status_embed(cfg: dict) -> discord.Embed:
         value=f"{len(rules)}개 규칙" if rules else "등록된 규칙 없음",
         inline=False,
     )
+    embed.add_field(name="감정 톤", value=_emotion_status_text(voice), inline=False)
     embed.add_field(
         name="상태",
         value="재생 준비됨" if ready else "`/입장` 으로 음성 채널에 연결해 주세요",

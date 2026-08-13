@@ -133,6 +133,7 @@ async def _get_session() -> aiohttp.ClientSession:
 
 async def close_session() -> None:
     global _session, _pool, _token, _token_expires_at, _keepalive_task, _voice_styles
+    global _style_load_task, _style_retry_after
     if _keepalive_task is not None:
         _keepalive_task.cancel()
         try:
@@ -149,6 +150,8 @@ async def close_session() -> None:
     _token = None
     _token_expires_at = 0.0
     _voice_styles = None
+    _style_load_task = None
+    _style_retry_after = 0.0
     if _session is not None and not _session.closed:
         await _session.close()
     _session = None
@@ -190,6 +193,11 @@ def _build_ssml(text: str, voice: str, style: str | None = None) -> str:
 # 조용히 계속 보내게 되므로, 기동 시 voices/list 에서 받아 캐시한다.
 # 못 받으면 빈 표로 두어 스타일 없이(= 기존 동작) 읽는다.
 _voice_styles: dict[str, frozenset[str]] | None = None
+_style_load_task: "asyncio.Task | None" = None
+# 실패를 영구 캐시하면 부팅 중 네트워크가 한 번 흔들린 것만으로 재시작 전까지
+# 감정이 죽는다. 실패는 캐시하지 않고 이 시각 이후에 다시 시도한다.
+_style_retry_after = 0.0
+_STYLE_RETRY_COOLDOWN_SEC = 300.0
 
 # 감정 라벨 → 시도할 Azure 스타일 순서. 앞의 것을 그 보이스가 지원하지 않으면
 # 뒤로 내려가고, 끝까지 없으면 스타일을 붙이지 않는다.
@@ -205,8 +213,12 @@ def _voices_endpoint(region: str) -> str:
 
 
 async def load_voice_styles(*, force: bool = False) -> dict[str, frozenset[str]]:
-    """보이스별 지원 스타일 목록을 Azure 에서 받아 캐시한다."""
-    global _voice_styles
+    """보이스별 지원 스타일 목록을 Azure 에서 받아 캐시한다.
+
+    실패하면 빈 표를 **돌려주되 캐시하지는 않는다** — 호출자 입장에서 지금 쓸 수
+    있는 스타일이 없다는 뜻이고, 쿨다운이 지나면 다시 시도한다.
+    """
+    global _voice_styles, _style_retry_after
     if _voice_styles is not None and not force:
         return _voice_styles
     try:
@@ -220,10 +232,14 @@ async def load_voice_styles(*, force: bool = False) -> dict[str, frozenset[str]]
             catalog = await resp.json()
     except Exception:
         # 감정은 부가 기능이다. 카탈로그를 못 받아도 읽기 자체는 멀쩡해야 한다 (Rule 03).
-        log.warning("voice style catalog unavailable; reading without emotion styles")
+        _style_retry_after = time.monotonic() + _STYLE_RETRY_COOLDOWN_SEC
+        log.warning(
+            "voice style catalog unavailable; reading without emotion styles "
+            "(retrying in %ds)",
+            int(_STYLE_RETRY_COOLDOWN_SEC),
+        )
         log.debug("voice style catalog fetch failed", exc_info=True)
-        _voice_styles = {}
-        return _voice_styles
+        return {}
 
     styles: dict[str, frozenset[str]] = {}
     for entry in catalog if isinstance(catalog, list) else []:
@@ -241,6 +257,43 @@ async def load_voice_styles(*, force: bool = False) -> dict[str, frozenset[str]]
         sum(1 for entry in styles.values() if entry),
     )
     return styles
+
+
+def ensure_voice_styles_loading() -> None:
+    """카탈로그가 없으면 백그라운드로 받아온다. 합성을 막지 않는다.
+
+    기동 시 한 번만 읽던 구조에서는 그 한 번이 실패하거나 태스크가 거기까지
+    가지 못하면 재시작 전까지 감정이 조용히 죽어 있었다. 합성 경로에서 매번
+    확인해 스스로 복구한다 — 이미 읽었으면 전역 하나 비교로 끝난다.
+    """
+    global _style_load_task
+    if _voice_styles is not None:
+        return
+    if time.monotonic() < _style_retry_after:
+        return
+    if _style_load_task is not None and not _style_load_task.done():
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _style_load_task = loop.create_task(load_voice_styles(), name="tts-voice-styles")
+
+
+def voice_style_status(voice: str) -> tuple[str, tuple[str, ...]]:
+    """`/상태` 진단용. (상태, 지원 스타일).
+
+    상태: `unloaded` 카탈로그 미확인 / `unknown_voice` 목록에 없음 /
+    `unsupported` 감정 미지원 / `ready` 사용 가능.
+    """
+    if _voice_styles is None:
+        return "unloaded", ()
+    supported = _voice_styles.get(voice)
+    if supported is None:
+        return "unknown_voice", ()
+    if not supported:
+        return "unsupported", ()
+    return "ready", tuple(sorted(supported))
 
 
 def style_for(voice: str, tone: str | None) -> str | None:
@@ -632,6 +685,7 @@ async def synthesize(
     if not text:
         raise ValueError("empty text")
 
+    ensure_voice_styles_loading()
     style = style_for(voice, tone)
     _last_user_synthesis_at = time.monotonic()
     path = _make_temp_audio()
@@ -659,6 +713,7 @@ async def stream_synthesize(
     if not text:
         raise ValueError("empty text")
 
+    ensure_voice_styles_loading()
     style = style_for(voice, tone)
     _last_user_synthesis_at = time.monotonic()
     for attempt in (1, 2):

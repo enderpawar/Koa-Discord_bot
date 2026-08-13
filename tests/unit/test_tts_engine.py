@@ -261,6 +261,35 @@ async def test_catalog_failure_degrades_to_no_styles_not_a_crash() -> None:
     assert style_for("ko-KR-SunHiNeural", "cheerful") is None
 
 
+async def test_catalog_failure_is_not_cached_forever() -> None:
+    """부팅 중 한 번 실패했다고 재시작 전까지 감정이 죽으면 안 된다."""
+    import cogs.tts_engine as engine
+
+    with _patch_catalog(_FakeCatalogSession(None, status=500)):
+        await engine.load_voice_styles()
+    assert engine._voice_styles is None  # 실패는 캐시하지 않는다
+    assert engine._style_retry_after > 0  # 대신 쿨다운을 둔다
+
+    engine._style_retry_after = 0.0
+    with _patch_catalog(
+        _FakeCatalogSession([{"ShortName": "v", "StyleList": ["sad"]}])
+    ):
+        again = await engine.load_voice_styles()
+    assert again == {"v": frozenset({"sad"})}
+
+
+def test_status_report_distinguishes_the_failure_modes() -> None:
+    import cogs.tts_engine as engine
+
+    assert engine.voice_style_status("v")[0] == "unloaded"
+    engine._voice_styles = {"v": frozenset()}
+    assert engine.voice_style_status("v")[0] == "unsupported"
+    engine._voice_styles = {"other": frozenset({"sad"})}
+    assert engine.voice_style_status("v")[0] == "unknown_voice"
+    engine._voice_styles = {"v": frozenset({"sad", "cheerful"})}
+    assert engine.voice_style_status("v") == ("ready", ("cheerful", "sad"))
+
+
 async def test_synthesize_sends_the_style_when_the_voice_supports_it() -> None:
     import cogs.tts_engine as engine
 
