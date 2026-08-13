@@ -151,9 +151,22 @@ def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Emb
         "open": "시작 시 자동 마감",
         "cancelled": "모집자가 취소함",
     }.get(party.status, "모집 종료")
-    embed.set_footer(
-        text=f"모집자: {_member_name(guild, party.owner_id)} · {footer_note}"
-    )
+
+    # 모집자를 아바타와 함께 상단에 세운다. 누가 여는 파티인지가 한눈에 들어온다.
+    # 멤버 캐시에 없으면(재시작 직후, 서버를 떠난 경우) 아바타를 못 구하므로
+    # 기존처럼 footer 에 이름만 남긴다 — footer 는 멘션을 렌더링하지 않아서
+    # 그 경우 ID 가 그대로 보이지만, 임베드가 깨지는 것보다는 낫다.
+    owner = guild.get_member(party.owner_id) if guild is not None else None
+    if owner is not None:
+        embed.set_author(
+            name=f"{owner.display_name} 님이 모집",
+            icon_url=owner.display_avatar.url,
+        )
+        embed.set_footer(text=footer_note)
+    else:
+        embed.set_footer(
+            text=f"모집자: {_member_name(guild, party.owner_id)} · {footer_note}"
+        )
     return embed
 
 

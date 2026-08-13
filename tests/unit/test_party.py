@@ -248,6 +248,39 @@ async def test_party_embed_shows_capacity_and_status(store: PartyStore) -> None:
     assert "시작 시 자동 마감" in embed.footer.text
 
 
+def _guild_with_member(user_id: int, *, name: str, avatar: str):
+    member = SimpleNamespace(
+        id=user_id,
+        display_name=name,
+        display_avatar=SimpleNamespace(url=avatar),
+    )
+    return SimpleNamespace(get_member=lambda uid: member if uid == user_id else None)
+
+
+async def test_party_embed_puts_the_owner_avatar_on_top(store: PartyStore) -> None:
+    party = await _bound_party(store, owner_id=10)
+    guild = _guild_with_member(10, name="미소", avatar="https://cdn/avatar.png")
+
+    embed = party_embed(party, guild)
+
+    assert embed.author.name == "미소 님이 모집"
+    assert embed.author.icon_url == "https://cdn/avatar.png"
+    # 상단에 모집자가 서 있으므로 footer 에서 중복을 뺀다.
+    assert embed.footer.text == "시작 시 자동 마감"
+
+
+async def test_party_embed_survives_an_uncached_owner(store: PartyStore) -> None:
+    """재시작 직후나 서버를 떠난 모집자는 멤버 캐시에 없다."""
+    party = await _bound_party(store, owner_id=10)
+    guild = SimpleNamespace(get_member=lambda _uid: None)
+
+    embed = party_embed(party, guild)
+
+    assert embed.author.name is None
+    assert "모집자" in embed.footer.text
+    assert "시작 시 자동 마감" in embed.footer.text
+
+
 async def test_party_embed_distinguishes_cancelled_from_closed(
     store: PartyStore,
 ) -> None:
