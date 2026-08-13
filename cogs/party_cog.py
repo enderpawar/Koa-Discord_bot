@@ -158,10 +158,11 @@ def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Emb
     # 그 경우 ID 가 그대로 보이지만, 임베드가 깨지는 것보다는 낫다.
     owner = guild.get_member(party.owner_id) if guild is not None else None
     if owner is not None:
-        embed.set_author(
-            name=f"{owner.display_name} 님이 모집",
-            icon_url=owner.display_avatar.url,
-        )
+        avatar = owner.display_avatar.url
+        embed.set_author(name=f"{owner.display_name} 님이 모집", icon_url=avatar)
+        # author 아이콘은 이름 옆 24px 라 잘 안 보인다. 실제로 눈에 들어오는
+        # 크기는 썸네일 슬롯이므로 프로필 사진은 이쪽에도 건다.
+        embed.set_thumbnail(url=avatar)
         embed.set_footer(text=footer_note)
     else:
         embed.set_footer(

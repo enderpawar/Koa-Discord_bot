@@ -265,6 +265,8 @@ async def test_party_embed_puts_the_owner_avatar_on_top(store: PartyStore) -> No
 
     assert embed.author.name == "미소 님이 모집"
     assert embed.author.icon_url == "https://cdn/avatar.png"
+    # author 아이콘은 24px 라 눈에 안 띈다. 실제로 보이는 크기는 썸네일이다.
+    assert embed.thumbnail.url == "https://cdn/avatar.png"
     # 상단에 모집자가 서 있으므로 footer 에서 중복을 뺀다.
     assert embed.footer.text == "시작 시 자동 마감"
 
@@ -277,6 +279,7 @@ async def test_party_embed_survives_an_uncached_owner(store: PartyStore) -> None
     embed = party_embed(party, guild)
 
     assert embed.author.name is None
+    assert embed.thumbnail.url is None
     assert "모집자" in embed.footer.text
     assert "시작 시 자동 마감" in embed.footer.text
 
