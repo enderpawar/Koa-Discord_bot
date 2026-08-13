@@ -56,6 +56,12 @@ CACHE_MAX_BYTES = int(os.getenv("TTS_CACHE_MAX_BYTES", str(32 * 1024 * 1024)))
 CACHE_MAX_ITEM_BYTES = int(os.getenv("TTS_CACHE_MAX_ITEM_BYTES", str(512 * 1024)))
 OPUS_CACHE_MAX_BYTES = int(os.getenv("TTS_OPUS_CACHE_MAX_BYTES", str(16 * 1024 * 1024)))
 MAX_QUEUE_SIZE = int(os.getenv("TTS_MAX_QUEUE_SIZE", "20"))
+# 다음 항목 prefetch 를 기다려 줄 상한. 0 이면 기다리지 않고 바로 스트리밍한다.
+# 이 값이 없으면 "전체 합성 완료"를 기다리느라 "첫 청크에 재생 시작"보다 느려질
+# 수 있다 (worker 의 주석 참고).
+PREFETCH_WAIT_MAX_SEC = max(
+    0.0, float(os.getenv("TTS_PREFETCH_WAIT_MAX_SEC", "0.3"))
+)
 MAX_QUEUE_AGE_SEC = max(
     0.0,
     float(os.getenv("TTS_MAX_QUEUE_AGE_SEC", "3")),
@@ -704,11 +710,31 @@ class AudioQueue:
                     )
                     continue
 
-                # 이전 iter 에서 본 req 에 대한 prefetch 가 있으면 캐시 적재가 끝날 때까지 대기.
-                # _play_streaming 이 이후 캐시 히트로 즉시 재생을 시작할 수 있다.
+                # 이전 iter 에서 시작한 prefetch 가 이 req 의 것이다. 거의 끝났으면
+                # 기다리는 편이 낫다 — 캐시 히트는 Opus 인코딩까지 끝난 상태라
+                # 재생이 즉시 시작된다.
+                #
+                # 다만 무한정 기다리면 안 된다. prefetch 는 전체 합성이 끝나야
+                # 완료되는데, 스트리밍 경로는 첫 청크만 오면 재생을 시작한다.
+                # 짧은 문장 뒤에 긴 문장이 오면 (앞 문장 재생이 금방 끝나 prefetch
+                # 가 덜 됐을 때) 여기서 기다리는 시간이 스트리밍으로 그냥 시작할
+                # 때보다 길어진다. 그래서 상한을 두고, 넘으면 prefetch 를 접고
+                # 스트리밍으로 간다.
                 if prefetch_task is not None:
-                    with suppress(Exception):
-                        await prefetch_task
+                    try:
+                        if PREFETCH_WAIT_MAX_SEC > 0:
+                            # wait_for 는 타임아웃 시 task 를 취소하고 정리까지 기다린다.
+                            # 취소하지 않으면 같은 문장을 두 번 합성해 WS 슬롯을 잡는다.
+                            await asyncio.wait_for(
+                                prefetch_task, PREFETCH_WAIT_MAX_SEC
+                            )
+                    except asyncio.TimeoutError:
+                        log.debug(
+                            "prefetch too slow, streaming instead: guild_id=%s",
+                            guild.id,
+                        )
+                    except Exception:
+                        pass
                     prefetch_task = None
 
                 # 다음 항목을 미리 합성해 캐시에 채워둔다 (peek, dequeue 하지 않음).

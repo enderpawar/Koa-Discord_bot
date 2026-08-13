@@ -98,7 +98,16 @@ class ConfigStore:
             self._last_mtime = 0.0
 
     async def _maybe_reload(self) -> None:
-        current = await asyncio.to_thread(self._stat_mtime)
+        """외부 프로세스가 파일을 고쳤는지 확인하고, 바뀌었으면 다시 읽는다.
+
+        stat 은 마이크로초 단위 syscall 이라 이벤트 루프를 의미 있게 막지 않는다.
+        이걸 `asyncio.to_thread` 로 감싸면 TTS 핫 경로에서 메시지마다 스레드 홉이
+        한 번씩 생기는데, 그 왕복 비용이 stat 자체보다 훨씬 크다. 실제로 무거운
+        것은 파일을 통째로 읽는 reload 뿐이므로 그쪽만 스레드로 보낸다.
+
+        "외부 편집은 다음 get() 에서 반영된다"는 보장은 그대로다.
+        """
+        current = self._stat_mtime()
         if current != self._last_mtime:
             await asyncio.to_thread(self._reload_from_disk)
 

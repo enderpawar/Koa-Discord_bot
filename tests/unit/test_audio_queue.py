@@ -775,6 +775,52 @@ async def test_prefetch_warms_cache_for_next_item():
         await asyncio.sleep(0.2)
 
 
+async def test_slow_prefetch_does_not_delay_playback():
+    """prefetch 는 전체 합성이 끝나야 완료된다.
+
+    스트리밍은 첫 청크만 오면 재생을 시작하므로, 느린 prefetch 를 끝까지
+    기다리면 그냥 스트리밍할 때보다 느려진다. 상한을 넘으면 prefetch 를 접고
+    재생으로 넘어가야 한다.
+    """
+    import cogs.audio_queue as aq
+    from cogs.audio_queue import AudioQueue, AudioRequest
+
+    q = AudioQueue()
+    guild = _make_guild()
+    plays: list[str] = []
+    prefetch_cancelled = asyncio.Event()
+
+    async def fake_ensure(*_a, **_kw):
+        vc = MagicMock(); vc.is_connected.return_value = True; return vc
+
+    async def record_play(self, vc, text, voice, **_kwargs):
+        plays.append(text)
+
+    async def slow_stream(text, voice):
+        # prefetch 대상만 느리게. 재생 경로는 즉시 첫 청크를 낸다.
+        if text == "second":
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                prefetch_cancelled.set()
+                raise
+        yield b"\x10\x20\x30\x40"
+
+    with patch.object(aq, "PREFETCH_WAIT_MAX_SEC", 0.05), \
+         patch.object(AudioQueue, "_ensure_voice", new=fake_ensure), \
+         patch.object(AudioQueue, "_play_streaming", new=record_play), \
+         patch("cogs.audio_queue.stream_synthesize", slow_stream):
+        await q.enqueue(guild, AudioRequest("first", "v", 1))
+        await q.enqueue(guild, AudioRequest("second", "v", 1))
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if len(plays) >= 2:
+                break
+
+    assert plays == ["first", "second"], "느린 prefetch 가 재생을 붙잡으면 안 된다"
+    assert prefetch_cancelled.is_set(), "상한을 넘긴 prefetch 는 취소해야 한다"
+
+
 async def test_prefetch_skips_when_cache_already_warm():
     """이미 캐시된 항목은 prefetch 가 stream_synthesize 를 호출하지 않는다."""
     from cogs.audio_queue import AudioQueue, AudioRequest
