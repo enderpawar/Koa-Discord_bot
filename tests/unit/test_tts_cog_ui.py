@@ -14,9 +14,12 @@ from cogs.tts_engine import DEFAULT_VOICE
 def test_voice_choices_include_all_available_korean_voices() -> None:
     values = [choice.value for choice in VOICE_CHOICES]
 
-    assert len(values) == 10
-    assert len(set(values)) == 10
+    assert len(values) == 12
+    assert len(set(values)) == 12
     assert values == [
+        # 감정 톤이 실제로 동작하는 유일한 선택지다. 찾기 쉽게 맨 위에 둔다.
+        "ko-KR-Haena:MAI-Voice-2",
+        "ko-KR-Junho:MAI-Voice-2",
         "ko-KR-SunHiNeural",
         "ko-KR-JiMinNeural",
         "ko-KR-SeoHyeonNeural",

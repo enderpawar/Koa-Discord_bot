@@ -145,6 +145,8 @@ def test_user_facing_option_names_are_korean() -> None:
 def test_choice_labels_are_friendly_korean() -> None:
     voice_choices = _payload(TTSCog.setvoice)["options"][0]["choices"]
     assert [choice["name"] for choice in voice_choices] == [
+        "여성 · 감정 표현",
+        "남성 · 감정 표현",
         "여성 · 차분",
         "여성 · 또렷",
         "여성 · 부드러움",

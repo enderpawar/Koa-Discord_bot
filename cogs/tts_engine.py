@@ -201,10 +201,15 @@ _STYLE_RETRY_COOLDOWN_SEC = 300.0
 
 # 감정 라벨 → 시도할 Azure 스타일 순서. 앞의 것을 그 보이스가 지원하지 않으면
 # 뒤로 내려가고, 끝까지 없으면 스타일을 붙이지 않는다.
+#
+# 보이스 계열마다 스타일 어휘가 다르다. 예전 뉴럴 보이스는 `cheerful`/`friendly`
+# 를 쓰지만 MAI-Voice-2 계열(ko-KR-Haena, ko-KR-Junho)은 `happy`/`joyful` 을
+# 쓴다. 한쪽 어휘만 넣어 두면 감정을 지원하는 보이스인데도 매칭이 안 돼
+# 조용히 평소 톤으로 읽힌다 — 실제로 그렇게 놓쳤다.
 _TONE_STYLE_CHAIN: dict[str, tuple[str, ...]] = {
-    TONE_CHEERFUL: ("cheerful", "friendly"),
-    TONE_SAD: ("sad", "gentle"),
-    TONE_EXCITED: ("excited", "cheerful"),
+    TONE_CHEERFUL: ("cheerful", "happy", "joyful", "friendly"),
+    TONE_SAD: ("sad", "regretful", "gentle"),
+    TONE_EXCITED: ("excited", "surprised", "happy", "cheerful"),
 }
 
 

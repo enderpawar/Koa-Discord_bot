@@ -40,7 +40,14 @@ from cogs.ui import BRAND_COLOR, channel_ref, notice_embed
 
 log = logging.getLogger(__name__)
 
+# 감정 톤(`<mstts:express-as>`)이 실제로 동작하는 한국어 보이스는 매우 적다.
+# 아래 9종은 Azure 가 스타일을 지원하지 않고, InJoon 도 `sad` 하나뿐이다.
+# MAI-Voice-2 계열만 여러 감정을 낸다 — 감정을 쓰려면 이쪽을 골라야 하므로
+# 목록 맨 위에 둔다. 리전/구독에 따라 없을 수 있고, 그 경우 `/상태` 가
+# "목록에 없습니다" 로 알려 준다.
 VOICE_CHOICES = [
+    app_commands.Choice(name="여성 · 감정 표현", value="ko-KR-Haena:MAI-Voice-2"),
+    app_commands.Choice(name="남성 · 감정 표현", value="ko-KR-Junho:MAI-Voice-2"),
     app_commands.Choice(name="여성 · 차분", value="ko-KR-SunHiNeural"),
     app_commands.Choice(name="여성 · 또렷", value="ko-KR-JiMinNeural"),
     app_commands.Choice(name="여성 · 부드러움", value="ko-KR-SeoHyeonNeural"),

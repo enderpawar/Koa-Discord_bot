@@ -232,6 +232,33 @@ def test_style_falls_back_down_the_chain() -> None:
     assert engine.style_for("v", "excited") is None
 
 
+def test_chain_covers_the_mai_voice_style_vocabulary() -> None:
+    """보이스 계열마다 스타일 이름이 다르다.
+
+    MAI-Voice-2(ko-KR-Haena/Junho)는 `cheerful` 이 아니라 `happy`/`joyful` 을
+    쓴다. 예전 어휘만 넣어 두면 감정을 지원하는 보이스인데도 매칭이 안 돼
+    조용히 평소 톤으로 읽힌다.
+    """
+    import cogs.tts_engine as engine
+
+    mai = frozenset(
+        {
+            "angry", "confused", "determined", "embarrassed", "excited",
+            "happy", "hopeful", "joyful", "regretful", "relieved", "sad",
+            "softvoice", "surprised",
+        }
+    )
+    engine._voice_styles = {"ko-KR-Haena:MAI-Voice-2": mai}
+    assert engine.style_for("ko-KR-Haena:MAI-Voice-2", "cheerful") == "happy"
+    assert engine.style_for("ko-KR-Haena:MAI-Voice-2", "sad") == "sad"
+    assert engine.style_for("ko-KR-Haena:MAI-Voice-2", "excited") == "excited"
+
+    # InJoon 은 `sad` 하나뿐이다. 나머지 톤은 스타일 없이 읽어야 한다.
+    engine._voice_styles = {"ko-KR-InJoonNeural": frozenset({"sad"})}
+    assert engine.style_for("ko-KR-InJoonNeural", "sad") == "sad"
+    assert engine.style_for("ko-KR-InJoonNeural", "cheerful") is None
+
+
 async def test_load_voice_styles_reads_the_azure_catalog() -> None:
     from cogs.tts_engine import load_voice_styles
 
