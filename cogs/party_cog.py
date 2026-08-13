@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,10 @@ KST = ZoneInfo("Asia/Seoul")
 MAX_SCHEDULE_DAYS = 30
 _CLOCK_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})$")
 MAX_GAME_NAME_LENGTH = 50
+# 마감/취소된 파티를 지우기까지 남겨 두는 기간. 시작 시각 기준이다.
+# 짧게 두면 "어제 그 파티 누구 왔었지" 를 못 보고, 길게 두면 행이 계속 쌓인다.
+PARTY_RETENTION_DAYS = 7
+PARTY_CLEANUP_INTERVAL_HOURS = 6
 
 
 def parse_party_start(value: str, *, now: datetime | None = None) -> datetime:
@@ -93,6 +98,13 @@ def can_mention_game_role(
     )
 
 
+_STATUS_LABELS = {
+    "open": "🟢 모집 중",
+    "cancelled": "🚫 모집 취소",
+}
+_CLOSED_LABEL = "⚫ 모집 마감"
+
+
 def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Embed:
     is_open = party.status == "open"
     embed = discord.Embed(
@@ -113,7 +125,7 @@ def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Emb
     )
     embed.add_field(
         name="상태",
-        value="🟢 모집 중" if is_open else "⚫ 모집 마감",
+        value=_STATUS_LABELS.get(party.status, _CLOSED_LABEL),
         inline=True,
     )
     member_lines = [
@@ -135,8 +147,12 @@ def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Emb
             value="\n".join(wait_lines),
             inline=False,
         )
+    footer_note = {
+        "open": "시작 시 자동 마감",
+        "cancelled": "모집자가 취소함",
+    }.get(party.status, "모집 종료")
     embed.set_footer(
-        text=f"모집자: {_member_name(guild, party.owner_id)} · 시작 시 자동 마감"
+        text=f"모집자: {_member_name(guild, party.owner_id)} · {footer_note}"
     )
     return embed
 
@@ -216,9 +232,11 @@ class PartyCog(commands.Cog):
     async def cog_load(self) -> None:
         self.bot.add_view(self.view)
         self.party_scheduler.start()
+        self.party_cleanup.start()
 
     async def cog_unload(self) -> None:
         self.party_scheduler.cancel()
+        self.party_cleanup.cancel()
 
     @app_commands.command(name="파티모집", description="함께 플레이할 파티원을 모집합니다")
     @app_commands.rename(
@@ -386,6 +404,126 @@ class PartyCog(commands.Cog):
             ephemeral=True,
         )
 
+    async def _owned_party_choices(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        if interaction.guild_id is None:
+            return []
+        try:
+            parties = await self.store.list_owned(
+                interaction.guild_id, interaction.user.id, limit=25
+            )
+        except Exception:
+            # 자동완성이 실패해도 명령 자체는 살아 있어야 한다 (Rule 03).
+            log.exception(
+                "party cancel autocomplete failed: guild_id=%s", interaction.guild_id
+            )
+            return []
+        keyword = current.strip().lower()
+        return [
+            app_commands.Choice(
+                name=f"{party.game} · <t:{int(party.starts_at)}:t>"[:100],
+                value=str(party.id),
+            )
+            for party in parties
+            if not keyword or keyword in party.game.lower()
+        ][:25]
+
+    @app_commands.command(name="파티취소", description="내가 연 파티 모집을 취소합니다")
+    @app_commands.rename(party="파티")
+    @app_commands.describe(party="취소할 파티 (내가 연 모집만 보입니다)")
+    @app_commands.autocomplete(party=_owned_party_choices)
+    async def cancel_party(
+        self, interaction: discord.Interaction, party: str
+    ) -> None:
+        if interaction.guild is None or interaction.guild_id is None:
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"
+                ),
+                ephemeral=True,
+            )
+            return
+        try:
+            party_id = int(party)
+        except ValueError:
+            # 자동완성을 쓰지 않고 아무 문자열이나 입력한 경우.
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "입력 확인",
+                    "목록에서 취소할 파티를 골라 주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        mutation = await self.store.delete_owned(
+            interaction.guild_id, party_id, interaction.user.id
+        )
+        if mutation.outcome == "party_cancelled" and mutation.party is not None:
+            await self._mark_party_cancelled(mutation.party, interaction.guild)
+            log.info(
+                "party cancelled: guild_id=%s party_id=%s owner_id=%s",
+                interaction.guild_id,
+                mutation.party.id,
+                interaction.user.id,
+            )
+        await interaction.followup.send(
+            embed=notice_embed(
+                "파티 모집",
+                self._mutation_message(mutation),
+                tone="ok" if mutation.outcome == "party_cancelled" else "warn",
+            ),
+            ephemeral=True,
+        )
+
+    async def _mark_party_cancelled(
+        self, party: Party, guild: discord.Guild | None
+    ) -> None:
+        """모집 메시지를 취소 상태로 바꾸고 참가자에게 알린다.
+
+        저장소 행은 이미 지워졌다. 메시지 편집이나 알림이 실패해도 취소 자체는
+        되돌리지 않는다 — 남는 것은 버튼이 죽은 낡은 메시지 하나뿐이다 (Rule 03).
+        """
+        cancelled = replace(party, status="cancelled")
+        channel = self.bot.get_channel(party.channel_id)
+        if channel is not None and hasattr(channel, "get_partial_message"):
+            try:
+                await channel.get_partial_message(party.message_id).edit(
+                    embed=party_embed(cancelled, guild),
+                    view=disabled_party_view(),
+                )
+            except discord.HTTPException:
+                log.exception(
+                    "party cancel message edit failed: guild_id=%s party_id=%s",
+                    party.guild_id,
+                    party.id,
+                )
+
+        others = [
+            user_id
+            for user_id in (*party.members, *party.waitlist)
+            if user_id != party.owner_id
+        ]
+        if not others or channel is None or not hasattr(channel, "send"):
+            return
+        try:
+            await channel.send(
+                " ".join(f"<@{user_id}>" for user_id in others)
+                + f"\n🚫 **{party.game}** 파티 모집이 취소됐습니다.",
+                allowed_mentions=discord.AllowedMentions(
+                    users=True, roles=False, everyone=False
+                ),
+            )
+        except discord.HTTPException:
+            log.exception(
+                "party cancel notice failed: guild_id=%s party_id=%s",
+                party.guild_id,
+                party.id,
+            )
+
     @commands.Cog.listener()
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         try:
@@ -519,6 +657,8 @@ class PartyCog(commands.Cog):
             "closed_now": "파티 모집을 마감했습니다.",
             "closed": "이미 마감된 파티입니다.",
             "forbidden": "모집자 또는 메시지 관리 권한이 있는 사용자만 마감할 수 있습니다.",
+            "party_cancelled": "파티 모집을 취소했습니다.",
+            "not_owner": "모집자만 파티를 취소할 수 있습니다. 마감만 하려면 모집 메시지의 `모집 마감` 버튼을 눌러 주세요.",
             "not_found": "저장된 파티 정보를 찾을 수 없습니다.",
             "invalid": "지원하지 않는 동작입니다.",
         }
@@ -583,6 +723,27 @@ class PartyCog(commands.Cog):
 
     @party_scheduler.before_loop
     async def before_party_scheduler(self) -> None:
+        await self.bot.wait_until_ready()
+
+    @tasks.loop(hours=PARTY_CLEANUP_INTERVAL_HOURS)
+    async def party_cleanup(self) -> None:
+        """오래된 마감/취소 파티를 지운다.
+
+        30초짜리 스케줄러에 얹지 않는 이유: 이 DELETE 는 parties 전체를 훑는데,
+        지울 것이 하루에 몇 건 생기는 작업을 30초마다 돌릴 이유가 없다.
+        """
+        try:
+            removed = await self.store.purge_old(
+                retention_sec=PARTY_RETENTION_DAYS * 86400
+            )
+        except Exception:
+            log.exception("party cleanup failed: guild_id=all")
+            return
+        if removed:
+            log.info("party cleanup removed %d finished parties", removed)
+
+    @party_cleanup.before_loop
+    async def before_party_cleanup(self) -> None:
         await self.bot.wait_until_ready()
 
     async def _send_reminder(self, party: Party) -> None:

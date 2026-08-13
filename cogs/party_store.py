@@ -79,6 +79,13 @@ class PartyStore:
                 CREATE INDEX IF NOT EXISTS idx_parties_guild_status_start
                 ON parties(guild_id, status, starts_at);
 
+                -- 스케줄러(claim_due_reminders / claim_expired)는 길드를 가리지 않고
+                -- `status='open' AND starts_at …` 로만 훑는다. 위 인덱스는 guild_id 가
+                -- 선두라 그 조건에 쓸 수 없어서 30초마다 parties 전체를 스캔했다.
+                -- 부분 인덱스라 마감된 파티가 아무리 쌓여도 크기가 늘지 않는다.
+                CREATE INDEX IF NOT EXISTS idx_parties_open_start
+                ON parties(starts_at) WHERE status = 'open';
+
                 CREATE TABLE IF NOT EXISTS party_members (
                     party_id INTEGER NOT NULL REFERENCES parties(id) ON DELETE CASCADE,
                     user_id INTEGER NOT NULL,
@@ -188,6 +195,59 @@ class PartyStore:
                 "DELETE FROM parties WHERE id = ? AND guild_id = ?",
                 (party_id, guild_id),
             )
+
+    async def delete_owned(
+        self, guild_id: int, party_id: int, actor_id: int
+    ) -> PartyMutation:
+        """모집자가 자기 파티를 통째로 취소한다.
+
+        `close` 는 행을 남긴 채 상태만 바꾸지만(기록·정리 대상), 취소는 잘못 연
+        파티를 없애는 동작이라 행을 지운다. 참가자 행은 FK CASCADE 로 함께 지워진다.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._delete_owned_sync, guild_id, party_id, actor_id
+            )
+
+    def _delete_owned_sync(
+        self, guild_id: int, party_id: int, actor_id: int
+    ) -> PartyMutation:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            party = self._get_party_sync(conn, guild_id, party_id, required=False)
+            if party is None:
+                return PartyMutation(None, "not_found")
+            if party.owner_id != actor_id:
+                return PartyMutation(party, "not_owner")
+            conn.execute(
+                "DELETE FROM parties WHERE id = ? AND guild_id = ?",
+                (party_id, guild_id),
+            )
+            # 삭제 전 스냅샷을 돌려준다. 호출자가 모집 메시지를 고치고 참가자에게
+            # 알리려면 channel_id / message_id / members 가 필요하다.
+            return PartyMutation(party, "party_cancelled")
+
+    async def purge_old(
+        self, *, retention_sec: float, now_ts: float | None = None
+    ) -> int:
+        """시작 시각이 한참 지난 마감/취소 파티를 지운다.
+
+        이게 없으면 행이 영구히 쌓인다. 열린 파티는 대상이 아니므로 진행 중인
+        모집이 사라질 일은 없다.
+        """
+        current = now_ts if now_ts is not None else time.time()
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._purge_old_sync, current - retention_sec
+            )
+
+    def _purge_old_sync(self, cutoff: float) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM parties WHERE status != 'open' AND starts_at <= ?",
+                (cutoff,),
+            )
+            return max(0, int(cursor.rowcount))
 
     async def remove_guild(self, guild_id: int) -> int:
         async with self._lock:
@@ -411,6 +471,30 @@ class PartyStore:
                 LIMIT ?
                 """,
                 (guild_id, limit),
+            ).fetchall()
+            return [
+                self._get_party_sync(conn, guild_id, int(row["id"])) for row in rows
+            ]
+
+    async def list_owned(
+        self, guild_id: int, owner_id: int, *, limit: int = 25
+    ) -> list[Party]:
+        """`/파티취소` 자동완성이 쓰는, 그 사용자가 연 열린 파티 목록."""
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._list_owned_sync, guild_id, owner_id, max(1, limit)
+            )
+
+    def _list_owned_sync(self, guild_id: int, owner_id: int, limit: int) -> list[Party]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM parties
+                WHERE guild_id = ? AND owner_id = ? AND status = 'open'
+                ORDER BY starts_at, created_at
+                LIMIT ?
+                """,
+                (guild_id, owner_id, limit),
             ).fetchall()
             return [
                 self._get_party_sync(conn, guild_id, int(row["id"])) for row in rows
