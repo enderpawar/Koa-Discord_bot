@@ -15,10 +15,13 @@ from discord.ext import commands
 
 from cogs.party_cog import (
     PartyCog,
+    PartyCreateModal,
     can_mention_game_role,
+    capacity_options,
     format_headcount,
     parse_party_start,
     party_embed,
+    start_options,
 )
 from cogs.party_store import PartyStore
 
@@ -114,48 +117,96 @@ def test_game_role_can_use_role_setting_or_bot_permission() -> None:
 _TEST_BOT = commands.Bot(command_prefix="!", intents=discord.Intents.none())
 
 
-def _party_options() -> list[dict]:
-    return PartyCog.create_party.to_dict(_TEST_BOT.tree)["options"]
+def _modal_fields() -> list[dict]:
+    return PartyCreateModal(cog=None).to_dict()["components"]
 
 
-def test_title_is_free_text_and_independent_of_any_role() -> None:
-    """제목은 순수 텍스트다.
+def test_party_command_takes_no_options_and_opens_the_form() -> None:
+    """입력은 전부 모달에서 받는다.
 
-    역할 타입이면 Discord 가 `롤`, `발로` 를 "올바른 역할이 아닙니다" 로 막는다.
-    자동완성은 붙어 있지만 후보는 이 서버가 예전에 쓴 제목이지 역할이 아니다.
+    슬래시 옵션 방식은 제목을 넣고 나면 남은 항목이 이름만 나열돼 흐름이 끊겼고,
+    `시작`·`정원` 후보를 보려면 항목을 눌러 봇에 왕복해야 했다.
     """
-    annotations = PartyCog.create_party.callback.__annotations__
-    assert annotations["title"] == "str"
+    assert PartyCog.create_party.to_dict(_TEST_BOT.tree).get("options", []) == []
 
-    title = next(option for option in _party_options() if option["name"] == "제목")
-    assert title["type"] == 3
-    assert title["required"] is True
-    assert title.get("autocomplete") is True
+    source = inspect.getsource(PartyCog.create_party.callback)
+    assert "send_modal" in source
 
 
-def test_title_is_the_only_required_option() -> None:
-    """한 줄 채팅만큼 빨라야 쓴다.
+def test_modal_asks_five_things_with_only_the_title_required() -> None:
+    """제목만 필수다. 나머지는 기본값이 이미 선택된 채로 뜬다."""
+    fields = _modal_fields()
 
-    실사용 모집 글에서 시간을 적는 사람은 없고 인원도 절반이 안 적는다. 그런
-    항목이 필수면 명령이 채팅보다 느려서 아무도 안 쓴다.
-    """
+    assert [field["label"] for field in fields] == [
+        "제목",
+        "시작",
+        "정원",
+        "메모",
+        "알림 역할",
+    ]
     required = {
-        option["name"] for option in _party_options() if option.get("required")
+        field["label"] for field in fields if field["component"].get("required")
     }
+    assert required == {"제목", "시작", "정원"}
+    # 시작·정원은 드롭다운이라 기본값이 이미 골라져 있다. 사용자가 손댈 필요가 없다.
+    assert _default_value(fields[1]) == "지금"
+    assert _default_value(fields[2]) == "0"
 
-    assert required == {"제목"}
+
+def _default_value(field: dict) -> str:
+    return next(
+        option["value"]
+        for option in field["component"]["options"]
+        if option.get("default")
+    )
 
 
-def test_ping_role_is_a_separate_optional_role_option() -> None:
-    tag = next(option for option in _party_options() if option["name"] == "태그")
+def test_modal_start_and_capacity_are_dropdowns_and_role_is_a_role_picker() -> None:
+    """자유 텍스트로 두면 오타가 나고, 자동완성으로 두면 봇 왕복이 생긴다."""
+    fields = _modal_fields()
 
-    assert tag["type"] == 8
-    assert tag["required"] is False
+    assert fields[0]["component"]["type"] == 4  # 제목: 텍스트
+    assert fields[1]["component"]["type"] == 3  # 시작: 드롭다운
+    assert fields[2]["component"]["type"] == 3  # 정원: 드롭다운
+    assert fields[3]["component"]["type"] == 4  # 메모: 텍스트
+    assert fields[4]["component"]["type"] == 6  # 알림 역할: 역할 선택기
+    assert fields[4]["component"]["required"] is False
+
+
+def test_start_options_drop_slots_that_already_passed() -> None:
+    """밤 11시에 `오늘 20:00` 을 고르면 "현재보다 이후" 로 튕긴다.
+
+    고정 목록이면 그 항목이 계속 남지만, 이 목록은 부를 때마다 다시 만든다.
+    """
+    evening = start_options(datetime(2026, 7, 26, 19, 0, tzinfo=KST))
+    late = start_options(datetime(2026, 7, 26, 23, 30, tzinfo=KST))
+
+    assert [option.value for option in evening][0] == "지금"
+    assert "오늘 20:00" in {option.value for option in evening}
+    assert not any(option.value.startswith("오늘") for option in late)
+    assert "내일 21:00" in {option.value for option in late}
+
+
+def test_capacity_options_offer_unlimited_first() -> None:
+    options = capacity_options()
+
+    assert options[0].value == "0" and options[0].default is True
+    assert [option.value for option in options[1:]] == [
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "8",
+        "10",
+    ]
+    # 1명짜리 파티는 없다. 드롭다운이면 애초에 못 고른다.
+    assert "1" not in {option.value for option in options}
 
 
 def test_unmentionable_tag_does_not_block_party_creation() -> None:
     """태그를 못 붙여도 파티는 열려야 한다. 예전에는 여기서 끊겼다."""
-    source = inspect.getsource(PartyCog.create_party.callback)
+    source = inspect.getsource(PartyCog.open_party)
 
     # 태그 검사가 조기 return 으로 파티 생성을 막지 않는다.
     assert "태그 생략" in source

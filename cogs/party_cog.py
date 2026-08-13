@@ -249,6 +249,133 @@ def disabled_party_view() -> discord.ui.View:
     return view
 
 
+def start_options(now: datetime | None = None) -> list[discord.SelectOption]:
+    """모달 `시작` 드롭다운. 이미 지난 시간대는 빼고 `지금` 을 기본으로 둔다."""
+    current = now or datetime.now(KST)
+    options = [
+        discord.SelectOption(label="지금 바로", value="지금", default=True),
+    ]
+    for label, delta in (
+        ("30분 뒤", timedelta(minutes=30)),
+        ("1시간 뒤", timedelta(hours=1)),
+        ("2시간 뒤", timedelta(hours=2)),
+    ):
+        options.append(
+            discord.SelectOption(
+                label=label, value=label, description=f"{(current + delta):%H:%M}"
+            )
+        )
+    for hour in (20, 21, 22, 23):
+        if current.replace(hour=hour, minute=0, second=0, microsecond=0) > current:
+            options.append(
+                discord.SelectOption(label=f"오늘 {hour}:00", value=f"오늘 {hour}:00")
+            )
+    options.append(discord.SelectOption(label="내일 21:00", value="내일 21:00"))
+    return options
+
+
+def capacity_options() -> list[discord.SelectOption]:
+    """모달 `정원` 드롭다운. 실제 모집의 절반 이상이 인원을 안 적는다."""
+    options = [
+        discord.SelectOption(
+            label="제한 없음",
+            value="0",
+            description="대기열 없이 계속 받습니다",
+            default=True,
+        )
+    ]
+    options.extend(
+        discord.SelectOption(label=f"{size}명", value=str(size))
+        for size in (2, 3, 4, 5, 6, 8, 10)
+    )
+    return options
+
+
+class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
+    """`/파티모집` 이 여는 입력 폼.
+
+    슬래시 옵션으로 받던 것을 한 화면으로 옮겼다. 옵션 방식은 제목을 넣고 나면
+    남은 항목이 이름만 나열돼서 흐름이 끊겼고, `시작`·`정원` 후보를 보려면 항목을
+    하나씩 눌러 봇에 왕복해야 했다. 모달은 다섯 칸이 기본값과 함께 한 번에 뜨고,
+    제출하면 저절로 닫힌다.
+    """
+
+    def __init__(self, cog: "PartyCog", *, recent_title: str = "") -> None:
+        super().__init__(timeout=600)
+        self.cog = cog
+        self.title_field = discord.ui.Label(
+            text="제목",
+            description="무엇을 하는 모집인지",
+            component=discord.ui.TextInput(
+                placeholder=recent_title or "리썰 하실분",
+                max_length=MAX_TITLE_LENGTH,
+            ),
+        )
+        self.start_field = discord.ui.Label(
+            text="시작",
+            component=discord.ui.Select(options=start_options()),
+        )
+        self.capacity_field = discord.ui.Label(
+            text="정원",
+            component=discord.ui.Select(options=capacity_options()),
+        )
+        self.note_field = discord.ui.Label(
+            text="메모",
+            description="파티 설명이나 조건 (선택)",
+            component=discord.ui.TextInput(
+                style=discord.TextStyle.paragraph,
+                required=False,
+                max_length=500,
+            ),
+        )
+        self.role_field = discord.ui.Label(
+            text="알림 역할",
+            description="이 역할에게 모집 알림을 보냅니다 (선택)",
+            component=discord.ui.RoleSelect(required=False),
+        )
+        for field in (
+            self.title_field,
+            self.start_field,
+            self.capacity_field,
+            self.note_field,
+            self.role_field,
+        ):
+            self.add_item(field)
+
+    @staticmethod
+    def _selected(field: discord.ui.Label, fallback: str) -> str:
+        values = getattr(field.component, "values", None) or []
+        return str(values[0]) if values else fallback
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        roles = getattr(self.role_field.component, "values", None) or []
+        await self.cog.open_party(
+            interaction,
+            title=str(self.title_field.component.value or ""),
+            start=self._selected(self.start_field, "지금"),
+            capacity=int(self._selected(self.capacity_field, "0")),
+            note=str(self.note_field.component.value or ""),
+            ping_role=roles[0] if roles else None,
+        )
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception
+    ) -> None:
+        log.exception(
+            "party modal failed: guild_id=%s", interaction.guild_id, exc_info=error
+        )
+        embed = notice_embed(
+            "처리 실패", "파티 모집을 열지 못했습니다. 다시 시도해 주세요.", tone="error"
+        )
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            log.exception("party modal error reply failed: guild_id=%s", interaction.guild_id)
+
+
 class PartyView(discord.ui.View):
     def __init__(self, cog: "PartyCog") -> None:
         super().__init__(timeout=None)
@@ -301,73 +428,48 @@ class PartyCog(commands.Cog):
         self.party_scheduler.cancel()
         self.party_cleanup.cancel()
 
-    async def _title_choices(
-        self, interaction: discord.Interaction, current: str
-    ) -> list[app_commands.Choice[str]]:
-        """이 서버에서 최근에 쓴 제목을 제안한다. 반복 타이핑을 없애는 게 목적이다."""
-        if interaction.guild_id is None:
-            return []
+    async def _recent_title_hint(self, guild_id: int) -> str:
+        """모달 제목 칸의 placeholder. 실패해도 모달은 떠야 한다 (Rule 03).
+
+        `send_modal` 은 defer 를 못 해서 3초 안에 응답해야 한다. 저장소 락이
+        길게 잡혀 있는 순간에 걸려도 명령이 죽지 않도록 시간을 끊는다.
+        """
         try:
-            titles = await self.store.recent_titles(
-                interaction.guild_id, keyword=current, limit=25
+            titles = await asyncio.wait_for(
+                self.store.recent_titles(guild_id, limit=1), 1.0
             )
         except Exception:
-            # 자동완성이 실패해도 명령 자체는 살아 있어야 한다 (Rule 03).
-            log.exception(
-                "party title autocomplete failed: guild_id=%s", interaction.guild_id
-            )
-            return []
-        return [
-            app_commands.Choice(name=title[:100], value=title[:100])
-            for title in titles
-        ]
-
-    async def _start_choices(
-        self, _interaction: discord.Interaction, current: str
-    ) -> list[app_commands.Choice[str]]:
-        """`지금` 을 첫 줄에 세운다. 실제 모집의 대부분이 즉시 시작이다."""
-        now = datetime.now(KST)
-        suggestions: list[tuple[str, str]] = [("지금 바로 시작", "지금")]
-        for label, delta in (
-            ("30분 뒤", timedelta(minutes=30)),
-            ("1시간 뒤", timedelta(hours=1)),
-            ("2시간 뒤", timedelta(hours=2)),
-        ):
-            suggestions.append((f"{label} ({(now + delta):%H:%M})", label))
-        for hour in (20, 21, 22, 23):
-            slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
-            if slot > now:
-                suggestions.append((f"오늘 {hour}:00", f"오늘 {hour}:00"))
-        suggestions.append(("내일 21:00", "내일 21:00"))
-
-        keyword = current.strip().lower()
-        return [
-            app_commands.Choice(name=name[:100], value=value)
-            for name, value in suggestions
-            if not keyword or keyword in name.lower()
-        ][:25]
+            log.exception("party title hint failed: guild_id=%s", guild_id)
+            return ""
+        return titles[0] if titles else ""
 
     @app_commands.command(name="파티모집", description="함께 플레이할 파티원을 모집합니다")
-    @app_commands.rename(
-        title="제목", capacity="정원", start="시작", note="메모", ping_role="태그"
-    )
-    @app_commands.describe(
-        title="무엇을 하는 모집인지 (롤 칼바람, 리썰 컴퍼니 …)",
-        start="비워 두면 지금 바로 시작합니다",
-        capacity="정원 (비워 두면 제한 없음, 2~20명)",
-        note="파티 설명이나 조건",
-        ping_role="알림을 보낼 역할 (선택)",
-    )
-    @app_commands.autocomplete(title=_title_choices, start=_start_choices)
-    async def create_party(
+    async def create_party(self, interaction: discord.Interaction) -> None:
+        if interaction.guild_id is None or interaction.channel_id is None:
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "사용 불가", "서버 채널에서만 파티를 모집할 수 있습니다.", tone="warn"
+                ),
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_modal(
+            PartyCreateModal(
+                self, recent_title=await self._recent_title_hint(interaction.guild_id)
+            )
+        )
+
+    async def open_party(
         self,
         interaction: discord.Interaction,
+        *,
         title: str,
-        start: str = "",
-        capacity: app_commands.Range[int, 0, 20] = 0,
-        note: str = "",
-        ping_role: discord.Role | None = None,
+        start: str,
+        capacity: int,
+        note: str,
+        ping_role: discord.Role | None,
     ) -> None:
+        """모달 제출을 받아 모집글을 연다."""
         if (
             interaction.guild is None
             or interaction.guild_id is None
@@ -380,7 +482,7 @@ class PartyCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        # 제목은 순수 텍스트다. 알림 대상은 `태그` 옵션에서만 온다.
+        # 제목은 순수 텍스트다. 알림 대상은 `알림 역할` 칸에서만 온다.
         party_title = " ".join(title.split())
         mention_role = (
             ping_role
@@ -405,12 +507,13 @@ class PartyCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        # 드롭다운은 1을 안 주지만, 이 메서드는 폼 밖에서도 부를 수 있다.
         if int(capacity) == 1:
             await interaction.response.send_message(
                 embed=notice_embed(
                     "입력 확인",
                     "정원은 모집자를 포함해 2명 이상이어야 합니다. "
-                    "인원을 정하지 않으려면 비워 두세요.",
+                    "인원을 정하지 않으려면 `제한 없음` 을 골라 주세요.",
                     tone="warn",
                 ),
                 ephemeral=True,

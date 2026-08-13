@@ -96,18 +96,9 @@ def test_tts_channel_pickers_are_gone() -> None:
 def test_user_facing_option_names_are_korean() -> None:
     assert _option_names(TTSCog.setvoice) == ["종류"]
     assert _option_names(RankCog.rank) == ["멤버"]
-    # 필수인 `제목` 이 먼저다. 나머지는 전부 기본값이 있어서 Tab 으로 건너뛴다.
-    assert _option_names(PartyCog.create_party) == ["제목", "시작", "정원", "메모", "태그"]
+    # `/파티모집` 은 옵션이 없다. 입력은 전부 모달에서 받는다 (test_party.py 참고).
+    assert _option_names(PartyCog.create_party) == []
     assert _option_names(PartyCog.cancel_party) == ["파티"]
-    # 제목은 자유 입력(STRING=3)이다. 역할(ROLE=8)이면 Discord 가 `롤`, `발로`
-    # 같은 입력을 "올바른 역할이 아닙니다" 로 막아 버린다. 알림 대상은 별도
-    # `태그` 옵션(ROLE=8, 선택)에서만 받는다.
-    party_options = {
-        option["name"]: option for option in _payload(PartyCog.create_party)["options"]
-    }
-    assert party_options["제목"]["type"] == 3
-    assert party_options["태그"]["type"] == 8
-    assert party_options["태그"]["required"] is False
 
     mc_payload = _payload(MCControlCog.mc)
     mc_whitelist = next(
