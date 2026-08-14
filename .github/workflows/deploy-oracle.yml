@@ -53,6 +53,7 @@ jobs:
           AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
           RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
           VALORANT_API_KEY: ${{ secrets.VALORANT_API_KEY }}
+          YOUTUBE_PROXY_URL: ${{ secrets.YOUTUBE_PROXY_URL }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           TEST_GUILD_ID: ${{ secrets.TEST_GUILD_ID }}
           ADMIN_WEB_ENABLED: ${{ vars.ADMIN_WEB_ENABLED }}
@@ -94,6 +95,7 @@ jobs:
               "MEM_ANCHOR_INTERVAL_SEC",
               "RIOT_API_KEY",
               "VALORANT_API_KEY",
+              "YOUTUBE_PROXY_URL",
           )
 
           lines = []
