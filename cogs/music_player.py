@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
+import shlex
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -33,6 +36,8 @@ ALLOWED_YOUTUBE_HOSTS = frozenset(
 MAX_MUSIC_QUEUE_SIZE = 20
 STREAM_URL_REFRESH_SEC = 600
 EXTRACTION_TIMEOUT_SEC = 45
+YOUTUBE_PO_TOKEN_PROVIDER_ENV = "YOUTUBE_PO_TOKEN_PROVIDER_URL"
+_HTTP_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 class MusicError(RuntimeError):
@@ -61,17 +66,77 @@ class MusicTrack:
     voice_channel_id: int
     stream_url: str
     resolved_at: float
+    http_headers: dict[str, str] = field(default_factory=dict)
 
 
 class _YTDLPLogger:
+    def __init__(self, guild_id: int | None) -> None:
+        self.guild_id = guild_id
+
     def debug(self, message: str) -> None:
-        log.debug("yt-dlp: %s", message)
+        log.debug("yt-dlp: guild_id=%s detail=%s", self.guild_id, message)
 
     def warning(self, message: str) -> None:
-        log.warning("yt-dlp: %s", message)
+        log.warning("yt-dlp: guild_id=%s detail=%s", self.guild_id, message)
 
     def error(self, message: str) -> None:
-        log.error("yt-dlp: %s", message)
+        log.error("yt-dlp: guild_id=%s detail=%s", self.guild_id, message)
+
+
+def _extractor_args() -> dict[str, dict[str, list[str]]]:
+    """Use the production PO-token service when docker-compose provides one."""
+    provider_url = os.getenv(YOUTUBE_PO_TOKEN_PROVIDER_ENV, "").strip().rstrip("/")
+    if not provider_url:
+        return {}
+    parsed = urlparse(provider_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        log.error("invalid %s; ignoring provider", YOUTUBE_PO_TOKEN_PROVIDER_ENV)
+        return {}
+    return {
+        "youtube": {"player_client": ["mweb"]},
+        "youtubepot-bgutilhttp": {"base_url": [provider_url]},
+    }
+
+
+def _safe_http_headers(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    headers: dict[str, str] = {}
+    for raw_name, raw_value in value.items():
+        if not isinstance(raw_name, str) or not isinstance(raw_value, str):
+            continue
+        if not _HTTP_HEADER_NAME.fullmatch(raw_name):
+            continue
+        if any(char in raw_value for char in "\r\n"):
+            continue
+        headers[raw_name] = raw_value
+    return headers
+
+
+def _ffmpeg_before_options(headers: dict[str, str]) -> str:
+    options = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+    if not headers:
+        return options
+    header_block = "".join(f"{name}: {value}\r\n" for name, value in headers.items())
+    return f"{options} -headers {shlex.quote(header_block)}"
+
+
+def _download_error_message(error: yt_dlp.utils.DownloadError) -> str:
+    detail = str(error).casefold()
+    if "confirm you’re not a bot" in detail or "confirm you're not a bot" in detail:
+        return (
+            "YouTube가 서버 접속을 자동화 트래픽으로 차단했어요. "
+            "잠시 후 다시 시도해 주세요."
+        )
+    if "private video" in detail:
+        return "비공개 영상은 재생할 수 없어요."
+    if "age-restricted" in detail or "sign in to confirm your age" in detail:
+        return "연령 확인이 필요한 영상은 재생할 수 없어요."
+    if "not available in your country" in detail or "geo" in detail:
+        return "현재 서버 지역에서 볼 수 없는 영상이에요."
+    if "video unavailable" in detail:
+        return "사용할 수 없는 영상이에요. URL과 공개 상태를 확인해 주세요."
+    return "영상을 불러오지 못했어요. 잠시 후 다시 시도해 주세요."
 
 
 class YouTubeExtractor:
@@ -99,6 +164,7 @@ class YouTubeExtractor:
         requester_id: int,
         request_channel_id: int,
         voice_channel_id: int,
+        guild_id: int | None = None,
     ) -> MusicTrack:
         validated = self.validate_url(url)
         async with self._semaphore:
@@ -110,6 +176,7 @@ class YouTubeExtractor:
                         requester_id,
                         request_channel_id,
                         voice_channel_id,
+                        guild_id,
                     ),
                     timeout=EXTRACTION_TIMEOUT_SEC,
                 )
@@ -118,13 +185,18 @@ class YouTubeExtractor:
                     "YouTube 응답이 늦어 요청을 종료했어요. 잠시 후 다시 시도해 주세요."
                 ) from exc
             except yt_dlp.utils.DownloadError as exc:
-                raise MusicExtractionError(
-                    "영상을 불러오지 못했어요. 공개 영상인지 확인해 주세요."
-                ) from exc
+                log.warning(
+                    "YouTube extraction rejected: guild_id=%s error=%s",
+                    guild_id,
+                    exc,
+                )
+                raise MusicExtractionError(_download_error_message(exc)) from exc
             except MusicError:
                 raise
             except Exception as exc:
-                log.exception("unexpected YouTube extraction failure")
+                log.exception(
+                    "unexpected YouTube extraction failure: guild_id=%s", guild_id
+                )
                 raise MusicExtractionError(
                     "영상을 불러오는 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
                 ) from exc
@@ -135,6 +207,7 @@ class YouTubeExtractor:
         requester_id: int,
         request_channel_id: int,
         voice_channel_id: int,
+        guild_id: int | None = None,
     ) -> MusicTrack:
         options = {
             "format": "bestaudio/best",
@@ -145,9 +218,12 @@ class YouTubeExtractor:
             "socket_timeout": 15,
             "retries": 2,
             "extractor_retries": 2,
-            "logger": _YTDLPLogger(),
+            "logger": _YTDLPLogger(guild_id),
             "js_runtimes": {"deno": {}, "node": {}},
         }
+        extractor_args = _extractor_args()
+        if extractor_args:
+            options["extractor_args"] = extractor_args
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False)
 
@@ -176,6 +252,7 @@ class YouTubeExtractor:
             voice_channel_id=voice_channel_id,
             stream_url=stream_url,
             resolved_at=time.monotonic(),
+            http_headers=_safe_http_headers(info.get("http_headers")),
         )
 
 
@@ -287,9 +364,11 @@ class MusicPlayer:
                 requester_id=track.requester_id,
                 request_channel_id=track.request_channel_id,
                 voice_channel_id=track.voice_channel_id,
+                guild_id=guild.id,
             )
             track.stream_url = refreshed.stream_url
             track.resolved_at = refreshed.resolved_at
+            track.http_headers = refreshed.http_headers
 
         if guild.id in self._skip_requested:
             return
@@ -297,7 +376,7 @@ class MusicPlayer:
         vc = await self.voice_queue.ensure_voice(guild, track.voice_channel_id)
         source = discord.FFmpegPCMAudio(
             track.stream_url,
-            before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+            before_options=_ffmpeg_before_options(track.http_headers),
             options="-vn -loglevel warning",
         )
         loop = asyncio.get_running_loop()

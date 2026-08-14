@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shlex
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +19,10 @@ from cogs.music_player import (
     MusicQueueFull,
     MusicTrack,
     YouTubeExtractor,
+    _download_error_message,
+    _extractor_args,
+    _ffmpeg_before_options,
+    _safe_http_headers,
 )
 
 
@@ -79,6 +84,7 @@ def test_extract_sync_builds_track_without_downloading() -> None:
         "url": "https://stream.example/audio",
         "webpage_url": "https://www.youtube.com/watch?v=abc",
         "live_status": "not_live",
+        "http_headers": {"User-Agent": "test-browser", "Accept": "*/*"},
     }
 
     with patch("cogs.music_player.yt_dlp.YoutubeDL", return_value=ydl):
@@ -93,6 +99,38 @@ def test_extract_sync_builds_track_without_downloading() -> None:
     assert track.requester_id == 1
     assert track.request_channel_id == 2
     assert track.voice_channel_id == 3
+    assert track.http_headers == {"User-Agent": "test-browser", "Accept": "*/*"}
+
+
+def test_po_token_provider_configures_mweb_client(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "YOUTUBE_PO_TOKEN_PROVIDER_URL", "http://bgutil-provider:4416/"
+    )
+
+    assert _extractor_args() == {
+        "youtube": {"player_client": ["mweb"]},
+        "youtubepot-bgutilhttp": {
+            "base_url": ["http://bgutil-provider:4416"]
+        },
+    }
+
+
+def test_ffmpeg_headers_are_sanitized_and_quoted() -> None:
+    headers = _safe_http_headers(
+        {
+            "User-Agent": "browser agent",
+            "Accept": "*/*",
+            "Bad\r\nHeader": "injected",
+            "Bad Header": "also injected",
+            "Also-Bad": "value\r\nInjected: yes",
+        }
+    )
+    options = _ffmpeg_before_options(headers)
+
+    assert headers == {"User-Agent": "browser agent", "Accept": "*/*"}
+    assert "-headers" in options
+    assert "User-Agent: browser agent\r\n" in options
+    assert "Injected" not in options
 
 
 def test_extract_sync_rejects_playlist_and_live_stream() -> None:
@@ -117,7 +155,7 @@ async def test_extractor_maps_download_failure_to_user_safe_error() -> None:
         "_extract_sync",
         side_effect=yt_dlp.utils.DownloadError("internal details"),
     ):
-        with pytest.raises(MusicExtractionError, match="공개 영상"):
+        with pytest.raises(MusicExtractionError, match="다시 시도"):
             await extractor.extract(
                 "https://youtu.be/abc",
                 requester_id=1,
@@ -139,6 +177,23 @@ async def test_extractor_hides_unexpected_internal_failure() -> None:
             )
 
     assert "secret" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        ("Sign in to confirm you're not a bot", "자동화 트래픽"),
+        ("Private video", "비공개"),
+        ("Sign in to confirm your age", "연령 확인"),
+        ("This video is not available in your country", "서버 지역"),
+        ("Video unavailable", "사용할 수 없는"),
+    ],
+)
+def test_download_errors_have_actionable_korean_messages(
+    detail: str, expected: str
+) -> None:
+    error = yt_dlp.utils.DownloadError(detail)
+    assert expected in _download_error_message(error)
 
 
 @pytest.mark.asyncio
@@ -265,28 +320,36 @@ def test_music_command_names_and_duration_format() -> None:
 def test_live_youtube_extracts_public_test_video() -> None:
     if os.getenv("RUN_LIVE") != "1":
         pytest.skip("RUN_LIVE=1 required")
-    track = YouTubeExtractor._extract_sync(
-        "https://www.youtube.com/watch?v=jNQXAC9IVRw", 1, 2, 3
-    )
-    assert track.stream_url.startswith("http")
-    assert track.title
-    result = subprocess.run(
-        [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            track.stream_url,
-            "-t",
-            "1",
-            "-vn",
-            "-f",
-            "null",
-            "-",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr
+    last_error = ""
+    # CDN stream URLs can be rejected transiently, so the network-only check gets
+    # one bounded fresh-URL retry instead of becoming flaky.
+    for _ in range(2):
+        track = YouTubeExtractor._extract_sync(
+            "https://youtu.be/2yRS6BOSQ4s?si=AYFNoQYIT6YqF7X4", 1, 2, 3
+        )
+        assert track.stream_url.startswith("http")
+        assert track.title
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                *shlex.split(_ffmpeg_before_options(track.http_headers)),
+                "-i",
+                track.stream_url,
+                "-t",
+                "1",
+                "-vn",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return
+        last_error = result.stderr
+    pytest.fail(last_error)

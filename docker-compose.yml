@@ -11,6 +11,9 @@ services:
       - .env
 
     environment:
+      # Oracle 같은 데이터센터 IP에서 발생하는 YouTube 봇 판정과 GVS 403을
+      # 완화하는 yt-dlp PO Token provider. 외부 포트에는 게시하지 않는다.
+      YOUTUBE_PO_TOKEN_PROVIDER_URL: http://bgutil-provider:4416
       # 공개 주소를 런타임에 물어볼 곳. ADMIN_WEB_PUBLIC_URL 이 있으면 그쪽이 우선.
       CLOUDFLARED_METRICS_URL: http://cloudflared:2000
       # 이 두 값은 이 compose 구성의 상수다. cloudflared 가 별도 컨테이너라
@@ -29,6 +32,10 @@ services:
       # 컨테이너 IP 는 유동적이라 대역으로 적는다. 이 포트는 호스트 루프백과
       # 컴포즈 네트워크에서만 닿으므로 이 신뢰 범위로 충분하다.
       ADMIN_WEB_TRUSTED_PROXIES: "172.16.0.0/12"
+
+    depends_on:
+      bgutil-provider:
+        condition: service_healthy
 
     # 컨테이너 재생성과 무관하게 설정/랭킹을 보존한다.
     # Dockerfile 의 CONFIG_PATH=/data/config.json, RANK_PATH=/data/rank_stats.json 과 대응.
@@ -52,6 +59,29 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1-deno
+    container_name: koa-youtube-pot-provider
+    restart: unless-stopped
+    init: true
+    mem_limit: 256m
+    healthcheck:
+      test:
+        - CMD
+        - deno
+        - eval
+        - const r=await fetch('http://127.0.0.1:4416/ping');if(!r.ok)Deno.exit(1)
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
 
   # 대시보드를 HTTPS 로 외부에 노출한다. 포트를 열지 않고 아웃바운드 연결만
   # 쓰므로 OCI 방화벽과 무관하고, TLS 는 Cloudflare 가 종단한다.

@@ -39,4 +39,19 @@ jobs:
         run: >-
           docker run --rm --entrypoint sh koa-bot:ci -c
           'ffmpeg -version >/dev/null && deno --version &&
-          python -c "import discord; from yt_dlp.version import __version__; print(discord.__version__, __version__)"'
+          python -c "import discord; import yt_dlp_plugins.extractor.getpot_bgutil;
+          from yt_dlp.version import __version__; print(discord.__version__, __version__)"'
+      - name: Verify YouTube PO-token provider
+        run: |
+          docker run --rm -d --name koa-pot-ci -p 4416:4416 \
+            brainicism/bgutil-ytdlp-pot-provider:1.3.1-deno
+          for attempt in {1..12}; do
+            if curl --fail --silent http://127.0.0.1:4416/ping; then
+              docker exec koa-pot-ci deno eval \
+                "const r=await fetch('http://127.0.0.1:4416/ping');if(!r.ok)Deno.exit(1)"
+              exit 0
+            fi
+            sleep 5
+          done
+          docker logs koa-pot-ci
+          exit 1
