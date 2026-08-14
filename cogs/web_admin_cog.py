@@ -710,6 +710,8 @@ class WebAdminCog(commands.Cog):
                 fields["leaderboard_daily_enabled"] = _bool_value(payload["leaderboard_daily_enabled"])
             if "leaderboard_post_time" in payload:
                 fields["leaderboard_post_time"] = _clean_time(payload["leaderboard_post_time"])
+            if "party_tier_badges" in payload:
+                fields["party_tier_badges"] = _bool_value(payload["party_tier_badges"])
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 

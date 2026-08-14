@@ -21,6 +21,7 @@ ENV CONFIG_PATH=/data/config.json \
     PARTY_DB_PATH=/data/party.db \
     VALORANT_STORE_PATH=/data/valorant_ids.json \
     LOL_STORE_PATH=/data/lol_ids.json \
+    TIER_CACHE_PATH=/data/tier_cache.json \
     PYTHONUNBUFFERED=1
 
 CMD ["python", "bot.py"]

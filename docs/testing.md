@@ -108,6 +108,7 @@ cogs/lol_{api,store,cog}.py
 cogs/valorant_{api,store,cog}.py
                           →  tests/unit/test_valorant.py
 cogs/party_{store,cog}.py →  tests/unit/test_party.py
+cogs/tier_{store,badge}.py→  tests/unit/test_tier_badge.py
 cogs/fortune_cog.py       →  tests/unit/test_fortune.py
 tests/unit/test_X.py      →  자기 자신
 ```
@@ -128,6 +129,8 @@ tests/unit/test_X.py      →  자기 자신
 | VALORANT Stats | `test_valorant.py` | 실제 키가 있을 때 Discord에서 `/발로란트 검색` | 자동 + 선택 라이브 |
 | Party Recruitment | `test_party.py` | Discord에서 생성·참가·취소·마감·재시작 복원 | 자동 + 수동 |
 | Party Cleanup | `test_party.py` | 7일 경과 후 실제 정리 (`party_cleanup` 6시간 주기) | 자동 + 장기 수동 |
+| Party Tier Badges | `test_tier_badge.py` | 실제 키가 있을 때 `롤 듀오` · `발로 3인` 으로 모집해 참가 → 티어 표시 | 자동 + 선택 라이브 |
+| Tier Emblem Emojis | – | `sync_tier_emojis.py --dry-run` 이 37개(롤 11 + 발로 26)를 잡는지 | 수동 |
 | Daily Fortune | `test_fortune.py` | Discord에서 개인 표시·공유 버튼 | 자동 + 수동 |
 
 `check_phase_status.py` 가 자동 단위 테스트의 ✅/❌/·를 출력하므로,

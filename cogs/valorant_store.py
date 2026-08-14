@@ -27,15 +27,35 @@ class ValorantStore:
         self._lock = asyncio.Lock()
         # {guild_id: {user_id: {...}}} — 등록은 길드 단위로 격리된다.
         self._data: dict[str, dict[str, Any]] = {}
+        self._last_mtime: float = 0.0
         self._load_from_disk()
+
+    def _stat_mtime(self) -> float:
+        try:
+            return self._path.stat().st_mtime
+        except FileNotFoundError:
+            return 0.0
+        except OSError:
+            return self._last_mtime
+
+    def _maybe_reload(self) -> None:
+        """다른 인스턴스가 같은 파일을 고쳤으면 다시 읽는다.
+
+        `/발로란트 등록` 은 valorant_cog 의 인스턴스가 쓰고, 파티 티어 뱃지는
+        별도 인스턴스가 읽는다 (lol_store._maybe_reload 와 같은 이유).
+        """
+        if self._stat_mtime() != self._last_mtime:
+            self._load_from_disk()
 
     def _load_from_disk(self) -> None:
         if not self._path.exists():
+            self._last_mtime = 0.0
             return
         try:
             loaded = json.loads(self._path.read_text(encoding="utf-8"))
             if isinstance(loaded, dict):
                 self._data = loaded
+                self._last_mtime = self._stat_mtime()
                 self._migrate_legacy_unlocked()
         except (OSError, json.JSONDecodeError):
             backup = self._path.with_suffix(self._path.suffix + ".corrupt")
@@ -76,6 +96,7 @@ class ValorantStore:
         except OSError:
             log.exception("legacy registration backup failed: %s", self._path)
         self._data = {}
+        self._last_mtime = self._stat_mtime()
 
     async def set(
         self, guild_id: int, user_id: int, *, name: str, tag: str, region: str, platform: str
@@ -92,6 +113,7 @@ class ValorantStore:
 
     async def get(self, guild_id: int, user_id: int) -> dict[str, Any] | None:
         async with self._lock:
+            self._maybe_reload()
             entry = self._data.get(str(guild_id), {}).get(str(user_id))
             return dict(entry) if entry else None
 
@@ -108,6 +130,8 @@ class ValorantStore:
     async def _save_unlocked(self) -> None:
         snapshot = json.dumps(self._data, ensure_ascii=False, indent=2)
         await asyncio.to_thread(self._atomic_write, snapshot)
+        # 방금 우리가 쓴 파일을 다음 get() 이 "외부 변경" 으로 오해하지 않도록.
+        self._last_mtime = self._stat_mtime()
 
     def _atomic_write(self, payload: str) -> None:
         parent = self._path.parent if str(self._path.parent) else Path(".")

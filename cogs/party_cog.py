@@ -12,7 +12,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from cogs.config_store import ConfigStore
 from cogs.party_store import Party, PartyMutation, PartyStore
+from cogs.tier_badge import (
+    REFRESH_TIMEOUT_SEC,
+    PartyBadges,
+    TierService,
+    detect_game,
+)
 from cogs.ui import BRAND_COLOR, INFO_COLOR, notice_embed
 
 log = logging.getLogger(__name__)
@@ -148,7 +155,18 @@ def _start_label(party: Party) -> str:
     return datetime.fromtimestamp(party.starts_at, KST).strftime("%m/%d %H:%M")
 
 
-def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Embed:
+def party_embed(
+    party: Party,
+    guild: discord.Guild | None = None,
+    *,
+    badges: PartyBadges | None = None,
+) -> discord.Embed:
+    """모집 임베드. `badges` 가 있으면 참가자 줄에 티어를 붙인다.
+
+    뱃지 계산은 여기서 하지 않는다 — 등록 조회와 캐시 접근이 필요해 순수 함수로
+    남길 수 없고, 이 함수는 스케줄러·버튼·명령 어디서든 불린다. 호출 측이
+    `TierService.for_party()` 로 구해서 넘긴다. None 이면 예전 그대로 그린다.
+    """
     is_open = party.status == "open"
     embed = discord.Embed(
         title=f"🎮 {party.title}",
@@ -171,18 +189,30 @@ def party_embed(party: Party, guild: discord.Guild | None = None) -> discord.Emb
         value=_STATUS_LABELS.get(party.status, _CLOSED_LABEL),
         inline=True,
     )
+    badge_map = badges.badges if badges is not None else {}
+
+    def _roster_line(index: int, user_id: int) -> str:
+        line = f"{index}. {_member_name(guild, user_id)}"
+        badge = badge_map.get(user_id)
+        return f"{line}  {badge}" if badge else line
+
     member_lines = [
-        f"{index}. {_member_name(guild, user_id)}"
+        _roster_line(index, user_id)
         for index, user_id in enumerate(party.members, start=1)
     ]
+    # 구성 요약은 필드 이름에 붙인다. 별도 inline 필드로 빼면 시작/인원/상태
+    # 세 칸이 이미 한 줄을 채우고 있어 네 번째가 어색하게 접힌다.
+    roster_name = "참가자"
+    if badges is not None and badges.summary:
+        roster_name = f"참가자 · {badges.summary}"
     embed.add_field(
-        name="참가자",
+        name=roster_name,
         value="\n".join(member_lines) or "아직 참가자가 없습니다.",
         inline=False,
     )
     if party.waitlist:
         wait_lines = [
-            f"{index}. {_member_name(guild, user_id)}"
+            _roster_line(index, user_id)
             for index, user_id in enumerate(party.waitlist, start=1)
         ]
         embed.add_field(
@@ -453,6 +483,8 @@ class PartyCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.store = PartyStore()
+        self.config = ConfigStore()
+        self.tiers = TierService()
         self.view = PartyView(self)
         self._message_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
@@ -461,9 +493,90 @@ class PartyCog(commands.Cog):
         self.party_scheduler.start()
         self.party_cleanup.start()
 
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        # 애플리케이션 이모지 조회는 로그인 뒤에만 된다. on_ready 는 재연결마다
+        # 다시 오지만 목록을 통째로 덮어쓰므로 여러 번 불려도 안전하다.
+        try:
+            loaded = await self.tiers.load_emojis(self.bot)
+        except Exception:
+            log.exception("tier emblem emoji load failed — falling back to unicode")
+            return
+        if loaded:
+            log.info("loaded %d tier emblem emojis", loaded)
+
     async def cog_unload(self) -> None:
         self.party_scheduler.cancel()
         self.party_cleanup.cancel()
+
+    def _tier_badges_enabled(self, guild_id: int) -> bool:
+        # 기본값 켜짐. 등록자가 없거나 제목에 게임이 없으면 어차피 아무것도
+        # 안 붙으므로, 끄는 쪽이 예외다.
+        return bool(
+            self.config.get_cached_sync(guild_id).get("party_tier_badges", True)
+        )
+
+    async def _badges(self, party: Party) -> PartyBadges | None:
+        """임베드에 넘길 뱃지. 실패하면 None 이고 임베드는 예전처럼 그려진다."""
+        if not self._tier_badges_enabled(party.guild_id):
+            return None
+        try:
+            return await self.tiers.for_party(
+                party.guild_id, party.title, party.members + party.waitlist
+            )
+        except Exception:
+            log.exception(
+                "party tier badges failed: guild_id=%s party_id=%s",
+                party.guild_id,
+                party.id,
+            )
+            return None
+
+    async def _refresh_tier(self, party: Party, user_id: int) -> bool:
+        """참가자 한 명의 티어를 상류에서 갱신한다 (Rule 03: best-effort).
+
+        사용자 응답을 이미 보낸 뒤에 도는 경로다. 상류가 느리거나 죽어도
+        파티 동작에 영향이 없어야 하므로 시간을 끊고 예외를 삼킨다.
+        """
+        if not self._tier_badges_enabled(party.guild_id):
+            return False
+        game = detect_game(party.title)
+        if game is None:
+            return False
+        try:
+            return await asyncio.wait_for(
+                self.tiers.refresh(party.guild_id, user_id, game),
+                REFRESH_TIMEOUT_SEC,
+            )
+        except Exception:
+            log.info(
+                "tier refresh skipped: guild_id=%s user_id=%s game=%s",
+                party.guild_id,
+                user_id,
+                game,
+                exc_info=True,
+            )
+            return False
+
+    async def _rerender_party(self, party: Party) -> None:
+        """티어를 새로 받은 뒤 모집 메시지를 다시 그린다."""
+        channel = self.bot.get_channel(party.channel_id)
+        if channel is None or not hasattr(channel, "get_partial_message"):
+            return
+        try:
+            await channel.get_partial_message(party.message_id).edit(
+                embed=party_embed(
+                    party, self.bot.get_guild(party.guild_id), badges=await self._badges(party)
+                ),
+                view=self.view if party.status == "open" else disabled_party_view(),
+            )
+        except discord.HTTPException:
+            log.info(
+                "party badge re-render failed: guild_id=%s party_id=%s",
+                party.guild_id,
+                party.id,
+                exc_info=True,
+            )
 
     async def _recent_title_hint(self, guild_id: int) -> str:
         """모달 제목 칸의 placeholder. 실패해도 모달은 떠야 한다 (Rule 03).
@@ -587,14 +700,18 @@ class PartyCog(commands.Cog):
             replied_user=False,
         )
         try:
+            # 모달 제출 응답은 3초 안에 나가야 한다. 여기서는 캐시된 뱃지만
+            # 쓰고, 상류 조회는 메시지를 붙인 뒤에 돌린다.
             await interaction.response.send_message(
                 content=mention_role.mention if mention_role is not None else None,
-                embed=party_embed(party, interaction.guild),
+                embed=party_embed(
+                    party, interaction.guild, badges=await self._badges(party)
+                ),
                 view=self.view,
                 allowed_mentions=allowed_mentions,
             )
             message = await interaction.original_response()
-            await self.store.bind_message(
+            party = await self.store.bind_message(
                 interaction.guild_id, party.id, message.id
             )
         except Exception:
@@ -621,6 +738,10 @@ class PartyCog(commands.Cog):
             interaction.user.id,
             mention_role.id if mention_role is not None else None,
         )
+        # 모집자는 항상 첫 참가자다. 티어가 아직 없거나 오래됐으면 지금 받아
+        # 두면 모집글이 열리자마자 뱃지가 붙는다.
+        if await self._refresh_tier(party, interaction.user.id):
+            await self._rerender_party(party)
         if ping_role is not None and mention_role is None:
             # 파티는 이미 열렸다. 태그만 못 붙은 이유를 모집자에게만 알린다.
             await interaction.followup.send(
@@ -757,7 +878,9 @@ class PartyCog(commands.Cog):
         if channel is not None and hasattr(channel, "get_partial_message"):
             try:
                 await channel.get_partial_message(party.message_id).edit(
-                    embed=party_embed(cancelled, guild),
+                    embed=party_embed(
+                        cancelled, guild, badges=await self._badges(cancelled)
+                    ),
                     view=disabled_party_view(),
                 )
             except discord.HTTPException:
@@ -793,6 +916,7 @@ class PartyCog(commands.Cog):
     async def on_guild_remove(self, guild: discord.Guild) -> None:
         try:
             removed = await self.store.remove_guild(guild.id)
+            await self.tiers.tiers.remove_guild(guild.id)
             self._message_locks = {
                 key: lock
                 for key, lock in self._message_locks.items()
@@ -856,7 +980,11 @@ class PartyCog(commands.Cog):
 
             if mutation.party is not None:
                 await interaction.message.edit(
-                    embed=party_embed(mutation.party, interaction.guild),
+                    embed=party_embed(
+                        mutation.party,
+                        interaction.guild,
+                        badges=await self._badges(mutation.party),
+                    ),
                     view=(
                         self.view
                         if mutation.party.status == "open"
@@ -908,6 +1036,11 @@ class PartyCog(commands.Cog):
                 action,
                 mutation.outcome,
             )
+        # 새로 들어온 사람의 티어만 갱신한다. 참가할 때마다 참가자 전원을 다시
+        # 조회하면 정원이 큰 파티에서 상류 호출이 인원의 제곱으로 늘어난다.
+        if mutation.outcome in {"joined", "waitlisted"} and mutation.party is not None:
+            if await self._refresh_tier(mutation.party, interaction.user.id):
+                await self._rerender_party(mutation.party)
 
     @staticmethod
     def _mutation_message(mutation: PartyMutation) -> str:
@@ -1056,7 +1189,7 @@ class PartyCog(commands.Cog):
             return
         message = channel.get_partial_message(party.message_id)
         await message.edit(
-            embed=party_embed(party, guild),
+            embed=party_embed(party, guild, badges=await self._badges(party)),
             view=disabled_party_view(),
         )
         log.info(

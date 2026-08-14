@@ -268,6 +268,17 @@ code{
     </div>
 
     <div class="section">
+      <h2>파티 티어 뱃지</h2>
+      <p class="muted note-lg">
+        모집 제목에 게임 이름이 있고(롤·발로란트) 참가자가 라이엇ID를 등록해 둔
+        경우, 모집 임베드 참가자 줄에 티어를 함께 보여줍니다.
+      </p>
+      <label class="toggle" for="tier_badges">
+        <input id="tier_badges" type="checkbox"> 파티 모집에 티어 표시
+      </label>
+    </div>
+
+    <div class="section">
       <h2>작업</h2>
       <div class="actions">
         <button id="save" type="button">설정 저장</button>
@@ -318,6 +329,8 @@ function render(){
   fillSelect($('leaderboard_channel'),g.text_channels,cfg.leaderboard_channel_id,'미설정');
   $('post_time').value=cfg.leaderboard_post_time||'00:00';
   $('daily_enabled').checked=!!cfg.leaderboard_daily_enabled;
+  // 저장한 적 없는 서버는 키 자체가 없다. 기본값은 켜짐이라 false 일 때만 끈다.
+  $('tier_badges').checked=cfg.party_tier_badges!==false;
   renderDict(cfg.pronunciations);
   // 서버 이름·채널 이름은 사용자 입력이다. innerHTML 로 넣지 않고 노드로 조립한다.
   const box=$('status');
@@ -466,7 +479,8 @@ async function save(){
     pronunciations:collectDict(),
     leaderboard_channel_id:$('leaderboard_channel').value,
     leaderboard_post_time:$('post_time').value,
-    leaderboard_daily_enabled:$('daily_enabled').checked
+    leaderboard_daily_enabled:$('daily_enabled').checked,
+    party_tier_badges:$('tier_badges').checked
   });
   if(!res)return;
   setMessage(res.ok?'설정을 저장했습니다.':(res.data.error||'저장 실패'),res.ok?'ok':'error');

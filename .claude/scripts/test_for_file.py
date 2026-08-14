@@ -49,6 +49,8 @@ MAPPING: list[tuple[str, str]] = [
     (r"cogs/party_store\.py$",         "tests/unit/test_party.py"),
     (r"cogs/party_cog\.py$",           "tests/unit/test_party.py"),
     (r"cogs/fortune_cog\.py$",         "tests/unit/test_fortune.py"),
+    (r"cogs/tier_store\.py$",          "tests/unit/test_tier_badge.py"),
+    (r"cogs/tier_badge\.py$",          "tests/unit/test_tier_badge.py"),
     # 테스트 파일 자체를 편집한 경우 → 그 테스트 다시 실행
     (r"tests/unit/(test_[a-z_]+)\.py$", r"tests/unit/\1.py"),
 ]

@@ -23,6 +23,7 @@ from cogs.party_cog import (
     party_embed,
 )
 from cogs.party_store import PartyStore
+from cogs.tier_badge import PartyBadges
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -400,6 +401,61 @@ async def test_party_embed_distinguishes_cancelled_from_closed(
     assert closed.fields[2].value == "⚫ 모집 마감"
     assert cancelled.fields[2].value == "🚫 모집 취소"
     assert "모집자가 취소함" in cancelled.footer.text
+
+
+def _roster_field(embed):
+    return next(field for field in embed.fields if field.name.startswith("참가자"))
+
+
+async def test_party_embed_without_badges_is_unchanged(store: PartyStore) -> None:
+    """뱃지 인자를 안 주면 티어 기능이 붙기 전과 똑같이 그려져야 한다."""
+    party = await _bound_party(store, owner_id=10)
+
+    field = _roster_field(party_embed(party))
+
+    assert field.name == "참가자"
+    assert field.value == "1. <@10>"
+
+
+async def test_party_embed_puts_tiers_on_the_roster(store: PartyStore) -> None:
+    party = await _bound_party(store, owner_id=10)
+    await store.join(party.guild_id, party.message_id, 11)
+    party = await store.get_by_message(party.guild_id, party.message_id)
+
+    embed = party_embed(
+        party,
+        badges=PartyBadges(
+            "lol", {10: "🥇 골드 2", 11: "🥈 실버 1"}, "🥇골드 1 · 🥈실버 1"
+        ),
+    )
+
+    field = _roster_field(embed)
+    # 구성 요약은 필드 이름에 붙는다 — 시작/인원/상태가 이미 한 줄을 채운다.
+    assert field.name == "참가자 · 🥇골드 1 · 🥈실버 1"
+    assert field.value == "1. <@10>  🥇 골드 2\n2. <@11>  🥈 실버 1"
+
+
+async def test_party_embed_badges_only_the_users_it_knows(store: PartyStore) -> None:
+    """등록 안 한 참가자는 뱃지 없이 이름만 나온다."""
+    party = await _bound_party(store, owner_id=10)
+    await store.join(party.guild_id, party.message_id, 11)
+    party = await store.get_by_message(party.guild_id, party.message_id)
+
+    embed = party_embed(party, badges=PartyBadges("lol", {11: "🥈 실버 1"}, "🥈실버 1"))
+
+    assert _roster_field(embed).value == "1. <@10>\n2. <@11>  🥈 실버 1"
+
+
+async def test_party_embed_badges_reach_the_waitlist(store: PartyStore) -> None:
+    party = await _bound_party(store, owner_id=10, capacity=2)
+    await store.join(party.guild_id, party.message_id, 11)
+    await store.join(party.guild_id, party.message_id, 12)
+    party = await store.get_by_message(party.guild_id, party.message_id)
+
+    embed = party_embed(party, badges=PartyBadges("lol", {12: "💎 다이아 1"}, ""))
+
+    waiting = next(field for field in embed.fields if field.name.startswith("대기자"))
+    assert waiting.value == "1. <@12>  💎 다이아 1"
 
 
 # ---------- 파티 취소와 보관 정리 ----------

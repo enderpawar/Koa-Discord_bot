@@ -44,6 +44,11 @@ PHASES = [
         "tests/unit/test_party.py",
     ),
     (
+        "Feature Party Tier Badges",
+        ["cogs/tier_store.py", "cogs/tier_badge.py"],
+        "tests/unit/test_tier_badge.py",
+    ),
+    (
         "Feature Daily Fortune",
         ["cogs/fortune_cog.py"],
         "tests/unit/test_fortune.py",
