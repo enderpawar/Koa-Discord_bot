@@ -8,6 +8,7 @@ import discord
 import pytest
 
 from cogs.tts_cog import TTSCog, VOICE_CHOICES, _tts_status_embed, _voice_label
+from cogs.audio_mode import AUDIO_MODE_MUSIC, AUDIO_MODE_TTS, mode_from_config
 from cogs.tts_engine import DEFAULT_VOICE
 
 
@@ -85,12 +86,14 @@ def test_tts_status_embed_groups_settings() -> None:
         "보이스",
         "발음 사전",
         "상태",
+        "오디오 모드",
     ]
     assert embed.fields[0].value == "<#11>"
     assert embed.fields[1].value == "<#22>"
     assert "여성 · 차분" in embed.fields[2].value
     assert embed.fields[3].value == "1개 규칙"
     assert embed.fields[4].value == "재생 준비됨"
+    assert embed.fields[5].value == "`TTS`"
 
 
 def test_tts_status_embed_points_at_join_when_not_connected() -> None:
@@ -99,6 +102,13 @@ def test_tts_status_embed_points_at_join_when_not_connected() -> None:
 
     assert embed.fields[3].value == "등록된 규칙 없음"
     assert "/입장" in embed.fields[4].value
+
+
+def test_tts_status_embed_shows_music_mode() -> None:
+    embed = _tts_status_embed({"audio_mode": AUDIO_MODE_MUSIC})
+
+    assert embed.fields[5].name == "오디오 모드"
+    assert embed.fields[5].value == "`음악`"
 
 
 def _make_cog(cfg: dict | None = None) -> TTSCog:
@@ -112,6 +122,10 @@ def _make_cog(cfg: dict | None = None) -> TTSCog:
     cog.store.set = AsyncMock()
     # ConfigStore 가 path-singleton 이라 cached 와 async 결과는 항상 동일하다.
     cog.store.get_cached_sync = MagicMock(return_value=dict(cfg))
+    cog.modes = MagicMock()
+    cog.modes.get_mode = AsyncMock(return_value=mode_from_config(cfg))
+    cog.modes.cached_mode = MagicMock(return_value=mode_from_config(cfg))
+    cog.modes.lock_for = MagicMock(side_effect=lambda _guild_id: asyncio.Lock())
     cog.queue = MagicMock()
     cog.queue.enqueue = AsyncMock()
     cog.queue.ensure_voice = AsyncMock()
@@ -120,6 +134,7 @@ def _make_cog(cfg: dict | None = None) -> TTSCog:
     cog._panel_last_sent = {}
     cog._panel_connect_tasks = {}
     cog._send_voice_panel = AsyncMock()
+    cog._stop_music = AsyncMock(return_value=False)
     return cog
 
 
@@ -147,12 +162,42 @@ async def test_enable_panel_defers_before_voice_connection() -> None:
     )
     cog.store.set.assert_awaited_once_with(
         guild.id,
+        audio_mode=AUDIO_MODE_TTS,
         tts_channel_id=channel.id,
         voice_channel_id=channel.id,
     )
     cog.queue.ensure_voice.assert_awaited_once_with(guild, channel.id)
     assert interaction.edit_original_response.await_count == 2
     interaction.response.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_music_panel_switches_mode_and_clears_tts_connection() -> None:
+    cog = _make_cog({"audio_mode": AUDIO_MODE_TTS})
+    channel = _voice_channel(100)
+    guild = MagicMock()
+    guild.id = 1
+    guild.voice_client = None
+    interaction = MagicMock()
+    interaction.guild = guild
+    interaction.user.voice = SimpleNamespace(channel=channel)
+    interaction.channel = channel
+    interaction.response.defer = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    await cog.enable_music_from_panel(interaction)
+    await asyncio.sleep(0)
+
+    cog.store.set.assert_awaited_once_with(
+        guild.id,
+        audio_mode=AUDIO_MODE_MUSIC,
+        tts_channel_id=channel.id,
+        voice_channel_id=channel.id,
+    )
+    cog.queue.disconnect_voice.assert_awaited_once_with(guild)
+    cog.queue.ensure_voice.assert_awaited_once_with(guild, channel.id)
+    assert interaction.edit_original_response.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -230,6 +275,7 @@ async def test_join_uses_callers_voice_channel_for_input_and_output() -> None:
     cog.queue.ensure_voice.assert_awaited_once_with(guild, channel.id)
     cog.store.set.assert_awaited_once_with(
         guild.id,
+        audio_mode=AUDIO_MODE_TTS,
         tts_channel_id=channel.id,
         voice_channel_id=channel.id,
     )
@@ -293,6 +339,25 @@ async def test_join_requires_caller_to_be_in_voice_channel() -> None:
     interaction.response.send_message.assert_awaited_once()
     embed = interaction.response.send_message.await_args.kwargs["embed"]
     assert "음성 채널에 입장" in embed.description
+
+
+@pytest.mark.asyncio
+async def test_join_is_blocked_while_music_mode_is_selected() -> None:
+    cog = _make_cog({"audio_mode": AUDIO_MODE_MUSIC})
+    channel = _voice_channel(100)
+    interaction = MagicMock()
+    interaction.guild = MagicMock()
+    interaction.guild.id = 1
+    interaction.guild_id = 1
+    interaction.user = SimpleNamespace(id=7, voice=SimpleNamespace(channel=channel))
+    interaction.response.send_message = AsyncMock()
+
+    await TTSCog.join.callback(cog, interaction)
+
+    cog.queue.ensure_voice.assert_not_awaited()
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    assert embed.title == "TTS 재생 불가"
+    assert "음악 모드" in embed.description
 
 
 @pytest.mark.asyncio
@@ -518,6 +583,28 @@ async def test_handle_tts_message_reads_joined_voice_channel_chat() -> None:
     request = cog.queue.enqueue.await_args.args[1]
     assert request.voice_channel_id == voice_channel.id
     assert request.text == "음성 채널 채팅"
+
+
+@pytest.mark.asyncio
+async def test_handle_tts_message_ignores_input_in_music_mode() -> None:
+    cog = _make_cog({
+        "audio_mode": AUDIO_MODE_MUSIC,
+        "tts_channel_id": 100,
+        "voice_channel_id": 100,
+    })
+    voice_channel = _voice_channel(100)
+    voice_channel.members = [_human(10)]
+    message = MagicMock()
+    message.guild = MagicMock()
+    message.guild.id = 1
+    message.guild.voice_client = _connected_voice(voice_channel)
+    message.channel = voice_channel
+    message.clean_content = "음악 모드에서는 읽지 마"
+
+    await cog._handle_tts_message(message)
+
+    cog.store.get.assert_not_awaited()
+    cog.queue.enqueue.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ Skill은 본 봇에서 **재사용 가능한 단위 능력**을 정의합니다.
 | 05 | [audio-queue](05-audio-queue.md) | guild별 비동기 직렬 재생 큐 | `cogs/audio_queue.py` |
 | 06 | [voice-management](06-voice-management.md) | VoiceClient 연결/이동/연결 유지/복구 | `cogs/audio_queue.py` 내부 |
 | 07 | [slash-commands](07-slash-commands.md) | 슬래시 명령어 정의·sync·권한 체크 | `cogs/tts_cog.py` |
+| 08 | [music-mode](08-music-mode.md) | YouTube URL 음악 재생과 TTS/음악 배타 모드 | `cogs/music_player.py`, `cogs/music_cog.py` |
 
 ## 적용 매핑
 - 각 Skill이 어느 Phase에서 구현되는지는 [`pipeline.md`](../pipeline.md) 참조.

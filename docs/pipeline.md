@@ -123,6 +123,18 @@ FK CASCADE) 모집자 본인만 할 수 있다 — 되돌릴 수 없으므로 �
 오늘의 운세는 외부 API를 사용하지 않고 기본 응답을 ephemeral로
 보내 TTS 채널과 일반 채팅을 불필요하게 채우지 않는다.
 
+## Phase 이후 기능 — YouTube 음악 모드
+
+| 기능 | 산출물 | 외부 도구 | 검증 |
+|------|--------|-----------|------|
+| 배타 오디오 모드 | `cogs/audio_mode.py`, `cogs/tts_cog.py` | 없음 | `tests/unit/test_music.py`, `tests/unit/test_tts_cog_ui.py` |
+| YouTube 음악 재생 | `cogs/music_player.py`, `cogs/music_cog.py` | yt-dlp, Deno, FFmpeg | `tests/unit/test_music.py` |
+
+길드마다 `TTS`와 `음악` 중 한 모드만 활성화한다. 음악 모드로 전환하면 진행 중인
+TTS와 대기 문장을 정리하고 이후 채팅 입력을 합성 전에 차단한다. TTS 모드로
+돌아오면 현재 음악과 음악 대기열을 정리한다. YouTube 추출은 이벤트 루프 밖에서
+실행하며 공개 단일 영상만 허용한다.
+
 ## 의존 그래프
 
 ```
