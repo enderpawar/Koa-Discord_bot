@@ -37,6 +37,7 @@ MAX_MUSIC_QUEUE_SIZE = 20
 STREAM_URL_REFRESH_SEC = 600
 EXTRACTION_TIMEOUT_SEC = 45
 YOUTUBE_PO_TOKEN_PROVIDER_ENV = "YOUTUBE_PO_TOKEN_PROVIDER_URL"
+YOUTUBE_PROXY_ENV = "YOUTUBE_PROXY_URL"
 _HTTP_HEADER_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
@@ -67,6 +68,7 @@ class MusicTrack:
     stream_url: str
     resolved_at: float
     http_headers: dict[str, str] = field(default_factory=dict)
+    proxy_url: str | None = field(default=None, repr=False)
 
 
 class _YTDLPLogger:
@@ -98,6 +100,29 @@ def _extractor_args() -> dict[str, dict[str, list[str]]]:
     }
 
 
+def _youtube_proxy_url() -> str | None:
+    """Return a validated HTTP proxy without ever logging its credentials."""
+    proxy_url = os.getenv(YOUTUBE_PROXY_ENV, "").strip()
+    if not proxy_url:
+        return None
+    try:
+        parsed = urlparse(proxy_url)
+        port = parsed.port
+    except ValueError:
+        parsed = None
+        port = None
+    if (
+        parsed is None
+        or parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or port is None
+        or any(char in proxy_url for char in "\r\n\t ")
+    ):
+        log.error("invalid %s; ignoring proxy", YOUTUBE_PROXY_ENV)
+        return None
+    return proxy_url
+
+
 def _safe_http_headers(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -113,8 +138,12 @@ def _safe_http_headers(value: object) -> dict[str, str]:
     return headers
 
 
-def _ffmpeg_before_options(headers: dict[str, str]) -> str:
+def _ffmpeg_before_options(
+    headers: dict[str, str], proxy_url: str | None = None
+) -> str:
     options = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+    if proxy_url:
+        options = f"{options} -http_proxy {shlex.quote(proxy_url)}"
     if not headers:
         return options
     header_block = "".join(f"{name}: {value}\r\n" for name, value in headers.items())
@@ -221,6 +250,9 @@ class YouTubeExtractor:
             "logger": _YTDLPLogger(guild_id),
             "js_runtimes": {"deno": {}, "node": {}},
         }
+        proxy_url = _youtube_proxy_url()
+        if proxy_url:
+            options["proxy"] = proxy_url
         extractor_args = _extractor_args()
         if extractor_args:
             options["extractor_args"] = extractor_args
@@ -253,6 +285,7 @@ class YouTubeExtractor:
             stream_url=stream_url,
             resolved_at=time.monotonic(),
             http_headers=_safe_http_headers(info.get("http_headers")),
+            proxy_url=proxy_url,
         )
 
 
@@ -369,6 +402,7 @@ class MusicPlayer:
             track.stream_url = refreshed.stream_url
             track.resolved_at = refreshed.resolved_at
             track.http_headers = refreshed.http_headers
+            track.proxy_url = refreshed.proxy_url
 
         if guild.id in self._skip_requested:
             return
@@ -376,7 +410,9 @@ class MusicPlayer:
         vc = await self.voice_queue.ensure_voice(guild, track.voice_channel_id)
         source = discord.FFmpegPCMAudio(
             track.stream_url,
-            before_options=_ffmpeg_before_options(track.http_headers),
+            before_options=_ffmpeg_before_options(
+                track.http_headers, track.proxy_url
+            ),
             options="-vn -loglevel warning",
         )
         loop = asyncio.get_running_loop()

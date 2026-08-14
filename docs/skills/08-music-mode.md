@@ -17,6 +17,9 @@
 - yt-dlp가 반환한 `http_headers`를 검증해 FFmpeg 입력 요청에도 전달한다.
 - 데이터센터 IP 배포에서는 격리된 bgutil provider와 `mweb` client로 영상별
   PO Token을 발급하며 provider는 외부 포트에 게시하지 않는다.
+- 데이터센터 IP 자체가 차단된 환경에서는 `YOUTUBE_PROXY_URL`의 인증 HTTP(S)
+  프록시를 yt-dlp와 FFmpeg 양쪽에 동일하게 적용한다. 프록시 자격 증명은 로그나
+  트랙 표현에 노출하지 않는다.
 
 ## Validation
 
@@ -25,3 +28,4 @@
 - 단일 곡 실패 후 워커는 다음 곡을 계속 재생한다.
 - `RUN_LIVE=1` 테스트에서 공개 YouTube URL 추출과 FFmpeg 1초 디코딩을 확인한다.
 - 컨테이너 CI에서 bgutil 플러그인 import와 provider `/ping`을 확인한다.
+- 프록시 설정 시 추출과 FFmpeg 입력 옵션이 동일한 프록시를 사용한다.

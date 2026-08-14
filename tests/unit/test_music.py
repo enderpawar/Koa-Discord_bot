@@ -23,6 +23,7 @@ from cogs.music_player import (
     _extractor_args,
     _ffmpeg_before_options,
     _safe_http_headers,
+    _youtube_proxy_url,
 )
 
 
@@ -131,6 +132,36 @@ def test_ffmpeg_headers_are_sanitized_and_quoted() -> None:
     assert "-headers" in options
     assert "User-Agent: browser agent\r\n" in options
     assert "Injected" not in options
+
+
+def test_youtube_proxy_is_shared_by_extractor_and_ffmpeg(monkeypatch) -> None:
+    proxy_url = "http://user:secret@proxy.example:8080"
+    monkeypatch.setenv("YOUTUBE_PROXY_URL", proxy_url)
+    ydl = MagicMock()
+    ydl.__enter__.return_value = ydl
+    ydl.__exit__.return_value = False
+    ydl.extract_info.return_value = {
+        "title": "proxied song",
+        "url": "https://stream.example/audio",
+        "webpage_url": "https://www.youtube.com/watch?v=abc",
+        "live_status": "not_live",
+    }
+
+    with patch("cogs.music_player.yt_dlp.YoutubeDL", return_value=ydl) as factory:
+        track = YouTubeExtractor._extract_sync("https://youtu.be/abc", 1, 2, 3)
+
+    assert factory.call_args.args[0]["proxy"] == proxy_url
+    assert track.proxy_url == proxy_url
+    assert shlex.quote(proxy_url) in _ffmpeg_before_options({}, track.proxy_url)
+
+
+@pytest.mark.parametrize(
+    "proxy_url",
+    ["socks5://proxy.example:1080", "http://proxy.example", "not a URL"],
+)
+def test_invalid_youtube_proxy_is_ignored(monkeypatch, proxy_url: str) -> None:
+    monkeypatch.setenv("YOUTUBE_PROXY_URL", proxy_url)
+    assert _youtube_proxy_url() is None
 
 
 def test_extract_sync_rejects_playlist_and_live_stream() -> None:
