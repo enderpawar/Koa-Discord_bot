@@ -25,6 +25,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from cogs.audio_mode import (
+    AUDIO_MODE_MUSIC,
+    AUDIO_MODE_TTS,
+    get_audio_mode_coordinator,
+    mode_from_config,
+)
 from cogs.audio_queue import AudioQueue, AudioRequest
 from cogs.config_store import ConfigStore
 from cogs.preprocess import clean_message, normalize_pronunciations
@@ -132,18 +138,23 @@ def _tts_status_embed(cfg: dict) -> discord.Embed:
         value="재생 준비됨" if ready else "`/입장` 으로 음성 채널에 연결해 주세요",
         inline=False,
     )
+    embed.add_field(
+        name="오디오 모드",
+        value="`음악`" if mode_from_config(cfg) == AUDIO_MODE_MUSIC else "`TTS`",
+        inline=False,
+    )
     return embed
 
 
 def _voice_panel_embed(channel: discord.VoiceChannel) -> discord.Embed:
     embed = discord.Embed(
-        title="TTS 빠른 설정",
-        description=f"{channel.mention} 채널 채팅을 TTS 입력으로 사용할 수 있습니다.",
+        title="음성 모드 빠른 설정",
+        description=f"{channel.mention}에서 TTS와 음악 중 하나만 선택해 사용합니다.",
         color=BRAND_COLOR,
     )
     embed.add_field(
         name="동작",
-        value="버튼을 눌러 이 음성 채널의 채팅 읽기를 켜거나 끕니다.",
+        value="모드를 바꾸면 반대쪽의 현재 재생과 대기열이 정리됩니다.",
         inline=False,
     )
     return embed
@@ -155,7 +166,7 @@ class TTSControlView(discord.ui.View):
         self.cog = cog
 
     @discord.ui.button(
-        label="TTS 켜기",
+        label="TTS 모드",
         emoji="🔊",
         style=discord.ButtonStyle.secondary,
         custom_id="koa_tts:enable",
@@ -166,7 +177,18 @@ class TTSControlView(discord.ui.View):
         await self.cog.enable_from_panel(interaction)
 
     @discord.ui.button(
-        label="TTS 끄기",
+        label="음악 모드",
+        emoji="🎵",
+        style=discord.ButtonStyle.secondary,
+        custom_id="koa_music:enable",
+    )
+    async def enable_music(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await self.cog.enable_music_from_panel(interaction)
+
+    @discord.ui.button(
+        label="연결 끄기",
         emoji="🔇",
         style=discord.ButtonStyle.secondary,
         custom_id="koa_tts:disable",
@@ -181,6 +203,7 @@ class TTSCog(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.store = ConfigStore()
+        self.modes = get_audio_mode_coordinator(bot)
         self.queue = AudioQueue()
         self._panel_view = TTSControlView(self)
         self._panel_sent: set[int] = set()  # channel IDs that already received the panel
@@ -254,20 +277,55 @@ class TTSCog(commands.Cog):
             return
 
         await interaction.response.defer(thinking=True, ephemeral=True)
-        await self.store.set(
-            interaction.guild.id,
-            tts_channel_id=channel.id,
-            voice_channel_id=channel.id,
-        )
         await interaction.edit_original_response(
             embed=notice_embed(
-                "TTS 연결 준비 중",
-                "음성 연결을 백그라운드에서 준비합니다. 지금 입력한 문장은 "
-                "큐에 보관했다가 연결이 안정되면 재생합니다.",
+                "TTS 모드 전환 중",
+                "음악을 정리하고 TTS 연결을 준비합니다.",
                 tone="info",
             ),
         )
         self._start_panel_connect(interaction, channel)
+
+    async def enable_music_from_panel(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                embed=notice_embed("사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"),
+                ephemeral=True,
+            )
+            return
+
+        voice_state = getattr(interaction.user, "voice", None)
+        channel = voice_state.channel if voice_state else None
+        if not isinstance(channel, discord.VoiceChannel):
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "음성 채널 필요",
+                    "먼저 이 음성 채널에 입장한 뒤 눌러주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
+            )
+            return
+        if interaction.channel and interaction.channel.id != channel.id:
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "채널 확인 필요",
+                    f"{channel.mention} 채널 채팅에서 다시 눌러주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        await interaction.edit_original_response(
+            embed=notice_embed(
+                "음악 모드 전환 중",
+                "현재 TTS와 대기 문장을 정리하고 음악 연결을 준비합니다.",
+                tone="info",
+            )
+        )
+        self._start_music_panel_connect(interaction, channel)
 
     def _start_panel_connect(
         self,
@@ -284,18 +342,49 @@ class TTSCog(commands.Cog):
         )
         self._panel_connect_tasks[guild_id] = task
 
+    def _start_music_panel_connect(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.VoiceChannel,
+    ) -> None:
+        guild_id = interaction.guild.id
+        current = self._panel_connect_tasks.get(guild_id)
+        if current is not None and not current.done():
+            return
+        task = asyncio.create_task(
+            self._connect_music_from_panel(interaction, channel),
+            name=f"music-panel-connect-{guild_id}",
+        )
+        self._panel_connect_tasks[guild_id] = task
+
+    async def _stop_music(self, guild: discord.Guild) -> bool:
+        music_cog = self.bot.get_cog("MusicCog")
+        stop = getattr(music_cog, "stop_for_mode_switch", None)
+        if stop is None:
+            return False
+        return bool(await stop(guild))
+
     async def _connect_from_panel(
         self,
         interaction: discord.Interaction,
         channel: discord.VoiceChannel,
     ) -> None:
         guild_id = interaction.guild.id
-        already_here = (
-            _connected_voice_client(interaction.guild, channel.id) is not None
-        )
+        already_here = _connected_voice_client(interaction.guild, channel.id) is not None
         greet = False
         try:
-            await self.queue.ensure_voice(interaction.guild, channel.id)
+            async with self.modes.lock_for(guild_id):
+                previous_mode = await self.modes.get_mode(guild_id)
+                if previous_mode == AUDIO_MODE_MUSIC:
+                    await self._stop_music(interaction.guild)
+                    await self.queue.disconnect_voice(interaction.guild)
+                await self.store.set(
+                    guild_id,
+                    audio_mode=AUDIO_MODE_TTS,
+                    tts_channel_id=channel.id,
+                    voice_channel_id=channel.id,
+                )
+                await self.queue.ensure_voice(interaction.guild, channel.id)
         except discord.Forbidden:
             embed = notice_embed(
                 "권한 부족",
@@ -315,7 +404,7 @@ class TTSCog(commands.Cog):
                 f"{channel.mention} 채널 채팅을 TTS 입력으로 사용합니다.",
                 tone="ok",
             )
-            greet = not already_here
+            greet = not already_here or previous_mode == AUDIO_MODE_MUSIC
         try:
             try:
                 await interaction.edit_original_response(embed=embed)
@@ -326,6 +415,54 @@ class TTSCog(commands.Cog):
                 )
             if greet:
                 await self._announce_join(channel)
+        finally:
+            current = asyncio.current_task()
+            if self._panel_connect_tasks.get(guild_id) is current:
+                self._panel_connect_tasks.pop(guild_id, None)
+
+    async def _connect_music_from_panel(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.VoiceChannel,
+    ) -> None:
+        guild_id = interaction.guild.id
+        try:
+            async with self.modes.lock_for(guild_id):
+                previous_mode = await self.modes.get_mode(guild_id)
+                already_here = (
+                    _connected_voice_client(interaction.guild, channel.id) is not None
+                )
+                if previous_mode != AUDIO_MODE_MUSIC or not already_here:
+                    # Persist music first so new chat messages cannot race into TTS.
+                    await self.store.set(
+                        guild_id,
+                        audio_mode=AUDIO_MODE_MUSIC,
+                        tts_channel_id=channel.id,
+                        voice_channel_id=channel.id,
+                    )
+                    if previous_mode == AUDIO_MODE_MUSIC:
+                        await self._stop_music(interaction.guild)
+                    await self.queue.disconnect_voice(interaction.guild)
+                    await self.queue.ensure_voice(interaction.guild, channel.id)
+        except discord.Forbidden:
+            embed = notice_embed("권한 부족", "음성 채널 접속 권한이 없습니다.", tone="error")
+        except Exception:
+            log.exception("music mode join failed: guild_id=%s", guild_id)
+            embed = notice_embed(
+                "음악 모드 전환 실패",
+                "음악 연결 중 오류가 발생했습니다. 버튼을 다시 눌러주세요.",
+                tone="error",
+            )
+        else:
+            embed = notice_embed(
+                "음악 모드 활성화",
+                f"{channel.mention}에서 `/재생` 명령으로 YouTube URL을 재생할 수 있어요.",
+                tone="ok",
+            )
+        try:
+            await interaction.edit_original_response(embed=embed)
+        except discord.HTTPException:
+            log.debug("music panel response expired: guild_id=%s", guild_id)
         finally:
             current = asyncio.current_task()
             if self._panel_connect_tasks.get(guild_id) is current:
@@ -348,17 +485,19 @@ class TTSCog(commands.Cog):
             except asyncio.CancelledError:
                 pass
 
-        cfg = await self.store.get(interaction.guild.id)
-        channel_id = interaction.channel.id if interaction.channel else None
-        updates: dict[str, int | None] = {}
-        if cfg.get("tts_channel_id") == channel_id:
-            updates["tts_channel_id"] = 0
-        if cfg.get("voice_channel_id") == channel_id:
-            updates["voice_channel_id"] = 0
-        if updates:
-            await self.store.set(interaction.guild.id, **updates)
-
-        await self.queue.disconnect_voice(interaction.guild)
+        async with self.modes.lock_for(interaction.guild.id):
+            cfg = await self.store.get(interaction.guild.id)
+            channel_id = interaction.channel.id if interaction.channel else None
+            updates: dict[str, int | None] = {}
+            if cfg.get("tts_channel_id") == channel_id:
+                updates["tts_channel_id"] = 0
+            if cfg.get("voice_channel_id") == channel_id:
+                updates["voice_channel_id"] = 0
+            if updates:
+                await self.store.set(interaction.guild.id, **updates)
+            if mode_from_config(cfg) == AUDIO_MODE_MUSIC:
+                await self._stop_music(interaction.guild)
+            await self.queue.disconnect_voice(interaction.guild)
         await interaction.edit_original_response(
             embed=notice_embed("TTS 비활성화", "이 채널의 TTS를 껐습니다.", tone="ok"),
         )
@@ -390,6 +529,19 @@ class TTSCog(commands.Cog):
         description="현재 참여 중인 음성 채널로 봇을 부르고 채널 채팅 TTS를 켭니다",
     )
     async def join(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is not None and (
+            await self.modes.get_mode(interaction.guild.id) == AUDIO_MODE_MUSIC
+        ):
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "TTS 재생 불가",
+                    "음악 모드에서는 TTS 재생이 불가능해요. "
+                    "음성 패널에서 `TTS 모드`로 전환해 주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
+            )
+            return
         voice_state = getattr(interaction.user, "voice", None)
         channel = voice_state.channel if voice_state else None
         if interaction.guild is None or not isinstance(channel, discord.VoiceChannel):
@@ -409,7 +561,26 @@ class TTSCog(commands.Cog):
             _connected_voice_client(interaction.guild, channel.id) is not None
         )
         try:
-            await self.queue.ensure_voice(interaction.guild, channel.id)
+            async with self.modes.lock_for(interaction.guild.id):
+                if await self.modes.get_mode(interaction.guild.id) == AUDIO_MODE_MUSIC:
+                    await interaction.edit_original_response(
+                        embed=notice_embed(
+                            "TTS 재생 불가",
+                            "음악 모드에서는 TTS 재생이 불가능해요. "
+                            "음성 패널에서 `TTS 모드`로 전환해 주세요.",
+                            tone="warn",
+                        )
+                    )
+                    return
+                await self.queue.ensure_voice(interaction.guild, channel.id)
+                # 음성 채널 채팅의 ID는 음성 채널 ID와 같다. 명령 실행 시 한 번만
+                # 저장하면 on_message 핫패스는 기존의 메모리 dict 조회 + 정수 비교만 한다.
+                await self.store.set(
+                    interaction.guild.id,
+                    audio_mode=AUDIO_MODE_TTS,
+                    tts_channel_id=channel.id,
+                    voice_channel_id=channel.id,
+                )
         except discord.Forbidden:
             await interaction.edit_original_response(
                 embed=notice_embed("권한 부족", "음성 채널 접속 권한이 없습니다.", tone="error"),
@@ -421,13 +592,6 @@ class TTSCog(commands.Cog):
                 embed=notice_embed("입장 실패", "입장 중 오류가 발생했습니다.", tone="error"),
             )
             return
-        # 음성 채널 채팅의 ID는 음성 채널 ID와 같다. 명령 실행 시 한 번만
-        # 저장하면 on_message 핫패스는 기존의 메모리 dict 조회 + 정수 비교만 한다.
-        await self.store.set(
-            interaction.guild.id,
-            tts_channel_id=channel.id,
-            voice_channel_id=channel.id,
-        )
         log.info(
             "join configured voice chat TTS: guild_id=%s channel_id=%s user_id=%s",
             interaction.guild.id,
@@ -462,7 +626,15 @@ class TTSCog(commands.Cog):
             except asyncio.CancelledError:
                 pass
         try:
-            await self.queue.disconnect_voice(interaction.guild)
+            async with self.modes.lock_for(interaction.guild.id):
+                if await self.modes.get_mode(interaction.guild.id) == AUDIO_MODE_MUSIC:
+                    await self._stop_music(interaction.guild)
+                await self.queue.disconnect_voice(interaction.guild)
+                await self.store.set(
+                    interaction.guild.id,
+                    tts_channel_id=0,
+                    voice_channel_id=0,
+                )
         except Exception:
             log.exception("leave failed: guild_id=%s", interaction.guild_id)
         await interaction.edit_original_response(
@@ -539,6 +711,8 @@ class TTSCog(commands.Cog):
         # path-singleton 이라 web_admin 등 다른 cog 가 set() 한 결과가 즉시
         # 반영되므로 stale cache 문제는 in-process 에서 발생하지 않는다.
         cached = self.store.get_cached_sync(message.guild.id)
+        if mode_from_config(cached) != AUDIO_MODE_TTS:
+            return
         tts_channel_id = cached.get("tts_channel_id")
         if not tts_channel_id or message.channel.id != tts_channel_id:
             return
@@ -553,6 +727,8 @@ class TTSCog(commands.Cog):
             return
 
         cfg = await self.store.get(message.guild.id)
+        if mode_from_config(cfg) != AUDIO_MODE_TTS:
+            return
         tts_channel_id = cfg.get("tts_channel_id")
         voice_channel_id = cfg.get("voice_channel_id")
         if not tts_channel_id or not voice_channel_id:
@@ -703,7 +879,12 @@ class TTSCog(commands.Cog):
                 member.guild.id,
                 vc.channel.id,
             )
+            if mode_from_config(cfg) == AUDIO_MODE_MUSIC:
+                await self._stop_music(member.guild)
             await self.queue.disconnect_voice(member.guild)
+            return
+
+        if mode_from_config(cfg) != AUDIO_MODE_TTS:
             return
 
         announcements: list[str] = []

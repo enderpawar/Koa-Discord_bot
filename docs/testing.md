@@ -80,6 +80,7 @@ tests/
 │   ├── test_tts_engine.py         Phase 4 (mocked + live opt-in)
 │   ├── test_audio_queue.py        Phase 5
 │   ├── test_tts_cog.py            Phase 6 (선택, 없으면 ·)
+│   ├── test_music.py               YouTube 추출·배타 모드·음악 대기열
 │   ├── test_lol.py                롤 전적 API/저장/표시
 │   └── test_valorant.py           발로란트 전적 API/저장/표시
 ├── integration/               ← 수동
@@ -103,6 +104,9 @@ cogs/preprocess.py        →  tests/unit/test_preprocess.py
 cogs/tts_engine.py        →  tests/unit/test_tts_engine.py
 cogs/audio_queue.py       →  tests/unit/test_audio_queue.py
 cogs/tts_cog.py           →  tests/unit/test_tts_cog.py
+cogs/audio_mode.py        →  tests/unit/test_music.py
+cogs/music_{player,cog}.py
+                          →  tests/unit/test_music.py
 cogs/lol_{api,store,cog}.py
                           →  tests/unit/test_lol.py
 cogs/valorant_{api,store,cog}.py
@@ -132,6 +136,7 @@ tests/unit/test_X.py      →  자기 자신
 | Party Tier Badges | `test_tier_badge.py` | 실제 키가 있을 때 `롤 듀오` · `발로 3인` 으로 모집해 참가 → 티어 표시 | 자동 + 선택 라이브 |
 | Tier Emblem Emojis | – | `sync_tier_emojis.py --dry-run` 이 37개(롤 11 + 발로 26)를 잡는지 | 수동 |
 | Daily Fortune | `test_fortune.py` | Discord에서 개인 표시·공유 버튼 | 자동 + 수동 |
+| YouTube Music | `test_music.py` | 음악 모드에서 URL 재생·스킵·중지·대기열, TTS 차단 확인 | 자동 + 수동 |
 
 `check_phase_status.py` 가 자동 단위 테스트의 ✅/❌/·를 출력하므로,
 세션 시작 시 즉시 "지금까지 어디까지 이상 없는지" 파악 가능.
@@ -143,6 +148,7 @@ tests/unit/test_X.py      →  자기 자신
 | 전체 단위 테스트 | `python -m pytest tests/unit -q` |
 | 특정 Phase | `python -m pytest tests/unit/test_config_store.py -q` |
 | 라이브 테스트 (네트워크 도달) | `RUN_LIVE=1 python -m pytest tests/unit -m live` |
+| YouTube 추출 + FFmpeg 라이브 테스트 | `RUN_LIVE=1 python -m pytest tests/unit/test_music.py -m live` |
 | Phase 상태 한 번 보기 | `python .claude/scripts/check_phase_status.py` |
 
 ## 6. 개발 환경 부트스트랩

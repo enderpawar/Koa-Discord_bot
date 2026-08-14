@@ -49,6 +49,7 @@ _BASE_ACTIVITIES = (
 # lol_api / lol_store 도 lol_cog 가 쓰는 utility 다.
 KNOWN_EXTENSIONS = (
     "cogs.tts_cog",
+    "cogs.music_cog",
     "cogs.rank_cog",
     "cogs.admin_cog",
     "cogs.web_admin_cog",

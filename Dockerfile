@@ -1,4 +1,9 @@
+FROM denoland/deno:bin-2.9.5 AS deno
+
 FROM python:3.13-slim
+
+# yt-dlp YouTube EJS challenge solver runtime (multi-architecture image).
+COPY --from=deno /deno /usr/local/bin/deno
 
 # discord.py 음성 송출에 필요한 시스템 의존성: FFmpeg + libopus 헤더
 RUN apt-get update \

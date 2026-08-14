@@ -54,6 +54,11 @@ PHASES = [
         "tests/unit/test_fortune.py",
     ),
     (
+        "Feature YouTube Music",
+        ["cogs/audio_mode.py", "cogs/music_player.py", "cogs/music_cog.py"],
+        "tests/unit/test_music.py",
+    ),
+    (
         "Feature Web Admin Auth",
         ["cogs/admin_login_store.py", "cogs/admin_cog.py", "cogs/web_admin_cog.py"],
         "tests/unit/test_admin_login_store.py",

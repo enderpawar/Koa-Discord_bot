@@ -67,3 +67,4 @@ def test_bot_loads_community_content_extensions(monkeypatch) -> None:
 
     assert "cogs.party_cog" in namespace["KNOWN_EXTENSIONS"]
     assert "cogs.fortune_cog" in namespace["KNOWN_EXTENSIONS"]
+    assert "cogs.music_cog" in namespace["KNOWN_EXTENSIONS"]
