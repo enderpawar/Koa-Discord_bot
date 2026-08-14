@@ -346,6 +346,8 @@ docker compose logs -f --tail 100
 | 슬래시 명령이 Discord 에서 안 보임 | 전역 sync 캐시 1시간 | `TEST_GUILD_ID` 추가 후 재시작하면 즉시 반영 |
 | `Privileged Intents` 에러로 게이트웨이 거부 | Developer Portal 의 Intents 미활성 | Server Members + Message Content 둘 다 ON |
 | 음성은 되는데 소리가 안 남 | `libopus0` 누락 | 이미지 재빌드 |
+| 공개 YouTube 영상도 불러오기 실패 | Oracle IP가 YouTube 자동화 트래픽으로 판정됨 | 최신 이미지로 재배포 후 `docker inspect --format '{{.State.Health.Status}}' koa-youtube-pot-provider`가 `healthy`인지 확인 |
+| 음악 제목은 뜨지만 재생되지 않음 | Google Video 요청 헤더 누락 또는 provider 장애 | `docker logs koa-bot`과 `docker logs koa-youtube-pot-provider` 확인 후 두 서비스를 재시작 |
 | 며칠 뒤 인스턴스가 사라짐 (Always Free 유지 중) | `mem-anchor` 컨테이너가 안 뜸 / Cloud Agent 모니터링 플러그인 꺼짐 | `docker ps` 로 `mem-anchor` Up 상태 확인, OCI 콘솔에서 Compute Instance Monitoring 플러그인 Running 확인 |
 | 인스턴스 메모리가 부족해 보임 (`free -h`) | `mem-anchor` 가 2.6GB 점유 중 (의도된 동작) | 문제 없음. 봇 자체 메모리 사용량이 크다면 `docker-compose.yml` 의 `MEM_ANCHOR_BYTES` 를 낮춰 여유 확보 (단 12GB 의 20%=2.4GB 이상은 유지) |
 
@@ -356,6 +358,7 @@ docker compose logs -f --tail 100
 - [ ] 기존 배포의 `config.json` 백업
 - [ ] `.env` 에 `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` 포함
 - [ ] 웹 어드민은 compose 기본값으로 켜진다. 고정 주소를 쓸 때만 `ADMIN_WEB_PUBLIC_URL` 추가 (§6)
+- [ ] `koa-youtube-pot-provider` 컨테이너가 `healthy`이고 외부 포트에 게시되지 않음
 - [ ] `data/config.json` 복원 후 `docker compose up -d --build`
 - [ ] Discord 에서 `/상태`로 길드 설정이 살아있는지 확인
 - [ ] 백업 cron 설정 (§7)

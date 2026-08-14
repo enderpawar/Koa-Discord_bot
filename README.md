@@ -354,6 +354,8 @@ http://127.0.0.1:8080
 | 봇이 채팅을 못 읽음 | Message Content Intent 켰는지 확인 |
 | 입장/퇴장 알림이 안 됨 | Server Members Intent 켰는지 확인 |
 | 음성 채널 입장 실패 | `Connect`, `Speak` 권한과 채널 권한 오버라이드 확인 |
+| 공개 YouTube 영상도 불러오기 실패 | 최신 compose로 재배포하고 `koa-youtube-pot-provider`가 healthy인지 확인 |
+| 음악 제목은 뜨지만 소리가 안 남 | yt-dlp가 반환한 HTTP 헤더를 쓰는 최신 버전인지 확인하고 봇 로그의 FFmpeg 오류 확인 |
 | 한글 발음이 이상함 | `/목소리`로 다른 보이스 선택, 또는 대시보드 발음 사전에 규칙 추가 |
 | 발음 사전을 저장했는데 그대로 읽음 | 규칙은 마크다운 제거 뒤에 적용됩니다. `**ㅇㅈ**`처럼 감싼 경우 원문만 등록하세요 |
 | TTS 설정 명령이 거부됨 | 실행한 사용자가 `채널 관리` 권한을 가졌는지 확인 |
@@ -366,6 +368,11 @@ http://127.0.0.1:8080
 ```ini
 LOG_LEVEL=DEBUG
 ```
+
+Oracle 배포에서는 `docker-compose.yml`이 yt-dlp용 PO Token provider를 내부
+서비스로 함께 실행합니다. 외부 포트나 YouTube 계정 쿠키는 사용하지 않습니다.
+상태는 `docker inspect --format '{{.State.Health.Status}}' koa-youtube-pot-provider`와
+`docker logs koa-youtube-pot-provider`로 확인할 수 있습니다.
 
 ## 배포
 

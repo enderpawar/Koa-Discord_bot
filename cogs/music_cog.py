@@ -122,6 +122,7 @@ class MusicCog(commands.Cog):
                 requester_id=interaction.user.id,
                 request_channel_id=interaction.channel_id,
                 voice_channel_id=channel.id,
+                guild_id=interaction.guild.id,
             )
         except MusicError as exc:
             await interaction.edit_original_response(

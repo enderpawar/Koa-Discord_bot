@@ -14,6 +14,9 @@
 - 검색어, 재생목록 URL, 라이브, 인증이 필요한 영상은 지원하지 않는다.
 - yt-dlp는 `asyncio.to_thread` 밖에서 실행하고 FFmpeg 재생 완료는
   `loop.call_soon_threadsafe` 콜백으로 asyncio에 전달한다.
+- yt-dlp가 반환한 `http_headers`를 검증해 FFmpeg 입력 요청에도 전달한다.
+- 데이터센터 IP 배포에서는 격리된 bgutil provider와 `mweb` client로 영상별
+  PO Token을 발급하며 provider는 외부 포트에 게시하지 않는다.
 
 ## Validation
 
@@ -21,3 +24,4 @@
 - 모드 전환 후 반대 입력이 enqueue되지 않는다.
 - 단일 곡 실패 후 워커는 다음 곡을 계속 재생한다.
 - `RUN_LIVE=1` 테스트에서 공개 YouTube URL 추출과 FFmpeg 1초 디코딩을 확인한다.
+- 컨테이너 CI에서 bgutil 플러그인 import와 provider `/ping`을 확인한다.
