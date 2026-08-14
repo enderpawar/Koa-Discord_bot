@@ -7,9 +7,21 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from cogs.tts_cog import TTSCog, VOICE_CHOICES, _tts_status_embed, _voice_label
+from cogs.tts_cog import (
+    TTSCog,
+    TTSControlView,
+    VOICE_CHOICES,
+    _tts_status_embed,
+    _voice_label,
+    _voice_panel_embed,
+)
 from cogs.audio_mode import AUDIO_MODE_MUSIC, AUDIO_MODE_TTS, mode_from_config
 from cogs.tts_engine import DEFAULT_VOICE
+
+
+@pytest.fixture(autouse=True)
+def _enable_music_for_existing_mode_tests(monkeypatch) -> None:
+    monkeypatch.setenv("MUSIC_ENABLED", "1")
 
 
 def test_voice_choices_include_all_available_korean_voices() -> None:
@@ -136,6 +148,33 @@ def _make_cog(cfg: dict | None = None) -> TTSCog:
     cog._send_voice_panel = AsyncMock()
     cog._stop_music = AsyncMock(return_value=False)
     return cog
+
+
+@pytest.mark.asyncio
+async def test_music_controls_are_disabled_for_tts_only_operation(monkeypatch) -> None:
+    monkeypatch.setenv("MUSIC_ENABLED", "0")
+    cog = _make_cog({"audio_mode": AUDIO_MODE_MUSIC})
+    view = TTSControlView(cog)
+    music_button = next(
+        item for item in view.children if item.custom_id == "koa_music:enable"
+    )
+    channel = _voice_channel(100)
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+
+    assert music_button.disabled is True
+    assert _voice_panel_embed(channel).fields[0].value == (
+        "음악 기능은 현재 운영에서 비활성화되어 있습니다."
+    )
+    assert _tts_status_embed({"audio_mode": AUDIO_MODE_MUSIC}).fields[5].value == "`TTS`"
+
+    await cog.enable_music_from_panel(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "비활성화" in interaction.response.send_message.await_args.kwargs[
+        "embed"
+    ].title
+    cog.store.set.assert_not_awaited()
 
 
 @pytest.mark.asyncio

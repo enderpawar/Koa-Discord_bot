@@ -17,6 +17,8 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from cogs.audio_mode import music_enabled
+
 load_dotenv()
 
 logging.basicConfig(
@@ -58,6 +60,12 @@ KNOWN_EXTENSIONS = (
     "cogs.party_cog",
     "cogs.fortune_cog",
 )
+
+
+def _enabled_extensions() -> tuple[str, ...]:
+    if music_enabled():
+        return KNOWN_EXTENSIONS
+    return tuple(ext for ext in KNOWN_EXTENSIONS if ext != "cogs.music_cog")
 
 
 def _check_ffmpeg() -> None:
@@ -128,7 +136,7 @@ class TTSBot(commands.Bot):
         await super().close()
 
     async def setup_hook(self) -> None:
-        for ext in KNOWN_EXTENSIONS:
+        for ext in _enabled_extensions():
             module_path = ROOT / Path(*ext.split(".")).with_suffix(".py")
             if not module_path.exists():
                 continue

@@ -10,7 +10,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import yt_dlp
 
-from cogs.audio_mode import AUDIO_MODE_MUSIC, AUDIO_MODE_TTS, mode_from_config
+from cogs.audio_mode import (
+    AUDIO_MODE_MUSIC,
+    AUDIO_MODE_TTS,
+    mode_from_config,
+    music_enabled,
+)
 from cogs.music_cog import MusicCog, _format_duration
 from cogs.music_player import (
     InvalidYouTubeURL,
@@ -47,10 +52,21 @@ def _guild(guild_id: int) -> MagicMock:
     return guild
 
 
+@pytest.fixture(autouse=True)
+def _enable_music_for_music_tests(monkeypatch) -> None:
+    monkeypatch.setenv("MUSIC_ENABLED", "1")
+
+
 def test_audio_mode_defaults_to_tts_and_rejects_unknown_values() -> None:
     assert mode_from_config({}) == AUDIO_MODE_TTS
     assert mode_from_config({"audio_mode": "broken"}) == AUDIO_MODE_TTS
     assert mode_from_config({"audio_mode": AUDIO_MODE_MUSIC}) == AUDIO_MODE_MUSIC
+
+
+def test_music_mode_defaults_to_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("MUSIC_ENABLED", raising=False)
+    assert music_enabled() is False
+    assert mode_from_config({"audio_mode": AUDIO_MODE_MUSIC}) == AUDIO_MODE_TTS
 
 
 @pytest.mark.parametrize(

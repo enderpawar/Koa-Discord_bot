@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Final
 
 from discord.ext import commands
@@ -13,11 +14,19 @@ AUDIO_MODE_TTS: Final = "tts"
 AUDIO_MODE_MUSIC: Final = "music"
 VALID_AUDIO_MODES: Final = frozenset({AUDIO_MODE_TTS, AUDIO_MODE_MUSIC})
 _BOT_ATTRIBUTE: Final = "_koa_audio_mode_coordinator"
+_TRUE_VALUES: Final = frozenset({"1", "true", "yes", "on"})
+
+
+def music_enabled() -> bool:
+    """Return whether the retained music feature is explicitly enabled."""
+    return os.getenv("MUSIC_ENABLED", "0").strip().casefold() in _TRUE_VALUES
 
 
 def mode_from_config(config: dict) -> str:
     """Return a supported mode, defaulting old guild configs to TTS."""
     mode = config.get("audio_mode", AUDIO_MODE_TTS)
+    if mode == AUDIO_MODE_MUSIC and not music_enabled():
+        return AUDIO_MODE_TTS
     return mode if mode in VALID_AUDIO_MODES else AUDIO_MODE_TTS
 
 
@@ -40,6 +49,8 @@ class AudioModeCoordinator:
     async def set_mode(self, guild_id: int, mode: str) -> None:
         if mode not in VALID_AUDIO_MODES:
             raise ValueError(f"unsupported audio mode: {mode}")
+        if mode == AUDIO_MODE_MUSIC and not music_enabled():
+            raise ValueError("music mode is disabled")
         await self.store.set(guild_id, audio_mode=mode)
 
     def discard_guild(self, guild_id: int) -> None:

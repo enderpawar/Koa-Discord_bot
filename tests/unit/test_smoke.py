@@ -68,3 +68,12 @@ def test_bot_loads_community_content_extensions(monkeypatch) -> None:
     assert "cogs.party_cog" in namespace["KNOWN_EXTENSIONS"]
     assert "cogs.fortune_cog" in namespace["KNOWN_EXTENSIONS"]
     assert "cogs.music_cog" in namespace["KNOWN_EXTENSIONS"]
+
+
+def test_music_extension_is_disabled_unless_explicitly_enabled(monkeypatch) -> None:
+    monkeypatch.delenv("MUSIC_ENABLED", raising=False)
+    namespace = runpy.run_path(str(BOT_PY), run_name="bot_test")
+    assert "cogs.music_cog" not in namespace["_enabled_extensions"]()
+
+    monkeypatch.setenv("MUSIC_ENABLED", "1")
+    assert "cogs.music_cog" in namespace["_enabled_extensions"]()
