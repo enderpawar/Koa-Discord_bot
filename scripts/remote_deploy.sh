@@ -95,11 +95,17 @@ compose=(
 anchor_enabled=false
 if (( mem_total_kb >= 4194304 )); then
   anchor_enabled=true
-  "${compose[@]}" up -d --build --remove-orphans
+  selected_services=()
 else
   # 메모리가 작은 인스턴스에서는 mem-anchor 를 빼고 띄운다. cloudflared 는
   # 128MB 남짓이라 함께 올린다 — 빼면 대시보드 공개 주소가 사라진다.
-  "${compose[@]}" up -d --build --remove-orphans bot cloudflared
+  selected_services=(bot cloudflared)
+fi
+if ! "${compose[@]}" up -d --build --remove-orphans "${selected_services[@]}"; then
+  echo "error: docker compose failed to start the release" >&2
+  "${compose[@]}" ps >&2 || true
+  "${compose[@]}" logs --tail 100 bot bgutil-provider >&2 || true
+  exit 7
 fi
 ln -sfn "$release_dir" "$app_root/current"
 
