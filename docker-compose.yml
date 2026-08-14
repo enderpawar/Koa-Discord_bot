@@ -71,7 +71,6 @@ services:
         - CMD
         - deno
         - eval
-        - --allow-net
         - const r=await fetch('http://127.0.0.1:4416/ping');if(!r.ok)Deno.exit(1)
       interval: 10s
       timeout: 5s
