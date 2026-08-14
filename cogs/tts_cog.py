@@ -29,6 +29,7 @@ from cogs.audio_mode import (
     AUDIO_MODE_MUSIC,
     AUDIO_MODE_TTS,
     get_audio_mode_coordinator,
+    music_enabled,
     mode_from_config,
 )
 from cogs.audio_queue import AudioQueue, AudioRequest
@@ -147,14 +148,23 @@ def _tts_status_embed(cfg: dict) -> discord.Embed:
 
 
 def _voice_panel_embed(channel: discord.VoiceChannel) -> discord.Embed:
+    enabled = music_enabled()
     embed = discord.Embed(
         title="음성 모드 빠른 설정",
-        description=f"{channel.mention}에서 TTS와 음악 중 하나만 선택해 사용합니다.",
+        description=(
+            f"{channel.mention}에서 TTS와 음악 중 하나만 선택해 사용합니다."
+            if enabled
+            else f"{channel.mention}에서 TTS 연결을 설정합니다."
+        ),
         color=BRAND_COLOR,
     )
     embed.add_field(
         name="동작",
-        value="모드를 바꾸면 반대쪽의 현재 재생과 대기열이 정리됩니다.",
+        value=(
+            "모드를 바꾸면 반대쪽의 현재 재생과 대기열이 정리됩니다."
+            if enabled
+            else "음악 기능은 현재 운영에서 비활성화되어 있습니다."
+        ),
         inline=False,
     )
     return embed
@@ -164,6 +174,10 @@ class TTSControlView(discord.ui.View):
     def __init__(self, cog: "TTSCog") -> None:
         super().__init__(timeout=None)
         self.cog = cog
+        if not music_enabled():
+            for item in self.children:
+                if item.custom_id == "koa_music:enable":
+                    item.disabled = True
 
     @discord.ui.button(
         label="TTS 모드",
@@ -287,6 +301,16 @@ class TTSCog(commands.Cog):
         self._start_panel_connect(interaction, channel)
 
     async def enable_music_from_panel(self, interaction: discord.Interaction) -> None:
+        if not music_enabled():
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "음악 기능 비활성화",
+                    "현재 음악 재생 기능은 운영에서 꺼져 있습니다. TTS 모드를 이용해 주세요.",
+                    tone="warn",
+                ),
+                ephemeral=True,
+            )
+            return
         if interaction.guild is None:
             await interaction.response.send_message(
                 embed=notice_embed("사용 불가", "서버에서만 사용할 수 있습니다.", tone="warn"),

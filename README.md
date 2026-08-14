@@ -379,6 +379,11 @@ Oracle 공인 IP 자체가 YouTube에 차단된 경우에는 GitHub production s
 프록시를 등록합니다. 배포 과정이 이를 `.env`로 전달하며 yt-dlp와 FFmpeg가 같은
 프록시를 사용합니다. 실제 자격 증명은 `.env.example`이나 Git에 커밋하지 마세요.
 
+음악 기능은 현재 기본적으로 비활성화되어 있습니다. 코드는 유지되며 운영에서 다시
+사용하려면 GitHub Actions 변수 `MUSIC_ENABLED=1`을 설정하고 재배포합니다.
+비활성 상태에서는 음악 Cog와 관련 슬래시 명령을 등록하지 않고, 저장된 음악 모드도
+TTS 모드로 처리합니다.
+
 ## 배포
 
 봇은 Python 프로세스 하나로 동작합니다. Discord 음성 송출은 상시 WebSocket 연결과 UDP 스트리밍을 요구하므로 **서버리스(Lambda, Cloudflare Workers 등)로는 운영할 수 없습니다.** 봇이 계속 켜져 있으려면 PC, VM 같은 실행 환경이 계속 살아 있어야 합니다.
