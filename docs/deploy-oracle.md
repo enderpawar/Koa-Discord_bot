@@ -106,75 +106,10 @@ docker compose up -d --build
 | `ADMIN_LOGIN_DB_PATH` | – | 일회용 로그인 해시 DB 경로. Docker 기본값 `/data/admin_login.sqlite3` |
 | `ADMIN_WEB_HOST` | – | compose 가 `0.0.0.0` 으로 못박음. compose 없이 띄울 때만 직접 지정 (§6) |
 | `ADMIN_WEB_PUBLIC_URL` | – | `http://<공인IP>:8080` — 봇이 안내하는 대시보드 주소 |
-| `MC_WHITELIST_SSH_*` | – | `/마크 화이트리스트 등록` 사용 시 필요 — 아래 절 참조 |
 
 > ⚠️ `DISCORD_TOKEN` 과 `AZURE_SPEECH_KEY` 는 절대 저장소에 커밋하지 마세요. `.env` 는 `.gitignore` 대상입니다.
 
 `CONFIG_PATH` / `RANK_PATH` 는 `Dockerfile` 의 `ENV` 가 `/data` 볼륨을 가리키므로 `.env` 에서 생략합니다.
-
-### Minecraft 화이트리스트 SSH
-
-> ⚠️ **현재 비활성화됨.** `/마크` 와 `/클라우드` 는 `bot.py` 의 KNOWN_EXTENSIONS 에서
-> 빠져 있어 로드되지 않습니다. 두 기능 모두 운영자 개인 GCP VM 한 대를 대상으로 하는데
-> `default_permissions=None` 이라 코아를 초대한 아무 서버의 아무나 쓸 수 있었고, 전역
-> 배포에서는 남의 서버 멤버가 VM 전원을 내리거나 화이트리스트에 자신을 올릴 수
-> 있습니다. 되살리려면 길드 허용 목록으로 먼저 가두세요. 아래 절차와 환경변수는
-> 그때를 위해 남겨 둡니다.
-
-코아는 Oracle에서 실행되고 Minecraft 서버는 GCP에 있으므로 로컬
-`whitelist.json`을 수정하지 않습니다. GCP의 `mc-whitelist.sh`를 전용 SSH
-키로 호출합니다. 이 키에는 셸 권한을 주지 말고 반드시 GCP 서버의
-`authorized_keys`에서 source IP, `restrict`, forced-command를 모두 적용하세요.
-
-1. Oracle 봇 호스트에서 전용 키를 만듭니다.
-
-```bash
-mkdir -p ~/koa-bot/shared/ssh
-ssh-keygen -t ed25519 -N '' -C koa-bot-whitelist \
-  -f ~/koa-bot/shared/ssh/mc-whitelist
-cat ~/koa-bot/shared/ssh/mc-whitelist.pub
-```
-
-2. `cobblemon-server/gcp/mc-whitelist.sh`와
-   `mc-whitelist-discord.sh`를 GCP VM의 `/usr/local/bin/`에 root 소유,
-   mode `0755`로 설치합니다. `mc-whitelist-bot` 계정과 다음 sudoers 항목도
-   만듭니다.
-
-```text
-mc-whitelist-bot ALL=(root) NOPASSWD: /usr/local/bin/mc-whitelist.sh add *
-```
-
-3. GCP VM의 `/home/mc-whitelist-bot/.ssh/authorized_keys`에 1번의 공개키를
-   다음 형식으로 한 줄 추가합니다. `<ORACLE_PUBLIC_IP>`는 `/32` 없이 IP만
-   적습니다.
-
-```text
-from="<ORACLE_PUBLIC_IP>",restrict,command="/usr/local/bin/mc-whitelist-discord.sh" ssh-ed25519 AAAA... koa-bot-whitelist
-```
-
-4. GCP VM에서 신뢰할 호스트 공개키를 읽습니다. `ssh-keyscan` 결과를 그대로
-   믿지 말고 이미 인증된 관리 SSH 세션에서 읽어야 합니다.
-
-```bash
-sudo cat /etc/ssh/ssh_host_ed25519_key.pub
-```
-
-5. Oracle의 `.env`에 값을 넣습니다.
-
-```bash
-base64 -w0 ~/koa-bot/shared/ssh/mc-whitelist
-```
-
-```ini
-MC_WHITELIST_SSH_HOST=<GCP_MC_PUBLIC_IP>
-MC_WHITELIST_SSH_PORT=22
-MC_WHITELIST_SSH_USER=mc-whitelist-bot
-MC_WHITELIST_SSH_PRIVATE_KEY_B64=<위 base64 출력>
-MC_WHITELIST_SSH_HOST_KEY=ssh-ed25519 AAAA...
-```
-
-GCP 방화벽의 22번 포트도 가능하면 Oracle 공인 IP `/32`에서만 접근하도록
-제한하세요. RCON 25575는 계속 외부에 열지 않습니다.
 
 ---
 
@@ -356,11 +291,6 @@ GitHub 저장소 **Settings → Secrets and variables → Actions** 에 다음 �
 | Variable | `ADMIN_WEB_PUBLIC_URL` | 선택: 외부 대시보드 URL |
 | Variable | `MEM_ANCHOR_BYTES` | 선택: 기본 `2600000000` |
 | Variable | `MEM_ANCHOR_INTERVAL_SEC` | 선택: 기본 `30` |
-| Variable | `MC_WHITELIST_SSH_HOST` | GCP Minecraft VM 공인 IP |
-| Variable | `MC_WHITELIST_SSH_PORT` | 기본 `22` |
-| Variable | `MC_WHITELIST_SSH_USER` | `mc-whitelist-bot` |
-| Secret | `MC_WHITELIST_SSH_PRIVATE_KEY_B64` | 전용 SSH 개인키의 base64 |
-| Variable | `MC_WHITELIST_SSH_HOST_KEY` | GCP VM의 고정 SSH 호스트 공개키 |
 
 `OCI_SSH_KNOWN_HOSTS` 는 Actions 실행 중 즉석에서 수집하지 않습니다.
 서버 지문을 미리 확인한 값을 고정해야 중간자 공격으로 다른 서버에 토큰을

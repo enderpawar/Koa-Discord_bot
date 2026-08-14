@@ -61,18 +61,6 @@ jobs:
           ADMIN_WEB_PUBLIC_URL: ${{ vars.ADMIN_WEB_PUBLIC_URL }}
           MEM_ANCHOR_BYTES: ${{ vars.MEM_ANCHOR_BYTES }}
           MEM_ANCHOR_INTERVAL_SEC: ${{ vars.MEM_ANCHOR_INTERVAL_SEC }}
-          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-          GCP_ZONE: ${{ vars.GCP_ZONE }}
-          GCP_INSTANCE_NAME: ${{ vars.GCP_INSTANCE_NAME }}
-          GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
-          MC_SERVER_HOST: ${{ vars.MC_SERVER_HOST }}
-          MC_SERVER_PORT: ${{ vars.MC_SERVER_PORT }}
-          MC_CONTROL_PASSWORD: ${{ secrets.MC_CONTROL_PASSWORD }}
-          MC_WHITELIST_SSH_HOST: ${{ vars.MC_WHITELIST_SSH_HOST }}
-          MC_WHITELIST_SSH_PORT: ${{ vars.MC_WHITELIST_SSH_PORT }}
-          MC_WHITELIST_SSH_USER: ${{ vars.MC_WHITELIST_SSH_USER }}
-          MC_WHITELIST_SSH_PRIVATE_KEY_B64: ${{ secrets.MC_WHITELIST_SSH_PRIVATE_KEY_B64 }}
-          MC_WHITELIST_SSH_HOST_KEY: ${{ vars.MC_WHITELIST_SSH_HOST_KEY }}
         run: |
           set -Eeuo pipefail
           install -d -m 700 "${HOME}/.ssh"
@@ -106,20 +94,6 @@ jobs:
               "MEM_ANCHOR_INTERVAL_SEC",
               "RIOT_API_KEY",
               "VALORANT_API_KEY",
-              # 마인크래프트 전원 제어(/mc on|off|status). 여기서 빠지면 재배포 때
-              # .env 가 통째로 새로 써지면서 설정이 사라지고 명령이 죽는다.
-              "GCP_PROJECT_ID",
-              "GCP_ZONE",
-              "GCP_INSTANCE_NAME",
-              "GCP_SA_KEY_B64",
-              "MC_SERVER_HOST",
-              "MC_SERVER_PORT",
-              "MC_CONTROL_PASSWORD",
-              "MC_WHITELIST_SSH_HOST",
-              "MC_WHITELIST_SSH_PORT",
-              "MC_WHITELIST_SSH_USER",
-              "MC_WHITELIST_SSH_PRIVATE_KEY_B64",
-              "MC_WHITELIST_SSH_HOST_KEY",
           )
 
           lines = []

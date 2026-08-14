@@ -6,7 +6,6 @@ from discord.ext import commands
 from cogs.admin_cog import AdminCog
 from cogs.fortune_cog import FortuneCog
 from cogs.lol_cog import LolCog
-from cogs.mc_cog import MCControlCog
 from cogs.party_cog import PartyCog
 from cogs.rank_cog import RankCog
 from cogs.tts_cog import TTSCog
@@ -54,20 +53,6 @@ def test_top_level_commands_are_friendly_korean() -> None:
 def test_command_groups_and_subcommands_are_korean() -> None:
     assert AdminCog.admin.name == "관리자"
     assert {command.name for command in AdminCog.admin.commands} == {"대시보드"}
-    assert MCControlCog.mc.name == "마크"
-    assert {command.name for command in MCControlCog.mc.commands} == {
-        "켜기",
-        "끄기",
-        "상태",
-        "서버",
-        "화이트리스트",
-    }
-    mc_server = next(command for command in MCControlCog.mc.commands if command.name == "서버")
-    assert {command.name for command in mc_server.commands} == {"공지"}
-    mc_whitelist = next(
-        command for command in MCControlCog.mc.commands if command.name == "화이트리스트"
-    )
-    assert {command.name for command in mc_whitelist.commands} == {"등록"}
     assert LolCog.lol.name == "롤"
     assert {command.name for command in LolCog.lol.commands} == {
         "등록",
@@ -99,15 +84,6 @@ def test_user_facing_option_names_are_korean() -> None:
     # `/파티모집` 은 옵션이 없다. 입력은 전부 모달에서 받는다 (test_party.py 참고).
     assert _option_names(PartyCog.create_party) == []
     assert _option_names(PartyCog.cancel_party) == ["파티"]
-
-    mc_payload = _payload(MCControlCog.mc)
-    mc_whitelist = next(
-        option for option in mc_payload["options"] if option["name"] == "화이트리스트"
-    )
-    whitelist_register = next(
-        option for option in mc_whitelist["options"] if option["name"] == "등록"
-    )
-    assert [option["name"] for option in whitelist_register["options"]] == ["닉네임"]
 
     lol_payload = _payload(LolCog.lol)
     lol_options = {

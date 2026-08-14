@@ -44,7 +44,7 @@ _BASE_ACTIVITIES = (
 
 # 로드 대상 cog (discord.py extension). 파일이 존재할 때만 로드 → 점진적 부트 안전.
 # config_store / preprocess / tts_engine / audio_queue 는 tts_cog 가 import 하는 utility 모듈이므로
-# extension 으로 등록하지 않는다. gcp_compute / mc_ping 도 mc_cog 가 쓰는 utility 다.
+# extension 으로 등록하지 않는다.
 # valorant_api / valorant_store 도 valorant_cog 가 쓰는 utility 다.
 # lol_api / lol_store 도 lol_cog 가 쓰는 utility 다.
 KNOWN_EXTENSIONS = (
@@ -52,15 +52,6 @@ KNOWN_EXTENSIONS = (
     "cogs.rank_cog",
     "cogs.admin_cog",
     "cogs.web_admin_cog",
-    # 마인크래프트 전원 제어/화이트리스트(/마크)와 그 상태 안내(/클라우드)는
-    # 로드하지 않는다. 두 기능 모두 운영자 개인 GCP VM 한 대(MC_SERVER_HOST,
-    # GCP_INSTANCE_NAME)를 대상으로 하는데, 명령은 default_permissions=None 이라
-    # 코아를 초대한 아무 서버의 아무나 쓸 수 있었다. 전역 배포로 전환한 지금은
-    # 남의 서버 멤버가 운영자 VM 의 전원을 내리거나 화이트리스트에 자신을 올릴
-    # 수 있다는 뜻이다. 코드는 남겨 두되 로드만 끊는다.
-    # 되살리려면 길드 허용 목록으로 먼저 가둘 것.
-    # "cogs.mc_cog",
-    # "cogs.gcp_status",
     "cogs.valorant_cog",
     "cogs.lol_cog",
     "cogs.party_cog",

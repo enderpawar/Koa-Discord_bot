@@ -4,7 +4,7 @@ HenrikDev(비공식) API 로 라이엇ID → 현재/최고 랭크 + 최근 경�
 `/발로란트 등록`으로 디스코드 계정에 라이엇ID를 한 번 묶어두면 이후
 `/발로란트 전적`만으로 조회된다.
 
-키(VALORANT_API_KEY) 미설정이면 mc_cog 와 동일하게 명령이 '설정 필요'로 응답한다.
+키(VALORANT_API_KEY) 미설정이면 명령이 '설정 필요'로 응답한다.
 """
 from __future__ import annotations
 
