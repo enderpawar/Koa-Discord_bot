@@ -4,6 +4,10 @@
   <img src="site/assets/koa-bot-banner.png" alt="코아 봇 소개 이미지" width="960">
 </p>
 
+<p align="center">
+  <a href="https://enderpawar.github.io/Koa-Discord_bot/">코아 소개 홈페이지</a>
+</p>
+
 디스코드 서버에서 채팅을 한국어 음성으로 읽어주고, 음성 채널 입장/퇴장도 알려주고, 이번 주 활동 랭킹까지 보여주는 서버용 봇입니다.
 
 채팅방에 글을 쓰면 봇이 음성 채널에서 읽어줍니다. 회의, 게임, 작업방, 라디오처럼 틀어두는 서버에 잘 맞습니다.
