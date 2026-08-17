@@ -25,6 +25,7 @@
 ![discord.py](https://img.shields.io/badge/discord.py-2.7.1-5865F2?logo=discord&logoColor=white)
 ![한국어 음성](https://img.shields.io/badge/%ED%95%9C%EA%B5%AD%EC%96%B4%20%EC%9D%8C%EC%84%B1-10%EC%A2%85-0078D4?logo=microsoftazure&logoColor=white)
 ![단위 테스트](https://img.shields.io/badge/%EB%8B%A8%EC%9C%84%20%ED%85%8C%EC%8A%A4%ED%8A%B8-428%EA%B0%9C-brightgreen)
+[![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
 </div>
 
@@ -567,8 +568,21 @@ python -m pytest tests/unit -q --basetemp=.pytest-tmp/base
 - [docs/testing.md](docs/testing.md) — 파일→테스트 매핑
 - [docs/discord-environment-testing.md](docs/discord-environment-testing.md) — 라이브 환경 검증 절차
 - [docs/deploy-oracle.md](docs/deploy-oracle.md) — Oracle Cloud 배포
+- [docs/app-directory.md](docs/app-directory.md) — App Directory 등재 준비
 - [CLAUDE.md](CLAUDE.md) — 에이전트 작업 규칙
 - [site/](site/) — [소개 홈페이지](https://enderpawar.github.io/Koa-Discord_bot/) 소스
+
+---
+
+## 라이선스
+
+[MIT License](LICENSE) — 자유롭게 자체 호스팅·수정·재배포할 수 있습니다.
+
+MIT는 코드에 대한 권리만 부여합니다. **"코아"라는 이름과 캐릭터·이미지 등 브랜드 자산은
+포함되지 않습니다.** 포크해서 별도 봇을 운영하실 경우 다른 이름과 아이콘을 사용해 주세요.
+
+운영 중인 공식 인스턴스에는 [이용약관](https://enderpawar.github.io/Koa-Discord_bot/terms.html)과
+[개인정보처리방침](https://enderpawar.github.io/Koa-Discord_bot/privacy.html)이 적용됩니다.
 
 ---
 

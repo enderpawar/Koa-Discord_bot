@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>개인정보처리방침 | 코아 (Koa Bot)</title>
+    <meta
+      name="description"
+      content="디스코드 봇 코아(Koa)가 수집·저장·전송하는 정보와 보관 기간, 삭제 방법을 정리한 개인정보처리방침"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./legal.css" />
+  </head>
+  <body>
+    <header class="legal-header">
+      <div class="legal-header__inner">
+        <a class="legal-brand" href="./index.html">
+          <span class="legal-brand__mark">K</span>
+          KOA BOT
+        </a>
+        <nav class="legal-nav">
+          <a href="./index.html">소개</a>
+          <a href="./terms.html">이용약관</a>
+          <a href="./privacy.html" aria-current="page">개인정보처리방침</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="legal-main">
+      <p class="legal-eyebrow">Privacy Policy</p>
+      <h1>개인정보처리방침</h1>
+      <p class="legal-meta">
+        최종 개정일 2026년 8월 17일 · 적용 대상: 디스코드 봇 <strong>코아 (Koa)</strong>
+      </p>
+
+      <div class="callout">
+        <p>
+          코아는 <strong>채팅 메시지의 내용을 저장하지 않습니다.</strong> 읽어 줄 문장은 음성으로
+          합성하는 순간에만 사용되고, 합성된 음성 파일은 재생 직후 삭제됩니다. 또한 코아는 음성
+          채널에서 <strong>소리를 내보내기만 하며, 마이크 입력을 수신하거나 녹음하지 않습니다.</strong>
+        </p>
+      </div>
+
+      <h2>1. 저장하는 정보</h2>
+      <p>
+        코아는 기능 동작에 필요한 최소한의 정보만 저장합니다. 모든 데이터는 디스코드 서버
+        단위(<code>guild_id</code>)로 격리되며, 다른 서버의 데이터와 섞이지 않습니다.
+      </p>
+
+      <div class="legal-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>항목</th>
+              <th>목적</th>
+              <th>보관 기간</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>서버 ID, 채널 ID</td>
+              <td>읽을 채널·음성 채널 연결, 리더보드 발송 채널 지정</td>
+              <td>설정이 변경되거나 삭제될 때까지</td>
+            </tr>
+            <tr>
+              <td>서버 설정 (선택한 목소리, 발음 사전, 리더보드 발송 시각, 파티 티어 뱃지 사용 여부)</td>
+              <td>서버별 봇 동작 유지</td>
+              <td>설정이 변경되거나 삭제될 때까지</td>
+            </tr>
+            <tr>
+              <td>사용자 ID, 음성 채널 체류 시간(초), 메시지 <strong>개수</strong></td>
+              <td>주간 활동 점수와 순위 산출. <strong>메시지 내용은 저장하지 않고 개수만 셉니다.</strong></td>
+              <td>매주 금요일 00:00 (KST) 초기화</td>
+            </tr>
+            <tr>
+              <td>파티 모집 정보 (제목, 메모, 정원, 시작·만료 시각, 모집자 및 참가자·대기자 사용자 ID, 메시지 ID)</td>
+              <td>모집 상태 유지, 시작 전 알림, 재시작 후 복원</td>
+              <td>시작 시각으로부터 7일 후 자동 삭제</td>
+            </tr>
+            <tr>
+              <td>라이엇 ID (게임 닉네임, 태그, 지역)</td>
+              <td>전적·랭크 조회, 파티 티어 뱃지 표시</td>
+              <td>사용자가 등록을 해제할 때까지</td>
+            </tr>
+            <tr>
+              <td>게임 티어 조회 결과 (게임, 티어, 단계, PUUID)</td>
+              <td>동일 조회 반복 방지를 위한 캐시</td>
+              <td>24시간 후 만료</td>
+            </tr>
+            <tr>
+              <td>관리자 대시보드 일회용 링크의 <strong>해시값</strong>, 발급 대상 서버·사용자 ID, 발급·만료 시각</td>
+              <td>관리자 본인 확인. <strong>링크 원문은 저장하지 않습니다.</strong></td>
+              <td>발급 후 5분 또는 1회 사용 시 폐기</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>2. 저장하지 않는 정보</h2>
+      <ul>
+        <li><strong>채팅 메시지의 내용</strong> — 디스크에 저장하지 않으며, 로그로도 남기지 않습니다.</li>
+        <li>
+          <strong>음성 채널의 소리</strong> — 코아는 음성을 송출만 합니다. 음성 수신·녹음 기능이
+          코드에 존재하지 않습니다.
+        </li>
+        <li>
+          <strong>합성된 음성 파일</strong> — 임시 파일로 만들어 재생한 뒤 곧바로 삭제합니다.
+        </li>
+        <li>이메일 주소, 전화번호, 실명, 주소 등 디스코드 계정 외의 개인 식별 정보.</li>
+        <li>결제 정보 — 코아는 유료 기능이나 결제 수단을 제공하지 않습니다.</li>
+      </ul>
+
+      <h2>3. 제3자 서비스로 전송되는 정보</h2>
+      <p>
+        일부 기능은 외부 서비스를 사용합니다. 아래 정보는 해당 기능을 사용하는 순간에만 전송되며,
+        각 서비스의 처리 방침이 함께 적용됩니다.
+      </p>
+
+      <div class="legal-table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>서비스</th>
+              <th>전송되는 정보</th>
+              <th>시점</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                Microsoft Azure Speech
+                (<a href="https://privacy.microsoft.com/privacystatement" target="_blank" rel="noreferrer">개인정보처리방침</a>)
+              </td>
+              <td>
+                <strong>읽어 줄 문장의 텍스트</strong>와 선택된 목소리 이름. 사용자 ID나 서버 정보는
+                함께 보내지 않습니다.
+              </td>
+              <td>TTS가 켜진 채널에 메시지가 올라올 때</td>
+            </tr>
+            <tr>
+              <td>
+                Riot Games API
+                (<a href="https://www.riotgames.com/en/privacy-notice" target="_blank" rel="noreferrer">개인정보처리방침</a>)
+              </td>
+              <td>등록된 라이엇 ID와 PUUID</td>
+              <td>리그 오브 레전드 전적·랭크를 조회할 때</td>
+            </tr>
+            <tr>
+              <td>HenrikDev API (발로란트 조회 중계)</td>
+              <td>등록된 라이엇 ID</td>
+              <td>발로란트 전적·티어를 조회할 때</td>
+            </tr>
+            <tr>
+              <td>YouTube</td>
+              <td>사용자가 입력한 영상 주소</td>
+              <td>음악 기능이 활성화된 서버에서 재생을 요청할 때 (기본값은 비활성)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>
+        코아는 어떤 정보도 <strong>광고 목적으로 사용하거나 제3자에게 판매하지 않습니다.</strong>
+        수집한 정보로 사용자 프로필을 만들거나 서버 간 활동을 연결하지 않습니다.
+      </p>
+
+      <h2>4. 삭제 요청</h2>
+      <h3>사용자가 직접 삭제할 수 있는 것</h3>
+      <ul>
+        <li>
+          <strong>라이엇 ID 등록</strong> — <code>/롤 등록해제</code> 또는
+          <code>/발로란트 등록해제</code>를 실행하면 즉시 삭제됩니다. 티어 뱃지도 함께 사라집니다.
+        </li>
+        <li>
+          <strong>내가 연 파티 모집</strong> — <code>/파티취소</code>로 삭제할 수 있습니다.
+        </li>
+      </ul>
+
+      <h3>서버 관리자가 삭제할 수 있는 것</h3>
+      <ul>
+        <li>
+          <strong>활동 순위 데이터</strong> — <code>/관리자 대시보드</code>의
+          <em>리더보드 데이터 초기화</em>로 서버 전체 기록을 지울 수 있습니다.
+        </li>
+        <li><strong>발음 사전</strong> — 같은 대시보드에서 개별 규칙을 삭제할 수 있습니다.</li>
+      </ul>
+
+      <h3>봇을 서버에서 내보낸 경우</h3>
+      <p>
+        코아를 서버에서 내보내면 <strong>해당 서버의 파티 모집 데이터와 티어 캐시는 자동으로
+        삭제되고, 발급된 관리자 링크와 세션은 즉시 폐기됩니다.</strong>
+      </p>
+      <p>
+        다만 서버 설정, 활동 순위 기록, 라이엇 ID 등록 정보는 자동으로 삭제되지 않습니다. 이는 봇을
+        실수로 내보냈다가 다시 초대했을 때 설정을 복구하기 위한 것입니다. 완전한 삭제를 원하시면
+        아래 연락처로 서버 ID를 알려 주시면 처리해 드립니다.
+      </p>
+
+      <h2>5. 데이터 보관 장소와 보호</h2>
+      <ul>
+        <li>
+          데이터는 운영자가 관리하는 단일 서버 인스턴스에 저장되며, 외부에 공개된 데이터베이스
+          포트를 두지 않습니다.
+        </li>
+        <li>
+          관리자 대시보드는 고정 비밀번호나 마스터 토큰을 사용하지 않습니다. 디스코드가 관리자
+          권한을 확인한 뒤 발급하는 5분·1회용 링크로만 접근할 수 있고, 링크는 <strong>해시 형태로만
+          저장</strong>됩니다.
+        </li>
+        <li>
+          대시보드 세션은 유휴 15분 또는 최대 30분에 만료되며, 모든 요청마다 디스코드 관리자 권한을
+          다시 확인합니다.
+        </li>
+        <li>대시보드 공개 주소는 HTTPS로만 제공됩니다.</li>
+      </ul>
+
+      <h2>6. 만 13세 미만 이용자</h2>
+      <p>
+        코아는 디스코드 이용약관을 따르며, 디스코드가 정한 최소 연령(지역에 따라 만 13세 이상) 미만의
+        이용자를 대상으로 하지 않습니다. 해당 이용자의 정보가 저장된 것을 확인하면 삭제합니다.
+      </p>
+
+      <h2>7. 방침 변경</h2>
+      <p>
+        이 방침이 변경되면 이 페이지의 최종 개정일이 갱신되며, 변경 내역은
+        <a href="https://github.com/enderpawar/Koa-Discord_bot/commits/main/site/privacy.html" target="_blank" rel="noreferrer">GitHub 커밋 기록</a>에서
+        전부 확인할 수 있습니다.
+      </p>
+
+      <h2>8. 문의</h2>
+      <div class="callout callout--action">
+        <p>
+          <strong>[작성 필요]</strong> 이 자리에 문의를 받을 이메일 주소 또는 지원 디스코드 서버
+          초대 링크를 넣어야 합니다. 디스코드 App Directory 등재 심사에서 연락 수단은 필수
+          항목입니다.
+        </p>
+      </div>
+      <p>
+        개인정보 관련 문의나 삭제 요청은 위 연락처로 보내 주세요. 코드와 이슈는
+        <a href="https://github.com/enderpawar/Koa-Discord_bot" target="_blank" rel="noreferrer">GitHub 저장소</a>에서도
+        확인할 수 있습니다.
+      </p>
+
+      <h2>English summary</h2>
+      <p class="legal-en">
+        Koa is a Korean-language Discord bot. It <strong>does not store message content</strong> —
+        text is sent to Microsoft Azure Speech only at the moment of synthesis, and the resulting
+        audio file is deleted immediately after playback. Koa <strong>only transmits audio and never
+        receives or records voice input.</strong> It stores, isolated per guild: channel and guild
+        IDs, per-guild settings (voice, pronunciation dictionary, leaderboard schedule), voice
+        minutes and message <em>counts</em> for weekly rankings (reset every Friday 00:00 KST), party
+        recruitment records (auto-deleted 7 days after start time), Riot IDs registered by users
+        (deletable at any time via <code>/롤 등록해제</code>), a 24-hour game tier cache, and
+        <strong>hashes only</strong> of single-use admin dashboard links (valid 5 minutes, one use).
+        No data is sold, used for advertising, or linked across servers. Third-party recipients are
+        Microsoft Azure Speech, Riot Games API, HenrikDev API, and YouTube (music is disabled by
+        default). Removing the bot from a server deletes that server's party data and tier cache and
+        revokes all admin links immediately; settings, rankings, and Riot ID registrations are
+        retained so they can be restored on re-invite, and are deleted on request.
+      </p>
+    </main>
+
+    <footer class="legal-footer">
+      <div class="legal-footer__inner">
+        <span>코아 (Koa) — 한국어 디스코드 음성 봇</span>
+        <span>
+          <a href="./index.html">소개</a> ·
+          <a href="./terms.html">이용약관</a> ·
+          <a href="https://github.com/enderpawar/Koa-Discord_bot" target="_blank" rel="noreferrer">GitHub</a>
+        </span>
+      </div>
+    </footer>
+  </body>
+</html>
