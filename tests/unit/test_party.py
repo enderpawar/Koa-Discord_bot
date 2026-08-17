@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -16,7 +17,9 @@ from discord.ext import commands
 from cogs.party_cog import (
     PartyCog,
     PartyCreateModal,
+    PartyView,
     can_mention_game_role,
+    disabled_party_view,
     format_headcount,
     parse_capacity,
     parse_party_start,
@@ -131,6 +134,20 @@ def test_party_command_takes_no_options_and_opens_the_form() -> None:
 
     source = inspect.getsource(PartyCog.create_party.callback)
     assert "send_modal" in source
+
+
+def test_party_views_include_the_thread_button() -> None:
+    active = PartyView(SimpleNamespace()).children
+    disabled = disabled_party_view().children
+
+    assert [item.custom_id for item in active] == [
+        "party:join",
+        "party:cancel",
+        "party:thread",
+        "party:close",
+    ]
+    assert [item.label for item in active][2] == "스레드 만들기"
+    assert all(item.disabled for item in disabled)
 
 
 def test_modal_asks_five_things_with_only_the_title_required() -> None:
@@ -250,6 +267,87 @@ async def test_join_waitlist_cancel_and_promote(store: PartyStore) -> None:
     assert cancelled.party is not None
     assert cancelled.party.members == (10, 30)
     assert cancelled.party.waitlist == ()
+
+
+def _thread_interaction(*, actor_id: int, message, guild=None):
+    return SimpleNamespace(
+        guild=guild or SimpleNamespace(),
+        guild_id=1,
+        message=message,
+        user=SimpleNamespace(id=actor_id),
+        response=SimpleNamespace(defer=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+
+def _party_cog_for_thread(store: PartyStore) -> PartyCog:
+    cog = object.__new__(PartyCog)
+    cog.store = store
+    cog._message_locks = {}
+    cog.bot = SimpleNamespace()
+    return cog
+
+
+async def test_party_participant_can_create_a_thread(store: PartyStore) -> None:
+    party = await _bound_party(store, owner_id=10)
+    await store.join(1, 500, 20, now_ts=1001)
+    thread = SimpleNamespace(mention="<#500>", send=AsyncMock())
+    message = SimpleNamespace(id=500, create_thread=AsyncMock(return_value=thread))
+    interaction = _thread_interaction(actor_id=20, message=message)
+    cog = _party_cog_for_thread(store)
+    cog._find_party_thread = AsyncMock(return_value=None)
+
+    await cog.handle_party_thread(interaction)
+
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+    message.create_thread.assert_awaited_once_with(
+        name=f"{party.title} · 파티 대화",
+        auto_archive_duration=1440,
+        reason=f"파티 모집 #{party.id} 참가자 대화",
+    )
+    thread.send.assert_awaited_once()
+    intro = thread.send.await_args.args[0]
+    assert "<@10>" in intro
+    assert "<@20>" in intro
+    reply = interaction.followup.send.await_args.kwargs["embed"]
+    assert "만들었습니다" in reply.description
+    assert "<#500>" in reply.description
+
+
+async def test_party_thread_button_reuses_the_existing_thread(
+    store: PartyStore,
+) -> None:
+    await _bound_party(store, owner_id=10)
+    thread = SimpleNamespace(mention="<#500>", send=AsyncMock())
+    message = SimpleNamespace(id=500, create_thread=AsyncMock())
+    interaction = _thread_interaction(actor_id=10, message=message)
+    cog = _party_cog_for_thread(store)
+    cog._find_party_thread = AsyncMock(return_value=thread)
+
+    await cog.handle_party_thread(interaction)
+
+    message.create_thread.assert_not_awaited()
+    thread.send.assert_not_awaited()
+    reply = interaction.followup.send.await_args.kwargs["embed"]
+    assert "이미 만들어진" in reply.description
+    assert "<#500>" in reply.description
+
+
+async def test_party_thread_creation_is_limited_to_participants(
+    store: PartyStore,
+) -> None:
+    await _bound_party(store, owner_id=10)
+    message = SimpleNamespace(id=500, create_thread=AsyncMock())
+    interaction = _thread_interaction(actor_id=99, message=message)
+    cog = _party_cog_for_thread(store)
+    cog._find_party_thread = AsyncMock(return_value=None)
+
+    await cog.handle_party_thread(interaction)
+
+    message.create_thread.assert_not_awaited()
+    cog._find_party_thread.assert_not_awaited()
+    reply = interaction.followup.send.await_args.kwargs["embed"]
+    assert "참가자만" in reply.description
 
 
 async def test_concurrent_join_never_exceeds_capacity(store: PartyStore) -> None:

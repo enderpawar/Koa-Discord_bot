@@ -29,6 +29,7 @@ MAX_SCHEDULE_DAYS = 30
 _CLOCK_RE = re.compile(r"^(?P<hour>\d{1,2}):(?P<minute>\d{2})$")
 _RELATIVE_RE = re.compile(r"^(?P<amount>\d{1,3})\s*(?P<unit>분|시간)\s*(?:뒤|후)$")
 MAX_TITLE_LENGTH = 50
+PARTY_THREAD_AUTO_ARCHIVE_MINUTES = 1440
 # "지금"으로 연 파티는 시작 시각이 곧 생성 시각이다. 시작 시각에 자동 마감하면
 # 올리자마자 닫히므로, 즉시 모집에는 별도의 모집 창을 준다.
 INSTANT_PARTY_WINDOW = timedelta(hours=2)
@@ -270,6 +271,14 @@ def disabled_party_view() -> discord.ui.View:
     )
     view.add_item(
         discord.ui.Button(
+            label="스레드 만들기",
+            style=discord.ButtonStyle.primary,
+            custom_id="party:thread",
+            disabled=True,
+        )
+    )
+    view.add_item(
+        discord.ui.Button(
             label="모집 마감",
             style=discord.ButtonStyle.danger,
             custom_id="party:close",
@@ -467,6 +476,16 @@ class PartyView(discord.ui.View):
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
         await self.cog.handle_party_action(interaction, "cancel")
+
+    @discord.ui.button(
+        label="스레드 만들기",
+        style=discord.ButtonStyle.primary,
+        custom_id="party:thread",
+    )
+    async def thread_button(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        await self.cog.handle_party_thread(interaction)
 
     @discord.ui.button(
         label="모집 마감",
@@ -1041,6 +1060,162 @@ class PartyCog(commands.Cog):
         if mutation.outcome in {"joined", "waitlisted"} and mutation.party is not None:
             if await self._refresh_tier(mutation.party, interaction.user.id):
                 await self._rerender_party(mutation.party)
+
+    async def _find_party_thread(
+        self, guild: discord.Guild, message_id: int
+    ) -> discord.Thread | None:
+        """Return the message-linked thread, including one missing from cache."""
+        thread = guild.get_thread(message_id)
+        if thread is not None:
+            return thread
+
+        cached = self.bot.get_channel(message_id)
+        if isinstance(cached, discord.Thread):
+            return cached
+
+        try:
+            fetched = await self.bot.fetch_channel(message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+        return fetched if isinstance(fetched, discord.Thread) else None
+
+    async def handle_party_thread(self, interaction: discord.Interaction) -> None:
+        """Create or return the public thread attached to a recruitment message."""
+        if (
+            interaction.guild is None
+            or interaction.guild_id is None
+            or interaction.message is None
+        ):
+            await interaction.response.send_message(
+                embed=notice_embed(
+                    "처리 불가", "파티 모집 정보를 찾을 수 없습니다.", tone="warn"
+                ),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        message_id = interaction.message.id
+        key = (interaction.guild_id, message_id)
+        lock = self._message_locks.setdefault(key, asyncio.Lock())
+
+        async with lock:
+            party = await self.store.get_by_message(interaction.guild_id, message_id)
+            if party is None:
+                await interaction.followup.send(
+                    embed=notice_embed(
+                        "스레드 생성 실패",
+                        "저장된 파티 모집 정보를 찾을 수 없습니다.",
+                        tone="warn",
+                    ),
+                    ephemeral=True,
+                )
+                return
+            if party.status != "open":
+                await interaction.followup.send(
+                    embed=notice_embed(
+                        "모집 종료",
+                        "종료된 파티에서는 새 스레드를 만들 수 없습니다.",
+                        tone="info",
+                    ),
+                    ephemeral=True,
+                )
+                return
+            if interaction.user.id not in party.members:
+                await interaction.followup.send(
+                    embed=notice_embed(
+                        "참가자 전용",
+                        "파티 참가자만 대화 스레드를 만들 수 있습니다.",
+                        tone="warn",
+                    ),
+                    ephemeral=True,
+                )
+                return
+
+            thread = await self._find_party_thread(interaction.guild, message_id)
+            created = False
+            if thread is None:
+                try:
+                    thread = await interaction.message.create_thread(
+                        name=f"{party.title} · 파티 대화"[:100],
+                        auto_archive_duration=PARTY_THREAD_AUTO_ARCHIVE_MINUTES,
+                        reason=f"파티 모집 #{party.id} 참가자 대화",
+                    )
+                    created = True
+                except discord.Forbidden:
+                    await interaction.followup.send(
+                        embed=notice_embed(
+                            "스레드 생성 실패",
+                            "봇에 `공개 스레드 만들기` 권한이 없습니다. "
+                            "서버 관리자에게 권한 추가를 요청해 주세요.",
+                            tone="error",
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+                except discord.HTTPException:
+                    # 다른 프로세스가 먼저 만들었을 수 있으므로 한 번 더 찾는다.
+                    thread = await self._find_party_thread(
+                        interaction.guild, message_id
+                    )
+                    if thread is None:
+                        log.exception(
+                            "party thread creation failed: guild_id=%s party_id=%s",
+                            interaction.guild_id,
+                            party.id,
+                        )
+                        await interaction.followup.send(
+                            embed=notice_embed(
+                                "스레드 생성 실패",
+                                "이 채널에서는 스레드를 만들 수 없거나 Discord 요청이 "
+                                "실패했습니다. 일반 텍스트 채널인지 확인해 주세요.",
+                                tone="error",
+                            ),
+                            ephemeral=True,
+                        )
+                        return
+
+            intro_failed = False
+            if created:
+                mentions = " ".join(f"<@{user_id}>" for user_id in party.members)
+                try:
+                    await thread.send(
+                        f"{mentions}\n💬 **{party.title}** 파티 대화방입니다. "
+                        "일정과 역할을 여기서 맞춰 보세요.",
+                        allowed_mentions=discord.AllowedMentions(
+                            users=True, roles=False, everyone=False
+                        ),
+                    )
+                except discord.HTTPException:
+                    intro_failed = True
+                    log.warning(
+                        "party thread intro failed: guild_id=%s party_id=%s",
+                        interaction.guild_id,
+                        party.id,
+                        exc_info=True,
+                    )
+
+        description = (
+            f"대화 스레드를 만들었습니다: {thread.mention}"
+            if created
+            else f"이미 만들어진 대화 스레드가 있습니다: {thread.mention}"
+        )
+        if intro_failed:
+            description += (
+                "\n스레드는 만들어졌지만 안내 메시지를 보내지 못했습니다. "
+                "봇의 `스레드에서 메시지 보내기` 권한을 확인해 주세요."
+            )
+        await interaction.followup.send(
+            embed=notice_embed("파티 대화", description, tone="ok"),
+            ephemeral=True,
+        )
+        log.info(
+            "party thread ready: guild_id=%s message_id=%s user_id=%s created=%s",
+            interaction.guild_id,
+            message_id,
+            interaction.user.id,
+            created,
+        )
 
     @staticmethod
     def _mutation_message(mutation: PartyMutation) -> str:

@@ -107,6 +107,11 @@
 30초 공용 스케줄러 하나가 시작 전 알림과 자동 마감을 처리하며, 파티별 타이머를
 생성하지 않는다.
 
+모집 메시지의 `스레드 만들기` 버튼은 현재 참가자만 사용할 수 있다. 원본 메시지에서
+공개 스레드를 만들며, Discord가 이 스레드 ID를 원본 메시지 ID와 같게 지정하므로 별도
+DB 열은 두지 않는다. 같은 메시지의 동시 요청은 기존 메시지 잠금으로 직렬화하고,
+재시작하거나 중복 클릭해도 캐시와 채널 조회로 기존 스레드를 다시 안내한다.
+
 두 스캔(`claim_due_reminders`, `claim_expired`)은 길드를 가리지 않고
 `status='open'` 으로만 훑으므로, `idx_parties_guild_status_start` (guild_id 선두)
 대신 부분 인덱스 `idx_parties_open_start ON parties(starts_at) WHERE status='open'`
