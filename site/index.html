@@ -344,11 +344,33 @@
         </nav>
 
         <figure class="toc-brand">
-          <img src="./assets/koa-brand-banner.webp" alt="Koa Bot 브랜드 배너" width="1672" height="941" loading="lazy" />
+          <button
+            class="toc-brand-trigger"
+            type="button"
+            aria-label="Koa Bot 브랜드 배너 크게 보기"
+            aria-haspopup="dialog"
+            aria-controls="brand-lightbox"
+          >
+            <img src="./assets/koa-brand-banner.webp" alt="" width="1672" height="941" loading="lazy" />
+          </button>
           <figcaption>KOA BOT<br /><span>KOREAN VOICE UNIT</span></figcaption>
+          <span class="toc-brand-zoom" aria-hidden="true"><i class="ph ph-magnifying-glass-plus"></i></span>
         </figure>
       </aside>
     </div>
+
+    <dialog class="image-lightbox" id="brand-lightbox" aria-labelledby="brand-lightbox-title">
+      <div class="image-lightbox-panel">
+        <div class="image-lightbox-toolbar">
+          <p id="brand-lightbox-title">KOA BOT 브랜드 배너</p>
+          <button class="image-lightbox-close" type="button" aria-label="배너 크게 보기 닫기">
+            <i class="ph ph-x" aria-hidden="true"></i>
+            <span>닫기</span>
+          </button>
+        </div>
+        <img src="./assets/koa-brand-banner.webp" alt="Koa Bot 브랜드 배너 원본" width="1672" height="941" />
+      </div>
+    </dialog>
 
     <footer class="site-footer">
       <div>

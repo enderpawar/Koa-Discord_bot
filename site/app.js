@@ -11,6 +11,9 @@
   const commandCount = document.querySelector("#command-count");
   const emptySearch = document.querySelector(".empty-search");
   const sectionLinks = [...document.querySelectorAll('.side-nav a[href^="#"], .page-toc a[href^="#"]')];
+  const brandTrigger = document.querySelector(".toc-brand-trigger");
+  const brandLightbox = document.querySelector("#brand-lightbox");
+  const brandLightboxClose = document.querySelector(".image-lightbox-close");
   const cleanup = [];
 
   const revealPage = () => {
@@ -105,6 +108,31 @@
     cleanup.push(() => searchInput.removeEventListener("input", onSearch));
     cleanup.push(() => searchInput.removeEventListener("keydown", onSearchKeyDown));
     cleanup.push(() => document.removeEventListener("keydown", onShortcut));
+  }
+
+  if (brandTrigger && brandLightbox && brandLightboxClose) {
+    const openBrandLightbox = () => {
+      body.classList.add("is-lightbox-open");
+      brandLightbox.showModal();
+    };
+    const closeBrandLightbox = () => brandLightbox.close();
+    const closeBrandLightboxFromBackdrop = (event) => {
+      if (event.target === brandLightbox) closeBrandLightbox();
+    };
+    const restoreAfterBrandLightbox = () => {
+      body.classList.remove("is-lightbox-open");
+      brandTrigger.focus({ preventScroll: true });
+    };
+
+    brandTrigger.addEventListener("click", openBrandLightbox);
+    brandLightboxClose.addEventListener("click", closeBrandLightbox);
+    brandLightbox.addEventListener("click", closeBrandLightboxFromBackdrop);
+    brandLightbox.addEventListener("close", restoreAfterBrandLightbox);
+
+    cleanup.push(() => brandTrigger.removeEventListener("click", openBrandLightbox));
+    cleanup.push(() => brandLightboxClose.removeEventListener("click", closeBrandLightbox));
+    cleanup.push(() => brandLightbox.removeEventListener("click", closeBrandLightboxFromBackdrop));
+    cleanup.push(() => brandLightbox.removeEventListener("close", restoreAfterBrandLightbox));
   }
 
   const sections = sectionLinks
