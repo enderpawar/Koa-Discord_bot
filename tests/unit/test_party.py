@@ -19,6 +19,7 @@ from cogs.party_cog import (
     PartyCreateModal,
     PartyView,
     can_mention_game_role,
+    pingable_roles,
     disabled_party_view,
     format_headcount,
     parse_capacity,
@@ -115,6 +116,103 @@ def test_game_role_can_use_role_setting_or_bot_permission() -> None:
     assert can_mention_game_role(private_role, mention_permissions)
     assert not can_mention_game_role(private_role, no_permissions)
     assert not can_mention_game_role(everyone, mention_permissions)
+
+
+def _role(
+    name: str,
+    *,
+    role_id: int,
+    position: int,
+    mentionable: bool = True,
+    managed: bool = False,
+    default: bool = False,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=role_id,
+        name=name,
+        position=position,
+        mentionable=mentionable,
+        managed=managed,
+        is_default=lambda: default,
+    )
+
+
+def _guild(roles: list[SimpleNamespace]) -> SimpleNamespace:
+    by_id = {role.id: role for role in roles}
+    return SimpleNamespace(roles=roles, get_role=by_id.get)
+
+
+def test_ping_role_options_keep_only_what_the_server_allows_tagging() -> None:
+    """서버가 멘션을 허용해 둔 역할만 후보다.
+
+    봇이 관리자면 기술적으로는 아무 역할이나 태그할 수 있지만, 그렇다고
+    시간대 역할(`00`, `97` …) 까지 모집 폼에 늘어놓을 이유는 없다.
+    """
+    guild = _guild(
+        [
+            _role("@everyone", role_id=1, position=0, default=True),
+            _role("FPS", role_id=2, position=20),
+            _role("스팀", role_id=3, position=22),
+            _role("00", role_id=4, position=34, mentionable=False),
+            _role("Koa_Bot", role_id=5, position=1, managed=True),
+        ]
+    )
+
+    assert [role.name for role in pingable_roles(guild)] == ["스팀", "FPS"]
+    assert pingable_roles(None) == []
+
+
+def test_ping_role_options_stay_within_the_dropdown_limit() -> None:
+    """Discord 는 드롭다운 하나에 25개까지만 받는다."""
+    guild = _guild(
+        [_role(f"역할{index}", role_id=index, position=index) for index in range(40)]
+    )
+
+    assert len(pingable_roles(guild)) == 25
+
+
+def test_ping_role_field_carries_the_options_itself() -> None:
+    """기본 역할 선택기는 목록을 클라이언트가 만들어서 잘린다.
+
+    항목을 봇이 실어 보내야 태그하려던 역할이 빠지지 않는다.
+    """
+    guild = _guild([_role("FPS", role_id=2, position=20)])
+
+    field = PartyCreateModal(cog=None, guild=guild).to_dict()["components"][4]
+
+    assert field["label"] == "알림 역할"
+    assert field["component"]["type"] == 3  # 봇이 채우는 문자열 선택기
+    assert field["component"]["required"] is False
+    # 값은 이름이 아니라 역할 ID 여야 한다. 이름은 바뀌고 겹친다.
+    assert [
+        (option["label"], option["value"]) for option in field["component"]["options"]
+    ] == [("FPS", "2")]
+
+
+def test_ping_role_field_falls_back_when_no_role_can_be_tagged() -> None:
+    """후보가 없으면 기본 선택기로 되돌린다. 잘려도 없는 것보다 낫다."""
+    guild = _guild([_role("00", role_id=4, position=34, mentionable=False)])
+
+    for modal in (PartyCreateModal(cog=None, guild=guild), PartyCreateModal(cog=None)):
+        assert modal.to_dict()["components"][4]["component"]["type"] == 6
+
+
+def test_picked_role_resolves_the_selected_id() -> None:
+    """제출되는 건 역할 ID 문자열이다. 길드에서 실제 역할로 되살린다."""
+    fps = _role("FPS", role_id=2, position=20)
+    guild = _guild([fps])
+    modal = PartyCreateModal(cog=None, guild=guild)
+    interaction = SimpleNamespace(guild=guild)
+
+    modal.role_field.component._values =["2"]
+    assert modal.picked_role(interaction) is fps
+
+    # 지워진 역할을 고른 채 제출해도 터지지 않아야 한다.
+    modal.role_field.component._values =["999"]
+    assert modal.picked_role(interaction) is None
+
+    modal.role_field.component._values =[]
+    assert modal.picked_role(interaction) is None
 
 
 _TEST_BOT = commands.Bot(command_prefix="!", intents=discord.Intents.none())

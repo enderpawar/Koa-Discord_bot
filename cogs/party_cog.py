@@ -40,6 +40,8 @@ _NOW_WORDS = {"지금", "바로", "즉시", "now"}
 # 짧게 두면 "어제 그 파티 누구 왔었지" 를 못 보고, 길게 두면 행이 계속 쌓인다.
 PARTY_RETENTION_DAYS = 7
 PARTY_CLEANUP_INTERVAL_HOURS = 6
+# 드롭다운 하나에 넣을 수 있는 항목 수. Discord 가 정한 상한이다.
+MAX_PING_ROLE_OPTIONS = 25
 
 
 def parse_party_start(value: str, *, now: datetime | None = None) -> datetime:
@@ -129,6 +131,27 @@ def can_mention_game_role(
     return not role.is_default() and (
         role.mentionable or permissions.mention_everyone
     )
+
+
+def pingable_roles(guild: discord.Guild | None) -> list[discord.Role]:
+    """`알림 역할` 칸에 올릴 후보.
+
+    서버가 멘션을 허용해 둔 역할만 본다. `mentionable` 은 운영진이 역할 설정에서
+    직접 켠 값이라, 곧 "이건 핑 대상으로 써도 된다" 는 서버의 선언이다. 봇에
+    관리자 권한이 있으면 기술적으로는 아무 역할이나 태그할 수 있지만, 그렇다고
+    시간대 역할(`00`, `97` …) 까지 모집 폼에 늘어놓을 이유는 없다.
+
+    integration 역할(봇·부스터)은 사람이 모이는 역할이 아니라서 뺀다.
+    """
+    if guild is None:
+        return []
+    roles = [
+        role
+        for role in guild.roles
+        if not role.is_default() and not role.managed and role.mentionable
+    ]
+    roles.sort(key=lambda role: role.position, reverse=True)
+    return roles[:MAX_PING_ROLE_OPTIONS]
 
 
 _STATUS_LABELS = {
@@ -334,6 +357,7 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
         *,
         recent_title: str = "",
         draft: dict[str, str] | None = None,
+        guild: discord.Guild | None = None,
     ) -> None:
         super().__init__(timeout=600)
         self.cog = cog
@@ -380,7 +404,7 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
         self.role_field = discord.ui.Label(
             text="알림 역할",
             description="이 역할에게 모집 알림을 보냅니다 (선택)",
-            component=discord.ui.RoleSelect(required=False),
+            component=self._ping_role_component(guild),
         )
         for field in (
             self.title_field,
@@ -390,6 +414,49 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
             self.role_field,
         ):
             self.add_item(field)
+
+    @staticmethod
+    def _ping_role_component(guild: discord.Guild | None) -> discord.ui.Item:
+        """`알림 역할` 칸.
+
+        Discord 기본 역할 선택기(`RoleSelect`) 는 목록을 클라이언트가 만든다.
+        봇이 보내는 건 "역할 고르는 칸" 이라는 사실뿐이고 항목을 못 싣는데,
+        역할이 많은 서버에서는 그 목록이 잘려서 정작 태그하려던 역할이 안 뜬다
+        (새싹마을 35개 중 `FPS`·`스팀`·`롤` 이 통째로 빠졌다). 그래서 항목을
+        봇이 직접 실어 보내는 문자열 선택기로 만든다. 값은 이름이 아니라 역할
+        ID 라, 역할 이름이 바뀌거나 같은 이름이 둘이어도 정확히 복원된다.
+
+        후보를 못 추리면(DM·길드 캐시 없음·멘션 허용 역할 0개) 기본 선택기로
+        되돌린다. 잘려도 있는 편이 아예 없는 것보다 낫다.
+        """
+        candidates = pingable_roles(guild)
+        if not candidates:
+            return discord.ui.RoleSelect(required=False)
+        return discord.ui.Select(
+            placeholder="선택하기",
+            required=False,
+            options=[
+                discord.SelectOption(label=role.name, value=str(role.id))
+                for role in candidates
+            ],
+        )
+
+    def picked_role(self, interaction: discord.Interaction) -> discord.Role | None:
+        """고른 역할. 문자열 선택기는 역할 ID 를, 기본 선택기는 역할을 준다."""
+        values = getattr(self.role_field.component, "values", None) or []
+        if not values:
+            return None
+        picked = values[0]
+        if isinstance(picked, discord.Role):
+            return picked
+        guild = interaction.guild
+        if guild is None:
+            return None
+        try:
+            return guild.get_role(int(picked))
+        except (TypeError, ValueError):
+            log.warning("party ping role id was not a number: %r", picked)
+            return None
 
     def draft(self) -> dict[str, str]:
         """사용자가 방금 친 값. 입력을 되물을 때 그대로 다시 채운다."""
@@ -401,7 +468,6 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
         }
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        roles = getattr(self.role_field.component, "values", None) or []
         entered = self.draft()
         await self.cog.open_party(
             interaction,
@@ -409,7 +475,7 @@ class PartyCreateModal(discord.ui.Modal, title="파티 모집"):
             start=entered["start"],
             capacity=entered["capacity"],
             note=entered["note"],
-            ping_role=roles[0] if roles else None,
+            ping_role=self.picked_role(interaction),
             draft=entered,
         )
 
@@ -448,7 +514,7 @@ class PartyRetryView(discord.ui.View):
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
         await interaction.response.send_modal(
-            PartyCreateModal(self.cog, draft=self.draft)
+            PartyCreateModal(self.cog, draft=self.draft, guild=interaction.guild)
         )
 
 
@@ -624,7 +690,9 @@ class PartyCog(commands.Cog):
             return
         await interaction.response.send_modal(
             PartyCreateModal(
-                self, recent_title=await self._recent_title_hint(interaction.guild_id)
+                self,
+                recent_title=await self._recent_title_hint(interaction.guild_id),
+                guild=interaction.guild,
             )
         )
 
