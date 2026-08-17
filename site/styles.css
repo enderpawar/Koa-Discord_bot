@@ -674,6 +674,50 @@ kbd {
   object-fit: cover;
 }
 
+/* 실제 화면 캡처. Discord 다크 UI 라서 밝은 테마에서도 어두운 판 위에 얹는다 —
+   흰 배경에 그냥 놓으면 캡처 가장자리가 어디까지인지 안 보인다. */
+.shot {
+  margin: 24px 0 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #0c111c;
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.shot figcaption {
+  padding: 11px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.shot figcaption b {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* 원본이 작은 캡처는 늘리지 않는다. 늘리면 글자가 뭉개져서 못 읽는다. */
+.shot.is-narrow {
+  max-width: 340px;
+}
+
+.shot.is-form {
+  max-width: 470px;
+}
+
+/* 2단 구성 섹션에서는 캡처가 한쪽 칸에 갇히지 않게 전체 폭을 쓴다. */
+.split-section > .shot {
+  grid-column: 1 / -1;
+}
+
 .guide-section {
   padding-top: 58px;
   scroll-margin-top: calc(var(--header-height) + 20px);
