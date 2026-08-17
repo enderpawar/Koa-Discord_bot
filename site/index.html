@@ -59,13 +59,6 @@
             <input id="command-search" type="search" placeholder="명령어 검색" autocomplete="off" />
             <kbd>Ctrl K</kbd>
           </label>
-          <a
-            class="icon-link"
-            href="https://github.com/enderpawar/Koa-Discord_bot"
-            target="_blank"
-            rel="noreferrer"
-            aria-label="Koa GitHub 저장소"
-          ><i class="ph ph-github-logo"></i></a>
         </div>
       </div>
     </header>
@@ -109,9 +102,9 @@
           </div>
         </nav>
 
-        <a class="side-source" href="https://github.com/enderpawar/Koa-Discord_bot#빠른-사용법" target="_blank" rel="noreferrer">
-          <i class="ph ph-book-open-text"></i>
-          <span><b>설치 문서</b><small>GitHub에서 전체 안내 보기</small></span>
+        <a class="side-source" href="https://discord.com/oauth2/authorize?client_id=1499232840133509160&amp;permissions=309274414080&amp;scope=bot%20applications.commands" target="_blank" rel="noreferrer">
+          <i class="ph ph-user-plus"></i>
+          <span><b>코아 초대하기</b><small>관리할 서버에 바로 추가</small></span>
           <i class="ph ph-arrow-up-right"></i>
         </a>
       </aside>
@@ -157,7 +150,7 @@
           <section class="guide-section" id="quick-start" aria-labelledby="quick-start-title">
             <div class="section-heading">
               <h2 id="quick-start-title">빠른 시작</h2>
-              <a href="https://github.com/enderpawar/Koa-Discord_bot#빠른-사용법" target="_blank" rel="noreferrer">설치 가이드 <i class="ph ph-arrow-up-right"></i></a>
+              <a href="#faq">문제가 있나요? <i class="ph ph-arrow-down-right"></i></a>
             </div>
             <p>봇을 서버에 초대한 뒤 아래 순서만 따르면 바로 TTS를 사용할 수 있습니다.</p>
 
@@ -233,7 +226,7 @@
             <div class="game-grid">
               <article>
                 <span class="game-icon"><i class="ph ph-strategy"></i></span>
-                <div><h3>리그 오브 레전드</h3><p>Riot Games 공식 API로 솔로 랭크와 최근 경기 기록을 불러옵니다.</p><code>/롤 등록</code></div>
+                <div><h3>리그 오브 레전드</h3><p>등록한 Riot ID의 솔로 랭크와 최근 경기 기록을 불러옵니다.</p><code>/롤 등록</code></div>
               </article>
               <article>
                 <span class="game-icon"><i class="ph ph-crosshair"></i></span>
@@ -302,11 +295,11 @@
             <div class="faq-list">
               <details>
                 <summary>코아가 채팅을 읽지 않아요.<i class="ph ph-plus"></i></summary>
-                <p>Discord Developer Portal에서 Message Content Intent가 켜져 있는지, 코아가 메시지 보기와 음성 채널 연결 및 말하기 권한을 가지고 있는지 확인하세요.</p>
+                <p>먼저 읽게 할 음성 채널에 들어간 뒤 <code>/입장</code>을 실행해 주세요. 코아가 음성 채널에 들어와 있는지, 메시지를 쓴 곳이 그 음성 채널의 채팅인지 확인하고, 계속 읽지 않으면 서버 설정에서 Koa_Bot 역할의 채널 보기·메시지 보내기·연결·말하기 권한을 확인해 주세요.</p>
               </details>
               <details>
                 <summary>슬래시 명령어가 보이지 않아요.<i class="ph ph-plus"></i></summary>
-                <p>봇 초대 주소에 <code>applications.commands</code> 범위가 포함되어야 합니다. 개발 서버에서는 <code>TEST_GUILD_ID</code>를 설정하면 명령어를 더 빠르게 반영할 수 있습니다.</p>
+                <p>Discord 앱을 완전히 닫았다가 다시 열고, 서버 멤버 목록에 Koa_Bot이 있는지 확인해 주세요. 그래도 보이지 않으면 서버 관리자가 이 페이지의 <strong>코아 초대하기</strong> 버튼으로 다시 추가해 주세요. 새 명령어가 Discord 전체에 반영되는 데에는 최대 1시간 정도 걸릴 수 있습니다.</p>
               </details>
               <details>
                 <summary>발음을 원하는 대로 바꿀 수 있나요?<i class="ph ph-plus"></i></summary>
@@ -365,7 +358,7 @@
       <nav aria-label="하단 메뉴">
         <a href="#quick-start">빠른 시작</a>
         <a href="#commands">명령어</a>
-        <a href="https://github.com/enderpawar/Koa-Discord_bot" target="_blank" rel="noreferrer">GitHub</a>
+        <a href="#faq">자주 묻는 질문</a>
       </nav>
     </footer>
   </body>

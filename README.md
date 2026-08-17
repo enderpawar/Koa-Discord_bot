@@ -23,6 +23,36 @@
 - 리그 오브 레전드와 발로란트 계정 등록·랭크·최근 경기 조회
 - 관리자 웹 대시보드로 TTS/리더보드 설정 관리 (Discord 관리자 확인 + 5분짜리 일회용 링크)
 
+## 사용 화면
+
+### Discord에 코아 초대
+
+<p align="center">
+  <img src="docs/screenshots/discord-bot-invite.png" alt="Discord에서 Koa_Bot을 계정에 연결하는 봇 초대 화면" width="560">
+</p>
+
+### 음악 모드 전환과 오류 안내
+
+음악 모드가 활성화되면 일반 채팅 TTS를 멈추고 `/재생` 요청을 받습니다. 공개 영상이
+아니거나 불러올 수 없는 주소에는 사용자가 바로 원인을 알 수 있도록 오류를 표시합니다.
+
+<p align="center">
+  <img src="docs/screenshots/discord-music-mode.png" alt="Discord에서 코아 음악 모드를 활성화하고 YouTube 불러오기 오류를 안내하는 화면" width="560">
+</p>
+
+### 관리자 리더보드 설정
+
+<table>
+  <tr>
+    <td align="center"><strong>발송 채널·시각 설정</strong></td>
+    <td align="center"><strong>설정 저장 완료</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/admin-leaderboard-settings.png" alt="코아 관리자 대시보드의 일일 리더보드 설정 화면" width="720"></td>
+    <td><img src="docs/screenshots/admin-leaderboard-saved.png" alt="코아 관리자 대시보드에서 리더보드 설정 저장을 완료한 화면" width="720"></td>
+  </tr>
+</table>
+
 ## 빠른 사용법
 
 봇을 서버에 초대한 뒤 Discord에서 아래 순서대로 입력하면 됩니다.
